@@ -16,7 +16,7 @@ class TripScreen extends StatelessWidget {
         Navigator.pushReplacementNamed(context, '/driver/routes');
         return;
       case 2:
-        return; // ya estamos en Recorrido
+        return; // already on Trip
       case 3:
         Navigator.pushReplacementNamed(context, '/driver/account');
         return;

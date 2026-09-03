@@ -36,6 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   http: ^1.2.0
   google_fonts: ^6.2.1
+  # Almacenamiento seguro del token de sesión (Keystore / Keychain).
+  flutter_secure_storage: ^9.2.2
 
 dev_dependencies:
   flutter_test:

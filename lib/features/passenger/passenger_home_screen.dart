@@ -10,7 +10,7 @@ class PassengerHomeScreen extends StatelessWidget {
   void _onTabTap(BuildContext context, int index) {
     switch (index) {
       case 0:
-        return; // ya estamos en Inicio
+        return; // already on Home
       case 1:
         Navigator.pushReplacementNamed(context, '/passenger/trips');
         return;

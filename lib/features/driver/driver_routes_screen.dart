@@ -13,7 +13,7 @@ class DriverRoutesScreen extends StatelessWidget {
         Navigator.pushReplacementNamed(context, '/driver/home');
         return;
       case 1:
-        return; // ya estamos en Mis rutas
+        return; // already on My routes
       case 2:
         Navigator.pushReplacementNamed(context, '/driver/trip');
         return;

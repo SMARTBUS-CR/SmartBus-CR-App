@@ -1,24 +1,17 @@
 import 'package:flutter/material.dart';
+
+import '../../core/network/api_exception.dart';
 import '../../core/theme.dart';
 import '../../widgets/login_form.dart';
+import 'role_home.dart';
+import 'services/auth_service.dart';
 
-/// Rol elegido en el selector temporal de vista previa (ver [_DevRoleToggle]
-/// más abajo). Solo existe para poder navegar a la interfaz correcta
-/// mientras no hay backend real devolviendo el rol.
-enum _DevRole { passenger, driver }
-
-/// Pantalla de login única para SmartBus Global.
+/// Single login screen for SmartBus Global.
 ///
-/// Es completamente independiente del rol del usuario: el mismo formulario
-/// se usa para pasajeros, conductores o cualquier otro rol futuro. El rol
-/// lo determina el backend en la respuesta de autenticación; la navegación
-/// a la interfaz correspondiente ocurre después del login, no aquí.
-///
-/// NOTA TEMPORAL: como todavía no hay backend conectado, se agregó un
-/// selector de "vista previa" (Pasajero / Conductor) solo para poder ver
-/// cómo queda cada flujo después de iniciar sesión. Bórralo junto con
-/// [_DevRole] y [_DevRoleToggle] cuando `_handleLogin` navegue según el
-/// rol real que devuelva la API.
+/// It is completely role-agnostic: the same form is used for passengers,
+/// drivers or any future role. The role is decided by the backend in the
+/// authentication response; navigation to the matching interface happens after
+/// login, not here.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -27,7 +20,7 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  _DevRole _devRole = _DevRole.passenger;
+  final AuthService _authService = AuthService();
 
   // ============================================================
   // LOGIN
@@ -38,48 +31,44 @@ class _LoginScreenState extends State<LoginScreen> {
     String email,
     String password,
   ) async {
-    /*
-     * AQUÍ SE CONECTARÁ CON TU API DE LARAVEL
-     *
-     * Ejemplo:
-     *
-     * POST /api/login
-     *
-     * {
-     *   "email": "...",
-     *   "password": "..."
-     * }
-     *
-     * La API devolverá algo como:
-     *
-     * {
-     *   "token": "...",
-     *   "user": {
-     *      "id": 1,
-     *      "name": "...",
-     *      "email": "...",
-     *      "role": "passenger"
-     *   }
-     * }
-     *
-     * Cuando esté conectada, la navegación de abajo debe usar
-     * user.role en vez de _devRole.
-     */
+    try {
+      final session = await _authService.login(
+        email: email,
+        password: password,
+      );
 
-    await Future.delayed(const Duration(seconds: 1));
+      if (!context.mounted) return;
 
-    if (!context.mounted) return;
+      final route = homeRouteForUser(session.user);
+      if (route == null) {
+        // Valid login but the role has no interface in the app yet (e.g. admin).
+        await _authService.logout();
+        if (!context.mounted) return;
+        _showError(
+          context,
+          'Tu tipo de cuenta aún no tiene una vista disponible en la app.',
+        );
+        return;
+      }
 
+      Navigator.pushReplacementNamed(context, route);
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      _showError(context, e.message);
+    } catch (_) {
+      if (!context.mounted) return;
+      _showError(context, 'Ocurrió un error inesperado. Inténtalo nuevamente.');
+    }
+  }
+
+  void _showError(BuildContext context, String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Inicio de sesión exitoso'),
+      SnackBar(
+        content: Text(message),
         behavior: SnackBarBehavior.floating,
+        backgroundColor: SmartBusColors.error,
       ),
     );
-
-    final destination =
-        _devRole == _DevRole.driver ? '/driver/home' : '/passenger/home';
-    Navigator.pushReplacementNamed(context, destination);
   }
 
   // ============================================================
@@ -94,28 +83,18 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Column(
           children: [
             _buildHeader(context),
-            // El blanco llena el resto de la pantalla (sin importar qué
-            // tan corto sea el formulario), así no queda un hueco gris
-            // debajo. Solo hace scroll si el contenido no cabe.
+            // The white area fills the rest of the screen (no matter how short
+            // the form is) so there is no grey gap below it. It only scrolls
+            // if the content does not fit.
             Expanded(
               child: Container(
                 width: double.infinity,
                 color: Colors.white,
                 child: SingleChildScrollView(
                   physics: const BouncingScrollPhysics(),
-                  child: Column(
-                    children: [
-                      _buildDevRoleToggle(),
-                      LoginForm(
-                        // Precargados solo para la vista previa temporal:
-                        // así "Iniciar sesión" funciona sin tener que
-                        // escribir nada. Bórralo junto con _DevRole.
-                        initialEmail: 'demo@smartbus.cr',
-                        initialPassword: 'demo1234',
-                        onLogin: (email, password) =>
-                            _handleLogin(context, email, password),
-                      ),
-                    ],
+                  child: LoginForm(
+                    onLogin: (email, password) =>
+                        _handleLogin(context, email, password),
                   ),
                 ),
               ),
@@ -127,58 +106,11 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   // ============================================================
-  // SELECTOR TEMPORAL DE ROL (borrar cuando haya backend real)
-  // ============================================================
-
-  Widget _buildDevRoleToggle() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(25, 18, 25, 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'VISTA PREVIA (TEMPORAL) · ENTRAR COMO',
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.6,
-              color: Colors.grey.shade500,
-            ),
-          ),
-          const SizedBox(height: 8),
-          SegmentedButton<_DevRole>(
-            segments: const [
-              ButtonSegment(
-                value: _DevRole.passenger,
-                label: Text('Pasajero'),
-                icon: Icon(Icons.person_outline),
-              ),
-              ButtonSegment(
-                value: _DevRole.driver,
-                label: Text('Conductor'),
-                icon: Icon(Icons.drive_eta_outlined),
-              ),
-            ],
-            selected: {_devRole},
-            onSelectionChanged: (selection) {
-              setState(() => _devRole = selection.first);
-            },
-            style: SegmentedButton.styleFrom(
-              selectedBackgroundColor: SmartBusColors.azulPrincipal,
-              selectedForegroundColor: Colors.white,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ============================================================
   // HEADER
   // ============================================================
 
   Widget _buildHeader(BuildContext context) {
-    // Escala el texto superpuesto según el ancho real del celular.
+    // Scales the overlaid text to the real device width.
     final width = MediaQuery.sizeOf(context).width;
     final scale = (width / 390).clamp(0.85, 1.15);
 
@@ -189,7 +121,7 @@ class _LoginScreenState extends State<LoginScreen> {
         children: [
           Column(
             children: [
-              // Ilustración oficial: logo, mapa, ruta y bus ya incluidos.
+              // Official illustration: logo, map, route and bus already included.
               AspectRatio(
                 aspectRatio: 1553 / 1013,
                 child: Image.asset(
@@ -199,13 +131,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
 
-              // Espacio extra debajo de la foto para que el texto
-              // superpuesto tenga más aire.
+              // Extra space below the image so the overlaid text has more room.
               SizedBox(height: 46 * scale),
             ],
           ),
 
-          // Texto superpuesto sobre la foto (y el espacio extra).
+          // Text overlaid on the image (and the extra space).
           Positioned(
             left: 27 * scale,
             bottom: 20 * scale,

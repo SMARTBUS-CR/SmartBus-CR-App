@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import '../core/theme.dart';
 
-/// Formulario de login de SmartBus Global.
+/// SmartBus Global login form.
 ///
-/// No conoce el rol del usuario: solo captura credenciales y delega la
-/// autenticación al callback [onLogin]. Qué hacer tras un login exitoso
-/// (mensaje, navegación por rol, etc.) es responsabilidad de quien use
-/// este formulario, no de él.
+/// It does not know the user's role: it only captures credentials and delegates
+/// authentication to the [onLogin] callback. What to do after a successful login
+/// (message, role-based navigation, etc.) is the responsibility of whoever uses
+/// this form, not the form itself.
 class LoginForm extends StatefulWidget {
   const LoginForm({
     super.key,
@@ -17,13 +17,13 @@ class LoginForm extends StatefulWidget {
     this.initialPassword,
   });
 
-  /// Se invoca con (email, password) ya validados como no vacíos.
+  /// Called with (email, password) already validated as non-empty.
   final Future<void> Function(String email, String password) onLogin;
   final VoidCallback? onForgotPassword;
   final VoidCallback? onRegisterPassenger;
 
-  /// Precargan los campos (p. ej. credenciales de prueba mientras no hay
-  /// backend real). Se pueden editar o borrar normalmente.
+  /// Pre-fill the fields (e.g. test credentials). Can be edited or cleared
+  /// normally.
   final String? initialEmail;
   final String? initialPassword;
 
@@ -48,7 +48,13 @@ class _LoginFormState extends State<LoginForm> {
     super.dispose();
   }
 
+  // Basic email shape: something@something.domain (no spaces).
+  static final _emailRegExp = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
   Future<void> _submit() async {
+    // Prevent firing two requests at once.
+    if (isLoading) return;
+
     FocusScope.of(context).unfocus();
 
     final email = emailController.text.trim();
@@ -56,6 +62,10 @@ class _LoginFormState extends State<LoginForm> {
 
     if (email.isEmpty || password.isEmpty) {
       _showMessage('Completa todos los campos');
+      return;
+    }
+    if (!_emailRegExp.hasMatch(email)) {
+      _showMessage('Ingresa un correo electrónico válido');
       return;
     }
 
@@ -75,9 +85,8 @@ class _LoginFormState extends State<LoginForm> {
 
   @override
   Widget build(BuildContext context) {
-    // Escala los tamaños según el ancho real del celular (referencia 390px),
-    // acotada para no verse ni diminuta en pantallas chicas ni gigante en
-    // pantallas grandes.
+    // Scale sizes to the real device width (390px reference), clamped so it
+    // does not look tiny on small screens or huge on large ones.
     final width = MediaQuery.sizeOf(context).width;
     final scale = (width / 390).clamp(0.85, 1.15);
 
@@ -128,7 +137,7 @@ class _LoginFormState extends State<LoginForm> {
 
           SizedBox(height: 15 * scale),
 
-          // Recordarme
+          // Remember me
           Row(
             children: [
               SizedBox(
@@ -172,12 +181,12 @@ class _LoginFormState extends State<LoginForm> {
 
           SizedBox(height: 28 * scale),
 
-          // Botón
+          // Button
           _buildLoginButton(scale),
 
           SizedBox(height: 18 * scale),
 
-          // Registro
+          // Sign up
           Center(
             child: GestureDetector(
               onTap: widget.onRegisterPassenger ??

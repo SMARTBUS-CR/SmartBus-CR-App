@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-/// Paleta oficial de branding — SmartBus Global.
-/// No cambiar estos valores sin actualizar la guía de identidad visual.
+/// Official branding palette — SmartBus Global.
+/// Do not change these values without updating the visual identity guide.
 class SmartBusColors {
-  // Colores principales
+  // Primary colors
   static const azulCorporativo = Color(0xFF0A2A88);
   static const azulPrincipal = Color(0xFF1565C0);
   static const verdeTurquesa = Color(0xFF00BFA5);
@@ -14,7 +14,7 @@ class SmartBusColors {
   static const grisOscuro = Color(0xFF1A1A1A);
   static const grisClaro = Color(0xFFF5F7FA);
 
-  // Estados de la aplicación
+  // Application states
   static const enCamino = verdeTurquesa;
   static const proximaLlegada = azulPrincipal;
   static const advertencia = Color(0xFFF59E0B);
@@ -22,7 +22,7 @@ class SmartBusColors {
   static const error = Color(0xFFDC2626);
   static const completado = Color(0xFF16A34A);
 
-  // Degradado de marca: azul corporativo -> azul principal -> turquesa.
+  // Brand gradient: corporate blue -> primary blue -> turquoise.
   static const brandGradient = LinearGradient(
     begin: Alignment.centerLeft,
     end: Alignment.centerRight,
@@ -30,7 +30,7 @@ class SmartBusColors {
     colors: [azulCorporativo, azulPrincipal, verdeTurquesa],
   );
 
-  // --- Alias retrocompatibles (uso previo en el código) ---
+  // --- Backwards-compatible aliases (previous usage in the code) ---
   static const navy = azulCorporativo;
   static const teal = verdeTurquesa;
   static const bg = grisClaro;

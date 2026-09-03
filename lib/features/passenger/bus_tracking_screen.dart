@@ -14,7 +14,7 @@ class BusTrackingScreen extends StatelessWidget {
       ),
       body: Column(
         children: [
-          // HEADER TURQUESA
+          // TURQUOISE HEADER
           Container(
             width: double.infinity,
             decoration: const BoxDecoration(
@@ -34,7 +34,7 @@ class BusTrackingScreen extends StatelessWidget {
               ),
             ),
           ),
-          // CONTENIDO BLANCO
+          // WHITE CONTENT
           Expanded(
             child: Transform.translate(
               offset: const Offset(0, -16),
@@ -42,7 +42,7 @@ class BusTrackingScreen extends StatelessWidget {
                 decoration: const BoxDecoration(color: SmartBusColors.blanco),
                 child: Column(
                   children: [
-                    // Mapa con posición del bus en vivo (RF-10) — placeholder
+                    // Live bus position map (RF-10) — placeholder
                     Expanded(
                       flex: 5,
                       child: Container(
@@ -64,7 +64,7 @@ class BusTrackingScreen extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // ETA (RF-11), calculado por el microservicio de IA
+                            // ETA (RF-11), computed by the AI microservice
                             Row(
                               children: [
                                 const Icon(
@@ -80,7 +80,7 @@ class BusTrackingScreen extends StatelessWidget {
                               ],
                             ),
                             const SizedBox(height: 8),
-                            // Estado / alerta de retraso (RF-12)
+                            // Status / delay alert (RF-12)
                             Container(
                               padding: const EdgeInsets.all(10),
                               decoration: BoxDecoration(

@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme.dart';
+import 'role_home.dart';
+import 'services/auth_service.dart';
 
-/// Splash de arranque: se muestra justo después del splash nativo
-/// (fondo blanco + logo) para dar tiempo a que la app inicialice,
-/// con una barra de carga del mismo color que el botón de login.
+/// Startup splash: shown right after the native splash (white background + logo)
+/// while the app decides where to go.
+///
+/// - If there is a stored session and the token is still valid
+///   (`GET /auth/user` through the Gateway) → go straight to the screen for the
+///   matching role.
+/// - If there is no session, or the token is invalid/expired → go to login.
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -13,13 +19,38 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen> {
+  static const _minSplash = Duration(milliseconds: 1400);
+
   @override
   void initState() {
     super.initState();
-    Future.delayed(const Duration(milliseconds: 1400), () {
-      if (!mounted) return;
-      Navigator.pushReplacementNamed(context, '/login');
-    });
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    final startedAt = DateTime.now();
+
+    String nextRoute;
+    try {
+      final user = await AuthService().restoreSession();
+      if (user == null) {
+        nextRoute = '/login';
+      } else {
+        // Valid session but the role has no dedicated screen yet → go to login.
+        nextRoute = homeRouteForUser(user) ?? '/login';
+      }
+    } catch (_) {
+      nextRoute = '/login';
+    }
+
+    // Avoid a splash "flash" when the check finishes very quickly.
+    final elapsed = DateTime.now().difference(startedAt);
+    if (elapsed < _minSplash) {
+      await Future.delayed(_minSplash - elapsed);
+    }
+
+    if (!mounted) return;
+    Navigator.pushReplacementNamed(context, nextRoute);
   }
 
   @override

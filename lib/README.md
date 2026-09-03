@@ -32,24 +32,29 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 ## 3. Qué es placeholder vs. qué ya está "conectable"
 - **Placeholder puro** (solo UI, sin lógica): mapas (`Container` gris),
   listas de rutas, ETA fijo, estado del bus.
-- **Ya alineado al contrato real**: `models/user.dart` y `core/api_client.dart`
-  reflejan exactamente el JSON de tu `SmartBus Authentication API`
-  (`/login`, `/register/passenger`, `/user`, `/logout`). Cuando quieran
-  conectar el login de verdad, solo hay que llamar `AuthApi().login(...)`
-  desde `login_screen.dart` y redirigir según `AppUser.isDriver` /
-  `isPassenger` (usando el arreglo `roles` que devuelve el backend), en vez
-  del selector temporal `_DevRole`.
+- **Autenticación real (ya conectada al API Gateway):**
+  - `core/config/api_config.dart` — URL única del Gateway (`--dart-define`).
+  - `core/network/api_client.dart` — cliente HTTP reutilizable; adjunta el
+    token `Bearer` automáticamente y traduce errores a `ApiException`.
+  - `core/storage/secure_session_store.dart` — token + usuario en
+    `flutter_secure_storage` (nunca la contraseña).
+  - `features/auth/services/auth_service.dart` — `login` / `fetchCurrentUser`
+    (`GET /auth/user`) / `restoreSession` / `logout`.
+  - `features/auth/models/` — `AuthUser` + `AuthRole` (parseo JSON:API).
+  - `features/auth/role_home.dart` — rol del backend → ruta de inicio.
+
+  Flujo: `LoginScreen` → `AuthService().login()` → Gateway `POST /auth/login`
+  → guarda token/usuario → navega según `homeRouteForUser(session.user)`.
+  Al reabrir la app, `SplashScreen` llama `restoreSession()`.
 
 ## 4. Siguientes pasos sugeridos
-1. Borrar el selector temporal `_DevRole` / `_buildDevRoleToggle` de
-   `login_screen.dart` una vez el login real decida el rol.
-2. Sustituir los `Container` grises por `flutter_map` + tiles de OpenStreetMap
+1. Sustituir los `Container` grises por `flutter_map` + tiles de OpenStreetMap
    (paquete `flutter_map` + `latlong2`), como está definido en el documento
    de arquitectura (OSM + OpenRouteService).
-3. Conectar `bus_tracking_screen.dart` a WebSockets (Laravel Reverb + Laravel
+2. Conectar `bus_tracking_screen.dart` a WebSockets (Laravel Reverb + Laravel
    Echo) para las posiciones en tiempo real, y al microservicio de IA para el
    ETA (RF-16).
-4. Definir manejo de estado (Provider, Riverpod o Bloc) antes de que crezcan
-   las pantallas — con `setState` alcanza solo para esta etapa de mockups.
-5. Mover `ApiConfig.baseUrl` a `--dart-define` para separar ambientes
-   dev/staging/producción.
+3. Definir manejo de estado (Provider, Riverpod o Bloc) antes de que crezcan
+   las pantallas — con `setState` alcanza solo para esta etapa.
+4. Agregar los nuevos microservicios en `ApiConfig` (`trips`, `gps`, `eta`, …)
+   reutilizando el mismo `ApiClient`.

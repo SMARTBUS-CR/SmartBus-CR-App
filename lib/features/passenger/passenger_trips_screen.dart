@@ -4,8 +4,7 @@ import '../../core/theme.dart';
 import '../../widgets/passenger_bottom_nav.dart';
 import '../../widgets/placeholder_screen.dart';
 
-/// Placeholder de "Mis viajes" para el pasajero — pendiente de conectar
-/// con el historial real de viajes.
+/// Passenger "My trips" placeholder — pending wiring to the real trip history.
 class PassengerTripsScreen extends StatelessWidget {
   const PassengerTripsScreen({super.key});
 
@@ -15,7 +14,7 @@ class PassengerTripsScreen extends StatelessWidget {
         Navigator.pushReplacementNamed(context, '/passenger/home');
         return;
       case 1:
-        return; // ya estamos en Mis viajes
+        return; // already on My trips
       case 2:
         Navigator.pushReplacementNamed(context, '/passenger/account');
         return;

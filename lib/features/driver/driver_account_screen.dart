@@ -3,9 +3,10 @@ import 'package:flutter/material.dart';
 import '../../core/theme.dart';
 import '../../widgets/driver_bottom_nav.dart';
 import '../../widgets/placeholder_screen.dart';
+import '../auth/services/auth_service.dart';
 
-/// Placeholder de "Mi cuenta" para el conductor — pendiente de conectar
-/// con el perfil real (datos, unidad asignada, cierre de sesión, etc.).
+/// Driver "My account" placeholder — pending wiring to the real profile
+/// (data, assigned unit, sign out, etc.).
 class DriverAccountScreen extends StatelessWidget {
   const DriverAccountScreen({super.key});
 
@@ -21,7 +22,7 @@ class DriverAccountScreen extends StatelessWidget {
         Navigator.pushReplacementNamed(context, '/driver/trip');
         return;
       case 3:
-        return; // ya estamos en Mi cuenta
+        return; // already on My account
     }
   }
 
@@ -46,8 +47,11 @@ class DriverAccountScreen extends StatelessWidget {
           ),
           icon: const Icon(Icons.logout),
           label: const Text('Cerrar sesión'),
-          onPressed: () {
-            Navigator.pushReplacementNamed(context, '/login');
+          onPressed: () async {
+            await AuthService().logout();
+            if (context.mounted) {
+              Navigator.pushReplacementNamed(context, '/login');
+            }
           },
         ),
       ),

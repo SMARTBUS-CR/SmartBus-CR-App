@@ -21,14 +21,14 @@ class SmartBusApp extends StatelessWidget {
     '/splash': (_) => const SplashScreen(),
     '/login': (_) => const LoginScreen(),
 
-    // Flujo Pasajero (RF-07 a RF-12)
+    // Passenger flow (RF-07 to RF-12)
     '/passenger/home': (_) => const PassengerHomeScreen(),
     '/passenger/search': (_) => const RouteSearchScreen(),
     '/passenger/tracking': (_) => const BusTrackingScreen(),
     '/passenger/trips': (_) => const PassengerTripsScreen(),
     '/passenger/account': (_) => const PassengerAccountScreen(),
 
-    // Flujo Conductor (RF-13 a RF-15)
+    // Driver flow (RF-13 to RF-15)
     '/driver/home': (_) => const DriverHomeScreen(),
     '/driver/trip': (_) => const TripScreen(),
     '/driver/routes': (_) => const DriverRoutesScreen(),

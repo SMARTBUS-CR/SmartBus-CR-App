@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import '../core/theme.dart';
 
-/// Barra de navegación inferior global para el flujo de Pasajero.
+/// Global bottom navigation bar for the Passenger flow.
 ///
-/// 3 pestañas: Inicio, Mis viajes, Cuenta. No maneja navegación por sí
-/// misma: la pantalla que la usa decide qué hacer en [onTap] (cambiar de
-/// pestaña, navegar a otra ruta, etc.).
+/// 3 tabs: Home, My trips, Account. It does not handle navigation itself: the
+/// screen using it decides what to do in [onTap] (switch tab, navigate to
+/// another route, etc.).
 class PassengerBottomNav extends StatelessWidget {
   const PassengerBottomNav({
     super.key,

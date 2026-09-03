@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../core/theme.dart';
 
-/// Pantalla base para las vistas aún sin funcionalidad real: header de
-/// color con título, flecha de regreso opcional y un aviso de
-/// "Próximamente" sobre el fondo blanco solapado.
+/// Base screen for views without real functionality yet: a colored header with
+/// a title, an optional back arrow and a "Coming soon" notice over the
+/// overlapping white background.
 class PlaceholderScreen extends StatelessWidget {
   const PlaceholderScreen({
     super.key,

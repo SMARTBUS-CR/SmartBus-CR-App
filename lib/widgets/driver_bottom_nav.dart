@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import '../core/theme.dart';
 
-/// Barra de navegación inferior global para el flujo de Conductor.
+/// Global bottom navigation bar for the Driver flow.
 ///
-/// 4 pestañas: Inicio, Mis rutas, Recorrido, Mi cuenta. No maneja
-/// navegación por sí misma: la pantalla que la usa decide qué hacer en
-/// [onTap] (cambiar de pestaña, navegar a otra ruta, etc.).
+/// 4 tabs: Home, My routes, Trip, My account. It does not handle navigation
+/// itself: the screen using it decides what to do in [onTap] (switch tab,
+/// navigate to another route, etc.).
 class DriverBottomNav extends StatelessWidget {
   const DriverBottomNav({
     super.key,

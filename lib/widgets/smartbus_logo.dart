@@ -1,15 +1,14 @@
 import 'package:flutter/material.dart';
 
-/// Isotipo + wordmark de SmartBus Global.
+/// SmartBus Global icon + wordmark.
 ///
-/// Usa el logo oficial (`assets/images/logo SMARTBUS.png`, ya incluye el
-/// pin con el bus, "SMARTBUS GLOBAL" y el eslogan). Reutilizable en
-/// cualquier pantalla que necesite mostrar la marca (login, splash,
-/// onboarding, etc.).
+/// Uses the official logo (`assets/images/logo SMARTBUS.png`, which already
+/// includes the bus pin, "SMARTBUS GLOBAL" and the slogan). Reusable on any
+/// screen that needs to show the brand (login, splash, onboarding, etc.).
 class SmartBusLogo extends StatelessWidget {
   const SmartBusLogo({super.key, this.width = 150});
 
-  /// Ancho del logo. La imagen es cuadrada, así que el alto es igual.
+  /// Logo width. The image is square, so the height matches.
   final double width;
 
   @override

@@ -3,9 +3,10 @@ import 'package:flutter/material.dart';
 import '../../core/theme.dart';
 import '../../widgets/passenger_bottom_nav.dart';
 import '../../widgets/placeholder_screen.dart';
+import '../auth/services/auth_service.dart';
 
-/// Placeholder de "Cuenta" para el pasajero — pendiente de conectar con
-/// el perfil real (datos, cierre de sesión, etc.).
+/// Passenger "Account" placeholder — pending wiring to the real profile
+/// (data, sign out, etc.).
 class PassengerAccountScreen extends StatelessWidget {
   const PassengerAccountScreen({super.key});
 
@@ -18,7 +19,7 @@ class PassengerAccountScreen extends StatelessWidget {
         Navigator.pushReplacementNamed(context, '/passenger/trips');
         return;
       case 2:
-        return; // ya estamos en Cuenta
+        return; // already on Account
     }
   }
 
@@ -43,8 +44,11 @@ class PassengerAccountScreen extends StatelessWidget {
           ),
           icon: const Icon(Icons.logout),
           label: const Text('Cerrar sesión'),
-          onPressed: () {
-            Navigator.pushReplacementNamed(context, '/login');
+          onPressed: () async {
+            await AuthService().logout();
+            if (context.mounted) {
+              Navigator.pushReplacementNamed(context, '/login');
+            }
           },
         ),
       ),
