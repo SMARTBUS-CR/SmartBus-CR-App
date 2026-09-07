@@ -21,6 +21,24 @@ class ApiConfig {
     defaultValue: 'https://smartbus-api-gateway-dev.onrender.com/api',
   );
 
+  /// Base URL for the **GPS / trip-tracking** endpoints.
+  ///
+  /// Defaults to [gatewayBaseUrl], so in production everything goes through the
+  /// same Gateway. While the GPS service is **not deployed yet**, point this at
+  /// a Gateway running on your machine and leave auth on the remote one:
+  ///
+  /// ```
+  /// flutter run \
+  ///   --dart-define=GPS_GATEWAY_URL=http://192.168.1.100:8000/api
+  /// ```
+  ///
+  /// (Use your PC's LAN IP for a physical device, or `10.0.2.2` for the Android
+  /// emulator. Cleartext HTTP is already allowed in debug builds.)
+  static const String gpsBaseUrl = String.fromEnvironment(
+    'GPS_GATEWAY_URL',
+    defaultValue: gatewayBaseUrl,
+  );
+
   /// Value for the `Accept-Language` header (backend supports: en | es).
   static const String language = String.fromEnvironment(
     'API_LANGUAGE',
@@ -31,12 +49,29 @@ class ApiConfig {
   /// seconds to "wake up" after a period of inactivity.
   static const Duration requestTimeout = Duration(seconds: 30);
 
+  /// How often the driver's GPS position is sent during a trip (issue-4).
+  ///
+  /// The default (5 s) targets production. A **local** Gateway + GPS service
+  /// (two single-threaded `php artisan serve` processes) cannot keep up with
+  /// that cadence, so raise it while testing:
+  ///   flutter run --dart-define=GPS_INTERVAL_SECONDS=20
+  static const int gpsIntervalSeconds = int.fromEnvironment(
+    'GPS_INTERVAL_SECONDS',
+    defaultValue: 5,
+  );
+
   // --- Microservice identifiers (first path segment of the proxy) -----------
   static const String authService = 'auth';
+  static const String gpsService = 'gps';
 
   // --- Routes through the Gateway -----------------------------------------
   static Uri _uri(String path, [Map<String, dynamic>? query]) => Uri.parse(
         '$gatewayBaseUrl/$path',
+      ).replace(queryParameters: query);
+
+  /// Same as [_uri] but against [gpsBaseUrl] (may be a local Gateway).
+  static Uri _gpsUri(String path, [Map<String, dynamic>? query]) => Uri.parse(
+        '$gpsBaseUrl/$path',
       ).replace(queryParameters: query);
 
   /// POST — sign in. Equivalent to the Auth service `POST /login`.
@@ -48,4 +83,11 @@ class ApiConfig {
 
   /// POST — sign out (invalidates the token in the Gateway and the Auth service).
   static Uri authLogout() => _uri('$authService/logout');
+
+  /// POST — store one GPS reading of a trip. GPS service `POST /locations`.
+  static Uri gpsLocations() => _gpsUri('$gpsService/locations');
+
+  /// GET — latest known location of a trip. GPS service `GET /trips/{id}/location`.
+  static Uri gpsTripLocation(int tripId) =>
+      _gpsUri('$gpsService/trips/$tripId/location');
 }
