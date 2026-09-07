@@ -1,0 +1,269 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "SmartBus API Gateway",
+    "version": "1.0.0",
+    "description": "**API Gateway** for SmartBus Application. This service is responsible for routing requests to the appropriate microservices and handling authentication, authorization, and rate limiting."
+  },
+  "servers": [
+    {
+      "url": "https://smartbus-api-gateway.onrender.com/api",
+      "description": "Production"
+    },
+    {
+      "url": "https://smartbus-api-gateway-dev.onrender.com/api",
+      "description": "Development"
+    }
+  ],
+  "tags": [
+    {
+      "name": "API Gateway Proxy",
+      "description": "This group contains endpoints that act as a reverse proxy to various microservices. These endpoints validate authentication tokens and forward requests to the appropriate microservice, injecting necessary headers for user context."
+    }
+  ],
+  "paths": {
+    "/auth/user": {
+      "get": {
+        "operationId": "gatewayProxy.getAuthUser",
+        "description": "This endpoint retrieves the profile of the currently authenticated user\nby forwarding the request to the Auth microservice.\n\nFor more information about the profile endpoint, see the Auth microservice\ndocumentation (https://smartbus-authentication.onrender.com/).",
+        "summary": "Get authenticated user profile",
+        "tags": [
+          "API Gateway Proxy"
+        ],
+        "parameters": [
+          {
+            "name": "Accept-Language",
+            "in": "header",
+            "description": "Language of the response. Supported values: en, es.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "en",
+                "es"
+              ],
+              "default": "es"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User Profile Data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "email",
+                    "name"
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "const": "Servicio no encontrado"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "gatewayProxy.postAuthLogout",
+        "description": "This endpoint logs out the user by invalidating the current authentication token\nin the cache and forwarding the logout request to the Auth microservice.\n\nFor more information about the logout endpoint, see the Auth microservice\ndocumentation (https://smartbus-authentication.onrender.com/).",
+        "summary": "Invalidate current user token",
+        "tags": [
+          "API Gateway Proxy"
+        ],
+        "parameters": [
+          {
+            "name": "Accept-Language",
+            "in": "header",
+            "description": "Language of the response. Supported values: en, es.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "en",
+                "es"
+              ],
+              "default": "es"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully logged out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "const": "Servicio no encontrado"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/{service}/{path}": {
+      "get": {
+        "operationId": "gatewayProxy.proxyTo",
+        "description": "This method acts as a dynamic reverse proxy and is called by all the routes listed in the API Gateway.\nIt determines the target microservice based on the first segment of the path and forwards the request accordingly.\n\nThis method validates the authentication\ntoken and injects context headers (`X-User-Id`, `X-User-Roles`) to the target microservice.\n\nThis endpoint accepts any HTTP method (GET, POST, PUT, DELETE, etc.)",
+        "summary": "Proxy requests handler",
+        "tags": [
+          "API Gateway Proxy"
+        ],
+        "parameters": [
+          {
+            "name": "service",
+            "in": "path",
+            "required": true,
+            "description": "Microservice Identifier (auth, trips, etc.)",
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "**Optional**. Relative path to the microservice endpoint (e.g., 'user', 'admin/active').",
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "x-optional": true
+          },
+          {
+            "name": "Accept-Language",
+            "in": "header",
+            "description": "Language of the response. Supported values: en, es.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "en",
+                "es"
+              ],
+              "default": "es"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response from Microservice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {}
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or Missing Token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "const": "Unauthenticated"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Service Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "const": "Service Not Found"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,998 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "SmartBus Authentication API",
+    "version": "1.0.0",
+    "description": "API for SmartBus **Authentication Service**. This service is responsible for handling user authentication, registration, and password management for the SmartBus application. <br><br> All the endpoints described in this documentation follow the [JSON:API](https://jsonapi.org/) specification for request and response formats."
+  },
+  "servers": [
+    {
+      "url": "https://smartbus-authentication.onrender.com/api",
+      "description": "Production"
+    },
+    {
+      "url": "https://smartbus-authentication-dev.onrender.com/api",
+      "description": "Development"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Authentication",
+      "description": "Endpoints for user authentication, and registration."
+    },
+    {
+      "name": "Password Reset",
+      "description": "Endpoints for password reset functionality."
+    }
+  ],
+  "security": [
+    {
+      "http": []
+    }
+  ],
+  "paths": {
+    "/register/passenger": {
+      "post": {
+        "operationId": "register.passenger",
+        "description": "Registers a new passenger user in the system.\nThe user will be assigned the 'passenger' role and an access token will be generated for them.",
+        "summary": "Register Passenger",
+        "tags": [
+          "Authentication"
+        ],
+        "parameters": [
+          {
+            "name": "include",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "roles"
+                ]
+              }
+            },
+            "explode": false
+          },
+          {
+            "name": "fields[users]",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "name",
+                  "email",
+                  "permissions"
+                ]
+              }
+            },
+            "explode": false
+          },
+          {
+            "name": "fields[roles]",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "value",
+                  "label"
+                ]
+              }
+            },
+            "explode": false
+          },
+          {
+            "name": "Accept-Language",
+            "in": "header",
+            "description": "Language of the response. Supported values: en, es.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "en",
+                "es"
+              ],
+              "default": "es"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User registered successfully.",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/UserResource"
+                    },
+                    "included": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RoleResource"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "access_token": {
+                          "type": "string"
+                        },
+                        "token_type": {
+                          "type": "string",
+                          "const": "Bearer"
+                        },
+                        "expires_at": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "access_token",
+                        "token_type",
+                        "expires_at"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationException"
+          }
+        },
+        "security": []
+      }
+    },
+    "/login": {
+      "post": {
+        "operationId": "login",
+        "description": "Authenticates a user and generates a new access token.\nAll previous tokens for the user will be revoked.",
+        "summary": "Login",
+        "tags": [
+          "Authentication"
+        ],
+        "parameters": [
+          {
+            "name": "include",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "roles"
+                ]
+              }
+            },
+            "explode": false
+          },
+          {
+            "name": "fields[users]",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "name",
+                  "email",
+                  "permissions"
+                ]
+              }
+            },
+            "explode": false
+          },
+          {
+            "name": "fields[roles]",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "value",
+                  "label"
+                ]
+              }
+            },
+            "explode": false
+          },
+          {
+            "name": "Accept-Language",
+            "in": "header",
+            "description": "Language of the response. Supported values: en, es.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "en",
+                "es"
+              ],
+              "default": "es"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User authenticated successfully.",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/UserResource"
+                    },
+                    "included": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RoleResource"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "access_token": {
+                          "type": "string"
+                        },
+                        "token_type": {
+                          "type": "string",
+                          "const": "Bearer"
+                        },
+                        "expires_at": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "access_token",
+                        "token_type",
+                        "expires_at"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationException"
+          }
+        },
+        "security": []
+      }
+    },
+    "/token/validate": {
+      "post": {
+        "operationId": "token.validate",
+        "description": "Validates the current access token for the authenticated user.\nReturns a JSON response indicating whether the token is valid or not.",
+        "summary": "Validate Token",
+        "tags": [
+          "Authentication"
+        ],
+        "parameters": [
+          {
+            "name": "Accept-Language",
+            "in": "header",
+            "description": "Language of the response. Supported values: en, es.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "en",
+                "es"
+              ],
+              "default": "es"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token is valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "valid": {
+                          "type": "boolean"
+                        },
+                        "expires_at": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "valid",
+                        "expires_at"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token is invalid or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "errors": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "detail": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "title",
+                        "detail"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "errors"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/logout": {
+      "post": {
+        "operationId": "logout",
+        "description": "Revokes the current access token for the authenticated user,\neffectively logging them out.",
+        "summary": "Logout",
+        "tags": [
+          "Authentication"
+        ],
+        "parameters": [
+          {
+            "name": "Accept-Language",
+            "in": "header",
+            "description": "Language of the response. Supported values: en, es.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "en",
+                "es"
+              ],
+              "default": "es"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully logged out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationException"
+          }
+        }
+      }
+    },
+    "/user": {
+      "get": {
+        "operationId": "user",
+        "description": "Returns the authenticated user's information along with their roles.",
+        "summary": "Get Authenticated User",
+        "tags": [
+          "Authentication"
+        ],
+        "parameters": [
+          {
+            "name": "include",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "roles"
+                ]
+              }
+            },
+            "explode": false
+          },
+          {
+            "name": "fields[users]",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "name",
+                  "email",
+                  "permissions"
+                ]
+              }
+            },
+            "explode": false
+          },
+          {
+            "name": "fields[roles]",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "value",
+                  "label"
+                ]
+              }
+            },
+            "explode": false
+          },
+          {
+            "name": "Accept-Language",
+            "in": "header",
+            "description": "Language of the response. Supported values: en, es.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "en",
+                "es"
+              ],
+              "default": "es"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authenticated user retrieved successfully.",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/UserResource"
+                    },
+                    "included": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RoleResource"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationException"
+          }
+        }
+      }
+    },
+    "/password/forgot": {
+      "post": {
+        "operationId": "password.forgot",
+        "description": "Sends a 6-digit password reset code to the user's email.\nThe code is valid for 15 minutes.",
+        "summary": "Send Reset Code",
+        "tags": [
+          "Password Reset"
+        ],
+        "parameters": [
+          {
+            "name": "Accept-Language",
+            "in": "header",
+            "description": "Language of the response. Supported values: en, es.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "en",
+                "es"
+              ],
+              "default": "es"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendResetCodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reset code sent successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationException"
+          }
+        },
+        "security": []
+      }
+    },
+    "/password/reset": {
+      "post": {
+        "operationId": "password.reset",
+        "description": "Resets the user's password using the provided reset code.\nThe code must match the one sent to the user's email and must not be expired.",
+        "summary": "Reset Password",
+        "tags": [
+          "Password Reset"
+        ],
+        "parameters": [
+          {
+            "name": "Accept-Language",
+            "in": "header",
+            "description": "Language of the response. Supported values: en, es.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "en",
+                "es"
+              ],
+              "default": "es"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password reset successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or expired reset code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "errors": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "detail": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "title",
+                        "detail"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "errors"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationException"
+          }
+        },
+        "security": []
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "http": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "LoginRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "LoginRequest"
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 100
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "description": "Password must be at least 8 characters long, contain at least one uppercase letter, one lowercase letter, one number, one symbol, and not be compromised.",
+            "examples": [
+              "My5ecureP@ssw0rd"
+            ]
+          },
+          "password_confirmation": {
+            "type": "string",
+            "format": "password",
+            "description": "The value of this field must match the value of `password`",
+            "examples": [
+              "My5ecureP@ssw0rd"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "password",
+          "password_confirmation"
+        ],
+        "title": "RegisterRequest"
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "code": {
+            "type": "string",
+            "minLength": 6,
+            "maxLength": 6
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "description": "Password must be at least 8 characters long, contain at least one uppercase letter, one lowercase letter, one number, one symbol, and not be compromised.",
+            "examples": [
+              "My5ecureP@ssw0rd"
+            ]
+          },
+          "password_confirmation": {
+            "type": "string",
+            "format": "password",
+            "description": "The value of this field must match the value of `password`",
+            "examples": [
+              "My5ecureP@ssw0rd"
+            ]
+          }
+        },
+        "required": [
+          "email",
+          "code",
+          "password",
+          "password_confirmation"
+        ],
+        "title": "ResetPasswordRequest"
+      },
+      "RoleResource": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "const": "roles"
+          },
+          "attributes": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "Role's DB value.",
+                "examples": [
+                  "role-name"
+                ]
+              },
+              "label": {
+                "type": "string",
+                "description": "Role's display label.",
+                "examples": [
+                  "Role Name"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "title": "RoleResource"
+      },
+      "SendResetCodeRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "SendResetCodeRequest"
+      },
+      "UserResource": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "const": "users"
+          },
+          "attributes": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "permissions": {
+                "type": "array",
+                "description": "User's permissions.",
+                "examples": [
+                  [
+                    "permission-1",
+                    "permission-2"
+                  ]
+                ],
+                "items": {}
+              }
+            }
+          },
+          "relationships": {
+            "type": "object",
+            "properties": {
+              "roles": {
+                "type": "object",
+                "properties": {
+                  "data": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "const": "roles"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "type"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "data"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "title": "UserResource"
+      }
+    },
+    "responses": {
+      "ValidationException": {
+        "description": "Validation error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string",
+                  "description": "Errors overview."
+                },
+                "errors": {
+                  "type": "object",
+                  "description": "A detailed description of each field that failed validation.",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "message",
+                "errors"
+              ]
+            }
+          }
+        }
+      },
+      "AuthenticationException": {
+        "description": "Unauthenticated",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string",
+                  "description": "Error overview."
+                }
+              },
+              "required": [
+                "message"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
