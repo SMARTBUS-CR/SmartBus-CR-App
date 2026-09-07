@@ -68,5 +68,21 @@
 		</array>
 		<key>UIStatusBarHidden</key>
 		<false/>
+		<!-- Driver GPS transmission during a trip (issue-4). -->
+		<key>NSLocationWhenInUseUsageDescription</key>
+		<string>SmartBus usa tu ubicación para enviar la posición del autobús durante el recorrido.</string>
+		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+		<string>SmartBus sigue enviando la posición del autobús aunque la app esté en segundo plano durante el recorrido.</string>
+		<!-- Keep sending location with the app backgrounded / screen locked. -->
+		<key>UIBackgroundModes</key>
+		<array>
+			<string>location</string>
+		</array>
+		<!-- Local development only: allow HTTP to a local API Gateway on the simulator. -->
+		<key>NSAppTransportSecurity</key>
+		<dict>
+			<key>NSAllowsLocalNetworking</key>
+			<true/>
+		</dict>
 	</dict>
 </plist>
