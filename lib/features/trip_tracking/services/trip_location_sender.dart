@@ -93,7 +93,6 @@ class TripTrackingSnapshot {
 /// location updates on iOS. This keeps the app sending with the screen locked
 /// or another app on top. It is best-effort: if Android still decides to destroy
 /// the activity (low memory), tracking stops until the driver reopens the app —
-/// a dedicated background service package would be needed to fully guarantee it.
 ///
 /// **Retry:** a failed send stays in an in-memory queue and is retried on the
 /// next tick — but only for network / 5xx / 429 errors. A 4xx (bad data, expired
@@ -183,12 +182,20 @@ class TripLocationSender {
 
   // --- internals --------------------------------------------------------
 
+  /// Minimum displacement (meters) before the OS emits a new position on the
+  /// stream. This is a **battery/GPS-radio** optimization only — it does NOT
+  /// reduce how often a fix is *sent*: [_tick] still runs every [interval] and
+  /// sends whatever is in [_latest], even if it hasn't changed. Deciding which
+  /// fixes are worth *persisting* (distance/time threshold, dedup while
+  /// stopped, …).
+  static const int _distanceFilterMeters = 10;
+
   LocationSettings _buildLocationSettings() {
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
         return AndroidSettings(
           accuracy: accuracy,
-          distanceFilter: 0,
+          distanceFilter: _distanceFilterMeters,
           intervalDuration: interval,
           foregroundNotificationConfig: const ForegroundNotificationConfig(
             notificationTitle: 'SmartBus · recorrido activo',
@@ -201,7 +208,7 @@ class TripLocationSender {
       case TargetPlatform.iOS:
         return AppleSettings(
           accuracy: accuracy,
-          distanceFilter: 0,
+          distanceFilter: _distanceFilterMeters,
           activityType: ActivityType.automotiveNavigation,
           pauseLocationUpdatesAutomatically: false,
           allowBackgroundLocationUpdates: true,
