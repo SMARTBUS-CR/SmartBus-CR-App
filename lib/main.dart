@@ -43,14 +43,22 @@ class SmartBusApp extends StatelessWidget {
       theme: SmartBusTheme.light,
       initialRoute: '/splash',
       onGenerateRoute: (settings) {
-        final builder = _routes[settings.name];
+        final WidgetBuilder? builder;
+        if (settings.name == '/driver/trip') {
+          final args = settings.arguments;
+          final autoStart = args is Map && args['autoStart'] == true;
+          builder = (_) => TripScreen(autoStart: autoStart);
+        } else {
+          builder = _routes[settings.name];
+        }
         if (builder == null) return null;
+        final resolved = builder;
         return PageRouteBuilder<void>(
           settings: settings,
           transitionDuration: const Duration(milliseconds: 200),
           reverseTransitionDuration: const Duration(milliseconds: 200),
           pageBuilder: (context, animation, secondaryAnimation) =>
-              builder(context),
+              resolved(context),
           transitionsBuilder: (context, animation, secondaryAnimation, child) {
             return FadeTransition(opacity: animation, child: child);
           },

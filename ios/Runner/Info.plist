@@ -68,5 +68,42 @@
 		</array>
 		<key>UIStatusBarHidden</key>
 		<false/>
+		<!-- Driver GPS transmission during a trip (issue-4). -->
+		<key>NSLocationWhenInUseUsageDescription</key>
+		<string>SmartBus usa tu ubicación para enviar la posición del autobús durante el recorrido.</string>
+		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+		<string>SmartBus sigue enviando la posición del autobús aunque la app esté en segundo plano durante el recorrido.</string>
+		<!-- Keep sending location with the app backgrounded / screen locked. -->
+		<key>UIBackgroundModes</key>
+		<array>
+			<string>location</string>
+		</array>
+		<!-- Local development only: allow HTTP to a local API Gateway on the simulator. -->
+		<key>NSAppTransportSecurity</key>
+		<dict>
+			<key>NSAllowsLocalNetworking</key>
+			<true/>
+		</dict>
+		<key>UIApplicationSupportsIndirectInputEvents</key>
+		<true/>
+		<key>UILaunchStoryboardName</key>
+		<string>LaunchScreen</string>
+		<key>UIMainStoryboardFile</key>
+		<string>Main</string>
+		<key>UISupportedInterfaceOrientations</key>
+		<array>
+			<string>UIInterfaceOrientationPortrait</string>
+			<string>UIInterfaceOrientationLandscapeLeft</string>
+			<string>UIInterfaceOrientationLandscapeRight</string>
+		</array>
+		<key>UISupportedInterfaceOrientations~ipad</key>
+		<array>
+			<string>UIInterfaceOrientationPortrait</string>
+			<string>UIInterfaceOrientationPortraitUpsideDown</string>
+			<string>UIInterfaceOrientationLandscapeLeft</string>
+			<string>UIInterfaceOrientationLandscapeRight</string>
+		</array>
+		<key>UIStatusBarHidden</key>
+		<false/>
 	</dict>
 </plist>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG-ONLY network security config.
+
+  Lives under src/debug/, so it is bundled ONLY in debug builds. It permits
+  cleartext (plain HTTP) traffic so the driver app can talk to a local API
+  Gateway during development:
+    - Android emulator  ->  http://10.0.2.2:8000/api
+    - Physical device   ->  http://<your-PC-LAN-IP>:8000/api
+
+  Release and profile builds never include this file and remain HTTPS-only.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
