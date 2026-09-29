@@ -34,7 +34,7 @@ class _FakeGpsService implements GpsLocationService {
   }
 
   @override
-  Future<Map<String, dynamic>> latestForTrip(int tripId) async => const {};
+  Future<Map<String, dynamic>> latestForTrip(String tripId) async => const {};
 }
 
 /// Fake device GPS.
@@ -78,6 +78,9 @@ Position _position({double lat = 9.93, double lng = -84.08, double speed = 10}) 
 
 // ---------------------------------------------------------------------------
 
+/// Trips are identified by UUID on the backend.
+const _tripId = '01a09332-3457-7315-885e-4ebb218f7262';
+
 void main() {
   late _FakeGpsService service;
   late _FakeGeolocator geo;
@@ -98,7 +101,7 @@ void main() {
       geo.permission = LocationPermission.denied;
       final sender = build();
 
-      sender.start(tripId: 25);
+      sender.start(tripId: _tripId);
       async.flushMicrotasks();
 
       expect(sender.snapshot.value.state, TripTrackingState.permissionDenied);
@@ -115,7 +118,7 @@ void main() {
       geo.serviceEnabled = false;
       final sender = build();
 
-      sender.start(tripId: 25);
+      sender.start(tripId: _tripId);
       async.flushMicrotasks();
 
       expect(
@@ -130,7 +133,7 @@ void main() {
     fakeAsync((async) {
       final sender = build();
 
-      sender.start(tripId: 25);
+      sender.start(tripId: _tripId);
       async.flushMicrotasks(); // completes start() -> tracking + first tick
 
       expect(sender.snapshot.value.state, TripTrackingState.tracking);
@@ -141,7 +144,8 @@ void main() {
       // first immediate tick + 3 timer ticks
       expect(service.sent.length, greaterThanOrEqualTo(3));
       final fix = service.sent.first;
-      expect(fix.tripId, 25);
+      expect(fix.tripId, _tripId);
+      expect(fix.toJsonApi()['data']['attributes']['trip_id'], _tripId);
       expect(fix.latitude, 9.93);
       expect(fix.longitude, -84.08);
       expect(fix.speedKmh, closeTo(36, 0.001)); // 10 m/s -> 36 km/h
@@ -158,7 +162,7 @@ void main() {
       service.failFirst = 2; // first 2 sends fail with "no connection"
       final sender = build();
 
-      sender.start(tripId: 25);
+      sender.start(tripId: _tripId);
       async.flushMicrotasks();
       async.elapse(interval * 3);
       async.flushMicrotasks();
@@ -176,7 +180,7 @@ void main() {
       service.failAlwaysWith = ApiException.noConnection;
       final sender = build();
 
-      sender.start(tripId: 25);
+      sender.start(tripId: _tripId);
       async.flushMicrotasks();
       async.elapse(interval * 3);
       async.flushMicrotasks();
@@ -196,7 +200,7 @@ void main() {
           const ApiException(ApiErrorType.validation, 'Datos inválidos.');
       final sender = build();
 
-      sender.start(tripId: 25);
+      sender.start(tripId: _tripId);
       async.flushMicrotasks();
       async.elapse(interval * 3);
       async.flushMicrotasks();
@@ -214,7 +218,7 @@ void main() {
       service.failAlwaysWith = ApiException.noConnection; // build up a queue
       final sender = build();
 
-      sender.start(tripId: 25);
+      sender.start(tripId: _tripId);
       async.flushMicrotasks();
       async.elapse(interval * 2);
       async.flushMicrotasks();
