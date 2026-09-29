@@ -4,6 +4,14 @@ enum ApiErrorType {
   /// Invalid credentials during login (wrong email or password).
   badCredentials,
 
+  /// The account is valid but its role cannot use this app
+  /// (only passengers and drivers are allowed).
+  roleNotAllowed,
+
+  /// 400 — the backend rejected the request (e.g. wrong or expired reset code).
+  /// [ApiException.message] carries the backend message.
+  badRequest,
+
   /// 401 — token missing, invalid or expired.
   unauthorized,
 
@@ -14,6 +22,7 @@ enum ApiErrorType {
   notFound,
 
   /// 422 — validation error on the submitted data.
+  /// See [ApiException.fieldErrors] for the errors of each field.
   validation,
 
   /// 429 — too many requests in a short window (backend throttling).
@@ -40,11 +49,23 @@ enum ApiErrorType {
 /// [message] is always a **user-friendly, Spanish, ready-to-display** text.
 /// It never contains technical details (stack traces, raw bodies).
 class ApiException implements Exception {
-  const ApiException(this.type, this.message, {this.statusCode});
+  const ApiException(
+    this.type,
+    this.message, {
+    this.statusCode,
+    this.fieldErrors = const {},
+  });
 
   final ApiErrorType type;
   final String message;
   final int? statusCode;
+
+  /// Validation errors per field (422), e.g.
+  /// `{'email': ['El correo ya está registrado.']}`. Empty for other errors.
+  ///
+  /// Keys are the request field names (`name`, `email`, `password`, `code`, …),
+  /// so a form can show each message under its own input.
+  final Map<String, List<String>> fieldErrors;
 
   static const noConnection = ApiException(
     ApiErrorType.noConnection,
@@ -56,11 +77,27 @@ class ApiException implements Exception {
     'La conexión tardó demasiado. Inténtalo nuevamente.',
   );
 
+  static const roleNotAllowed = ApiException(
+    ApiErrorType.roleNotAllowed,
+    'Esta aplicación es solo para pasajeros y conductores.',
+  );
+
   /// Builds the exception from an HTTP error status code.
+  ///
   /// [serverMessage] is the backend message, used only when it is safe to show
-  /// (e.g. validation errors).
-  factory ApiException.fromStatus(int status, {String? serverMessage}) {
+  /// (400 and 422). [fieldErrors] are the per-field validation errors (422).
+  factory ApiException.fromStatus(
+    int status, {
+    String? serverMessage,
+    Map<String, List<String>> fieldErrors = const {},
+  }) {
     switch (status) {
+      case 400:
+        return ApiException(
+          ApiErrorType.badRequest,
+          serverMessage ?? 'No se pudo completar la solicitud.',
+          statusCode: 400,
+        );
       case 401:
         return const ApiException(
           ApiErrorType.unauthorized,
@@ -84,6 +121,7 @@ class ApiException implements Exception {
           ApiErrorType.validation,
           serverMessage ?? 'Revisa los datos ingresados.',
           statusCode: 422,
+          fieldErrors: fieldErrors,
         );
       case 429:
         return const ApiException(
