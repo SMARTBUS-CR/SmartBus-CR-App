@@ -13,8 +13,8 @@ class GpsFix {
     this.speedKmh,
   });
 
-  /// Trip this reading belongs to (BIGINT on the backend).
-  final int tripId;
+  /// UUID of the trip this reading belongs to.
+  final String tripId;
 
   final double latitude;
   final double longitude;
@@ -29,7 +29,7 @@ class GpsFix {
   ///
   /// `position.speed` is in **m/s** and can be negative when unavailable, so it
   /// is converted to km/h or dropped.
-  factory GpsFix.fromPosition(Position position, {required int tripId}) {
+  factory GpsFix.fromPosition(Position position, {required String tripId}) {
     return GpsFix(
       tripId: tripId,
       latitude: position.latitude,

@@ -36,7 +36,9 @@ class TripTrackingSnapshot {
   });
 
   final TripTrackingState state;
-  final int? tripId;
+
+  /// UUID of the trip being tracked.
+  final String? tripId;
 
   /// When the last GPS reading was obtained from the device.
   final DateTime? lastFixAt;
@@ -57,7 +59,7 @@ class TripTrackingSnapshot {
 
   TripTrackingSnapshot copyWith({
     TripTrackingState? state,
-    int? tripId,
+    String? tripId,
     DateTime? lastFixAt,
     DateTime? lastSentAt,
     int? sentCount,
@@ -82,7 +84,7 @@ class TripTrackingSnapshot {
 ///
 /// ```dart
 /// final sender = TripLocationSender();
-/// await sender.start(tripId: 25);   // asks permission, then sends every [interval]
+/// await sender.start(tripId: tripUuid);   // asks permission, then sends every [interval]
 /// // ValueListenableBuilder(valueListenable: sender.snapshot, ...)
 /// await sender.stop();
 /// sender.dispose();
@@ -125,16 +127,16 @@ class TripLocationSender {
   StreamSubscription<Position>? _positionSub;
   Timer? _timer;
   Position? _latest;
-  int _tripId = 0;
+  String _tripId = '';
   bool _flushing = false;
   bool _disposed = false;
 
-  /// Starts periodic transmission for [tripId].
+  /// Starts periodic transmission for [tripId] (UUID of the trip).
   ///
   /// Requests the location permission if needed. If the user denies it, or the
   /// device's location services are off, [snapshot] reflects it and nothing is
   /// sent.
-  Future<void> start({required int tripId}) async {
+  Future<void> start({required String tripId}) async {
     if (snapshot.value.isTracking || _disposed) return;
     _tripId = tripId;
     _set(state: TripTrackingState.starting, tripId: tripId, clearError: true);
@@ -299,7 +301,7 @@ class TripLocationSender {
 
   void _set({
     TripTrackingState? state,
-    int? tripId,
+    String? tripId,
     DateTime? lastFixAt,
     DateTime? lastSentAt,
     int? sentCount,

@@ -26,6 +26,6 @@ class GpsLocationService {
   /// `GET {gateway}/gps/trips/{tripId}/location` — latest known position of a
   /// trip (HU3, e.g. to place the marker when opening the map). Returns the raw
   /// JSON:API document.
-  Future<Map<String, dynamic>> latestForTrip(int tripId) =>
+  Future<Map<String, dynamic>> latestForTrip(String tripId) =>
       _client.get(ApiConfig.gpsTripLocation(tripId));
 }
