@@ -23,6 +23,7 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 | Pantalla | Requerimientos cubiertos |
 |---|---|
 | `auth/login_screen.dart` | RF-07 (login pasajero), base para RF-13 conductor |
+| `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register`, auto-login → `/passenger/home` |
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal), RF-09 (búsqueda) |
 | `passenger/route_search_screen.dart` | RF-09 |
 | `passenger/bus_tracking_screen.dart` | RF-10 (ubicación en vivo), RF-11 (ETA), RF-12 (alertas) |

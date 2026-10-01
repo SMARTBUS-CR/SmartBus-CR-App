@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'core/theme.dart';
 import 'features/auth/splash_screen.dart';
 import 'features/auth/login_screen.dart';
+import 'features/auth/register_screen.dart';
 import 'features/passenger/passenger_home_screen.dart';
 import 'features/passenger/route_search_screen.dart';
 import 'features/passenger/bus_tracking_screen.dart';
@@ -20,6 +21,7 @@ class SmartBusApp extends StatelessWidget {
   static final Map<String, WidgetBuilder> _routes = {
     '/splash': (_) => const SplashScreen(),
     '/login': (_) => const LoginScreen(),
+    '/register': (_) => const RegisterScreen(),
 
     // Passenger flow (RF-07 to RF-12)
     '/passenger/home': (_) => const PassengerHomeScreen(),
