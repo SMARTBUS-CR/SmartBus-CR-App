@@ -45,9 +45,11 @@ class ApiConfig {
     defaultValue: 'es',
   );
 
-  /// Maximum time to wait for a response. Render's free tier can take several
-  /// seconds to "wake up" after a period of inactivity.
-  static const Duration requestTimeout = Duration(seconds: 30);
+  /// Maximum time to wait for a response. Render's free tier "wakes up" after a
+  /// period of inactivity, and a request may wake **two** services (Gateway +
+  /// Auth): a first login measured ~38 s, so 30 s was not enough. Screens show
+  /// [SlowRequestHint] while waiting.
+  static const Duration requestTimeout = Duration(seconds: 60);
 
   /// How often the driver's GPS position is sent during a trip (issue-4).
   ///
