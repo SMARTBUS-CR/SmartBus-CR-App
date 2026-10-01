@@ -5,7 +5,7 @@
 class AuthRole {
   const AuthRole({required this.value, required this.label});
 
-  /// Database value: `passenger`, `driver`, `admin`, …
+  /// Database value: `passenger`, `driver`, `company-admin`, `super-admin`.
   final String value;
 
   /// Display label: `Pasajero`, `Conductor`, …
@@ -28,13 +28,27 @@ class AuthUser {
     this.roles = const [],
   });
 
+  /// Roles that can use this app. Admin roles (`company-admin`, `super-admin`)
+  /// work only in the admin panel.
+  static const allowedRoles = {'passenger', 'driver'};
+
+  /// UUID of the user in the Auth service.
   final String id;
   final String name;
   final String email;
   final List<AuthRole> roles;
 
-  /// JSON:API response from the Auth service through the Gateway
-  /// (`POST /auth/login` with `?include=roles`).
+  /// JSON:API response of the Auth service through the Gateway, requested with
+  /// `?include=roles` (`POST /auth/login`, `POST /auth/register/passenger`,
+  /// `GET /auth/user`):
+  ///
+  /// ```json
+  /// {
+  ///   "data": {"id": "<uuid>", "type": "users",
+  ///            "attributes": {"name": "...", "email": "..."}},
+  ///   "included": [{"type": "roles", "attributes": {"value": "passenger", "label": "Pasajero"}}]
+  /// }
+  /// ```
   factory AuthUser.fromJsonApi(Map<String, dynamic> body) {
     final data = (body['data'] as Map<String, dynamic>?) ?? const {};
     final attributes =
@@ -55,21 +69,6 @@ class AuthUser {
       name: (attributes['name'] ?? '').toString(),
       email: (attributes['email'] ?? '').toString(),
       roles: roles,
-    );
-  }
-
-  /// "Flattened" Gateway response for `GET /auth/user` → `{id, email, name}`.
-  /// That Gateway endpoint does not include roles, so the [fallbackRoles] stored
-  /// at login time are kept.
-  factory AuthUser.fromGatewayProfile(
-    Map<String, dynamic> body, {
-    List<AuthRole> fallbackRoles = const [],
-  }) {
-    return AuthUser(
-      id: (body['id'] ?? '').toString(),
-      name: (body['name'] ?? '').toString(),
-      email: (body['email'] ?? '').toString(),
-      roles: fallbackRoles,
     );
   }
 
@@ -104,5 +103,7 @@ class AuthUser {
   bool hasRole(String value) => roles.any((r) => r.value == value);
   bool get isPassenger => hasRole('passenger');
   bool get isDriver => hasRole('driver');
-  bool get isAdmin => hasRole('admin');
+
+  /// Whether this user can use the app (passenger or driver).
+  bool get isAllowedInApp => roles.any((r) => allowedRoles.contains(r.value));
 }

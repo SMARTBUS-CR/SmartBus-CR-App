@@ -80,7 +80,11 @@ class ApiClient {
 
     if (status >= 200 && status < 300) return body;
 
-    throw ApiException.fromStatus(status, serverMessage: _messageFrom(body));
+    throw ApiException.fromStatus(
+      status,
+      serverMessage: _messageFrom(body),
+      fieldErrors: _fieldErrorsFrom(body),
+    );
   }
 
   Map<String, dynamic> _decode(String raw) {
@@ -94,18 +98,62 @@ class ApiClient {
     }
   }
 
-  /// Extracts a safe message from an error body (Laravel or JSON:API format).
+  /// Extracts a safe message from an error body.
+  ///
+  /// Supported formats:
+  /// - JSON:API (Auth and GPS services): `{"errors": [{"detail": "..."}]}`
+  /// - Laravel (Gateway): `{"message": "..."}` or `{"errors": {"field": ["..."]}}`
   String? _messageFrom(Map<String, dynamic> body) {
+    final errors = body['errors'];
+
+    if (errors is List) {
+      for (final error in errors.whereType<Map>()) {
+        final detail = error['detail'];
+        if (detail is String && detail.isNotEmpty) return detail;
+      }
+    }
+
     final message = body['message'];
     if (message is String && message.isNotEmpty) return message;
 
-    final errors = body['errors'];
     if (errors is Map && errors.isNotEmpty) {
       final first = errors.values.first;
       if (first is List && first.isNotEmpty) return first.first.toString();
       if (errors['detail'] is String) return errors['detail'] as String;
     }
     return null;
+  }
+
+  /// Extracts the validation errors of each field (422).
+  ///
+  /// - JSON:API: each error points to its field with
+  ///   `source.pointer = "/data/attributes/<field>"`.
+  /// - Laravel: `{"errors": {"<field>": ["message", …]}}`.
+  Map<String, List<String>> _fieldErrorsFrom(Map<String, dynamic> body) {
+    final errors = body['errors'];
+    final result = <String, List<String>>{};
+
+    if (errors is List) {
+      for (final error in errors.whereType<Map>()) {
+        final source = error['source'];
+        final pointer = source is Map ? source['pointer'] : null;
+        final detail = error['detail'];
+        if (pointer is! String || pointer.isEmpty || detail is! String) {
+          continue;
+        }
+        final field = pointer.split('/').last;
+        (result[field] ??= []).add(detail);
+      }
+    } else if (errors is Map) {
+      errors.forEach((field, messages) {
+        if (messages is List) {
+          result[field.toString()] =
+              messages.map((m) => m.toString()).toList();
+        }
+      });
+    }
+
+    return result;
   }
 
   void close() => _http.close();

@@ -38,8 +38,9 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
     token `Bearer` automáticamente y traduce errores a `ApiException`.
   - `core/storage/secure_session_store.dart` — token + usuario en
     `flutter_secure_storage` (nunca la contraseña).
-  - `features/auth/services/auth_service.dart` — `login` / `fetchCurrentUser`
-    (`GET /auth/user`) / `restoreSession` / `logout`.
+  - `features/auth/services/auth_service.dart` — `login` / `registerPassenger`
+    / `sendResetCode` / `resetPassword` / `fetchCurrentUser` / `restoreSession`
+    / `logout` (ver el contrato en la sección 5).
   - `features/auth/models/` — `AuthUser` + `AuthRole` (parseo JSON:API).
   - `features/auth/role_home.dart` — rol del backend → ruta de inicio.
 
@@ -58,3 +59,63 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
    las pantallas — con `setState` alcanza solo para esta etapa.
 4. Agregar los nuevos microservicios en `ApiConfig` (`trips`, `gps`, `eta`, …)
    reutilizando el mismo `ApiClient`.
+
+## 5. Contrato de `AuthService`
+
+Las pantallas **solo** llaman a estos métodos: las rutas, el parseo JSON:API,
+el token y la traducción de errores ya están resueltos. Todo pasa por el API
+Gateway (`/auth/*`).
+
+| Método | Endpoint (Gateway) | Devuelve |
+|---|---|---|
+| `login({email, password})` | `POST /auth/login?include=roles` | `AuthSession` (guarda token + usuario) |
+| `registerPassenger({name, email, password, passwordConfirmation})` | `POST /auth/register/passenger?include=roles` | `AuthSession` con rol `passenger` (queda con la sesión iniciada) |
+| `sendResetCode(email)` | `POST /auth/password/forgot` | `String`: mensaje del backend para mostrar |
+| `resetPassword({email, code, password, passwordConfirmation})` | `POST /auth/password/reset` | `String`: mensaje del backend. Cierra la sesión en todos los dispositivos → volver a login |
+| `fetchCurrentUser()` | `GET /auth/user?include=roles` | `AuthUser` actualizado (también lo guarda) |
+| `restoreSession()` | `GET /auth/user?include=roles` | `AuthUser?`: `null` si no hay sesión, el token venció o el rol no está permitido. Sin red devuelve el usuario guardado |
+| `logout()` | `POST /auth/logout` | — Siempre borra la sesión local, aunque falle el servidor |
+
+**Roles permitidos:** solo `passenger` y `driver` (`AuthUser.isAllowedInApp`).
+Si `login`, `registerPassenger` o `restoreSession` reciben otro rol
+(`super-admin`, `company-admin`), se cierra la sesión en el servidor y se borra
+la local.
+
+### Errores (`ApiException`)
+
+Todos los métodos lanzan `ApiException`. `e.message` siempre está en español y
+listo para mostrar.
+
+| `e.type` | Cuándo | Qué hacer en la pantalla |
+|---|---|---|
+| `badCredentials` | `login` con correo o contraseña incorrectos | Mostrar `e.message` |
+| `roleNotAllowed` | La cuenta no es de pasajero ni conductor | Mostrar `e.message` ("Esta aplicación es solo para pasajeros y conductores.") |
+| `validation` | 422: datos inválidos (`registerPassenger`, `sendResetCode`, `resetPassword`) | Mostrar `e.fieldErrors['email']`, `['password']`, `['name']`, `['code']` debajo de cada campo |
+| `badRequest` | 400: código de recuperación incorrecto o vencido | Mostrar `e.message` (viene del backend) |
+| `tooManyRequests` | 429: demasiados intentos (Auth: 5 por minuto en login/forgot/reset) | Pedir que espere |
+| `unauthorized` | 401: el token venció | Volver a login |
+| `noConnection` / `timeout` | Sin red o la respuesta tardó demasiado | Ofrecer reintentar |
+| `serviceUnavailable` / `serverError` / `unknown` | Falla del backend o del Gateway | Mostrar `e.message` |
+
+Ejemplo (registro):
+
+```dart
+try {
+  final session = await AuthService().registerPassenger(
+    name: name,
+    email: email,
+    password: password,
+    passwordConfirmation: confirmation,
+  );
+  Navigator.pushReplacementNamed(context, homeRouteForUser(session.user)!);
+} on ApiException catch (e) {
+  if (e.type == ApiErrorType.validation) {
+    setState(() {
+      emailError = e.fieldErrors['email']?.first;
+      passwordError = e.fieldErrors['password']?.first;
+    });
+  } else {
+    showError(e.message);
+  }
+}
+```

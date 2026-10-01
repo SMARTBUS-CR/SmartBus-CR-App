@@ -18,9 +18,9 @@ import '../trip_tracking/services/trip_location_sender.dart';
 class TripScreen extends StatefulWidget {
   const TripScreen({super.key, this.tripId, this.autoStart = false});
 
-  /// Active trip. Passed in once the trip-selection flow exists; for now it
-  /// falls back to [_demoTripId] so the screen is testable end to end.
-  final int? tripId;
+  /// UUID of the active trip. Passed in once the trip-selection flow exists; for
+  /// now it falls back to [_demoTripId] so the screen is testable end to end.
+  final String? tripId;
 
   /// When `true`, the trip GPS transmission starts as soon as the screen opens
   /// (the driver tapped "Iniciar recorrido" on the home tab). Otherwise the
@@ -29,7 +29,14 @@ class TripScreen extends StatefulWidget {
 
   // TODO: recibir el viaje activo desde la pantalla de rutas cuando exista
   //       (Navigator.pushNamed(context, '/driver/trip', arguments: tripId)).
-  static const int _demoTripId = 1;
+  //
+  // Demo trip: must be the UUID of a `scheduled` / `in_progress` trip of the
+  // backend DB. Override it without touching code:
+  //   flutter run --dart-define=DEMO_TRIP_ID=<trip-uuid>
+  static const String _demoTripId = String.fromEnvironment(
+    'DEMO_TRIP_ID',
+    defaultValue: '01a09332-3457-7315-885e-4ebb218f7262',
+  );
 
   @override
   State<TripScreen> createState() => _TripScreenState();
@@ -41,7 +48,7 @@ class _TripScreenState extends State<TripScreen> {
   );
   Timer? _ticker; // rebuilds every second so "hace Ns" stays fresh
 
-  int get _tripId => widget.tripId ?? TripScreen._demoTripId;
+  String get _tripId => widget.tripId ?? TripScreen._demoTripId;
 
   @override
   void initState() {
@@ -168,7 +175,10 @@ class _TripScreenState extends State<TripScreen> {
 class _Header extends StatelessWidget {
   const _Header({required this.tripId});
 
-  final int tripId;
+  final String tripId;
+
+  /// A UUID is too long for the header: the first block is enough to tell trips apart.
+  String get _shortTripId => tripId.split('-').first;
 
   @override
   Widget build(BuildContext context) {
@@ -195,7 +205,7 @@ class _Header extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            'Viaje #$tripId',
+            'Viaje #$_shortTripId',
             style: TextStyle(
               color: SmartBusColors.blanco.withValues(alpha: 0.85),
               fontSize: 14,

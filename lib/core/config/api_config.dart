@@ -78,8 +78,22 @@ class ApiConfig {
   /// `include=roles` embeds the role value/label in the JSON:API response.
   static Uri authLogin() => _uri('$authService/login', {'include': 'roles'});
 
+  /// POST — passenger sign-up. Auth service `POST /register/passenger`.
+  /// Returns the same JSON:API document as [authLogin] (user + token).
+  static Uri authRegisterPassenger() =>
+      _uri('$authService/register/passenger', {'include': 'roles'});
+
+  /// POST — sends a 6-digit password reset code to the email.
+  /// Auth service `POST /password/forgot`.
+  static Uri authPasswordForgot() => _uri('$authService/password/forgot');
+
+  /// POST — sets a new password with the emailed code.
+  /// Auth service `POST /password/reset`.
+  static Uri authPasswordReset() => _uri('$authService/password/reset');
+
   /// GET — authenticated user profile (the Gateway validates the token).
-  static Uri authUser() => _uri('$authService/user');
+  /// `include=roles` embeds the roles, same as [authLogin].
+  static Uri authUser() => _uri('$authService/user', {'include': 'roles'});
 
   /// POST — sign out (invalidates the token in the Gateway and the Auth service).
   static Uri authLogout() => _uri('$authService/logout');
@@ -88,6 +102,6 @@ class ApiConfig {
   static Uri gpsLocations() => _gpsUri('$gpsService/locations');
 
   /// GET — latest known location of a trip. GPS service `GET /trips/{id}/location`.
-  static Uri gpsTripLocation(int tripId) =>
+  static Uri gpsTripLocation(String tripId) =>
       _gpsUri('$gpsService/trips/$tripId/location');
 }

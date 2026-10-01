@@ -10,21 +10,31 @@ import '../models/auth_user.dart';
 /// Everything goes through the **API Gateway** (`ApiClient` already has it as
 /// the base URL). The app never talks to the Auth microservice directly.
 ///
-/// Ready for the rest of the features: once `/trips`, `/gps`, etc. exist, their
-/// services reuse the same [ApiClient] and the stored token is attached
-/// automatically.
+/// Screens only call these methods: routes, JSON:API parsing, token storage and
+/// error translation are handled here. Every failure is an [ApiException] with
+/// a ready-to-display Spanish message (see `lib/README.md`, "AuthService
+/// contract").
+///
+/// Only **passengers and drivers** can use the app: any other role is signed
+/// out and rejected with [ApiErrorType.roleNotAllowed].
 class AuthService {
   AuthService({ApiClient? client, SecureSessionStore? sessionStore})
-      : _client = client ?? ApiClient(),
-        _session = sessionStore ?? SecureSessionStore();
+      : _session = sessionStore ?? SecureSessionStore(),
+        _client = client ?? ApiClient(sessionStore: sessionStore);
 
   final ApiClient _client;
   final SecureSessionStore _session;
 
-  /// Signs in: `POST {gateway}/auth/login`.
+  /// Signs in: `POST {gateway}/auth/login?include=roles`.
   ///
   /// On success it stores the token and the user (with their roles) in secure
-  /// storage. Throws [ApiException] with a user-friendly message on failure.
+  /// storage.
+  ///
+  /// Throws [ApiException]:
+  /// - [ApiErrorType.badCredentials] — wrong email or password.
+  /// - [ApiErrorType.roleNotAllowed] — the account is not a passenger or driver.
+  /// - [ApiErrorType.tooManyRequests] — too many attempts.
+  /// - [ApiErrorType.serviceUnavailable] / network errors.
   Future<AuthSession> login({
     required String email,
     required String password,
@@ -55,40 +65,102 @@ class AuthService {
       rethrow;
     }
 
-    final meta = (body['meta'] as Map<String, dynamic>?) ?? const {};
-    final token = (meta['access_token'] ?? '').toString();
-    if (token.isEmpty) {
-      throw const ApiException(
-        ApiErrorType.unknown,
-        'No se pudo iniciar sesión. Inténtalo nuevamente.',
-      );
-    }
-    final tokenType = (meta['token_type'] ?? 'Bearer').toString();
-    final user = AuthUser.fromJsonApi(body);
-
-    await _session.saveToken(token, tokenType: tokenType);
-    await _session.saveUser(user.toJson());
-
-    return AuthSession(
-      accessToken: token,
-      tokenType: tokenType,
-      user: user,
-      expiresAt: DateTime.tryParse((meta['expires_at'] ?? '').toString()),
-    );
+    return _startSession(body);
   }
 
-  /// Validates the token and retrieves the profile: `GET {gateway}/auth/user`.
+  /// Passenger sign-up: `POST {gateway}/auth/register/passenger?include=roles`.
   ///
-  /// The Gateway returns `{id, email, name}` without roles, so the roles stored
-  /// at login are kept. Throws [ApiException] if the token is not valid.
-  Future<AuthUser> fetchCurrentUser() async {
-    final stored = await _session.readUser();
-    final fallbackRoles =
-        stored != null ? AuthUser.fromStorage(stored).roles : const <AuthRole>[];
+  /// The backend always creates a **passenger** and signs them in, so on
+  /// success the token and the user are stored exactly like [login].
+  ///
+  /// Throws [ApiException]:
+  /// - [ApiErrorType.validation] — see [ApiException.fieldErrors]
+  ///   (`name`, `email`, `password`). Nothing is stored.
+  /// - [ApiErrorType.roleNotAllowed] — the created user is not a passenger.
+  /// - [ApiErrorType.tooManyRequests] / network errors.
+  Future<AuthSession> registerPassenger({
+    required String name,
+    required String email,
+    required String password,
+    required String passwordConfirmation,
+  }) async {
+    final body = await _client.post(
+      ApiConfig.authRegisterPassenger(),
+      body: {
+        'name': name,
+        'email': email,
+        'password': password,
+        'password_confirmation': passwordConfirmation,
+      },
+    );
 
+    return _startSession(body);
+  }
+
+  /// Sends a 6-digit password reset code by email:
+  /// `POST {gateway}/auth/password/forgot`.
+  ///
+  /// Returns the backend message to show to the user.
+  ///
+  /// Throws [ApiException]:
+  /// - [ApiErrorType.validation] — `fieldErrors['email']` (invalid or unknown email).
+  /// - [ApiErrorType.tooManyRequests] — too many codes requested.
+  /// - Network errors.
+  Future<String> sendResetCode(String email) async {
+    final body = await _client.post(
+      ApiConfig.authPasswordForgot(),
+      body: {'email': email},
+    );
+
+    return _metaMessage(body, fallback: 'Te enviamos un código a tu correo.');
+  }
+
+  /// Sets a new password with the emailed code:
+  /// `POST {gateway}/auth/password/reset`.
+  ///
+  /// The backend signs the user out of every device, so they must log in again.
+  /// Returns the backend message to show to the user.
+  ///
+  /// Throws [ApiException]:
+  /// - [ApiErrorType.badRequest] — wrong or expired code (backend message).
+  /// - [ApiErrorType.validation] — see [ApiException.fieldErrors]
+  ///   (`email`, `code`, `password`).
+  /// - [ApiErrorType.tooManyRequests] / network errors.
+  Future<String> resetPassword({
+    required String email,
+    required String code,
+    required String password,
+    required String passwordConfirmation,
+  }) async {
+    final body = await _client.post(
+      ApiConfig.authPasswordReset(),
+      body: {
+        'email': email,
+        'code': code,
+        'password': password,
+        'password_confirmation': passwordConfirmation,
+      },
+    );
+
+    return _metaMessage(body, fallback: 'Tu contraseña se actualizó.');
+  }
+
+  /// Validates the token and retrieves the profile:
+  /// `GET {gateway}/auth/user?include=roles`.
+  ///
+  /// The refreshed user is stored in secure storage.
+  /// Throws [ApiException] ([ApiErrorType.unauthorized] if the token is not valid).
+  Future<AuthUser> fetchCurrentUser() async {
     final body = await _client.get(ApiConfig.authUser());
-    final user =
-        AuthUser.fromGatewayProfile(body, fallbackRoles: fallbackRoles);
+    var user = AuthUser.fromJsonApi(body);
+
+    // Defensive: keep the roles stored at login if the response has none.
+    if (user.roles.isEmpty) {
+      final stored = await _session.readUser();
+      if (stored != null) {
+        user = user.copyWith(roles: AuthUser.fromStorage(stored).roles);
+      }
+    }
 
     await _session.saveUser(user.toJson());
     return user;
@@ -99,13 +171,15 @@ class AuthService {
   /// - No stored token → `null`.
   /// - Valid token → authenticated user.
   /// - Invalid / expired token (401/403) → clears the session and returns `null`.
+  /// - Role not allowed in the app → signs out and returns `null`.
   /// - Network or server failure → keeps the session with local data so the user
   ///   is not kicked out over a temporary connectivity issue.
   Future<AuthUser?> restoreSession() async {
     if (!await _session.hasSession()) return null;
 
+    AuthUser? user;
     try {
-      return await fetchCurrentUser();
+      user = await fetchCurrentUser();
     } on ApiException catch (e) {
       if (e.type == ApiErrorType.unauthorized ||
           e.type == ApiErrorType.forbidden) {
@@ -113,8 +187,14 @@ class AuthService {
         return null;
       }
       final stored = await _session.readUser();
-      return stored != null ? AuthUser.fromStorage(stored) : null;
+      user = stored != null ? AuthUser.fromStorage(stored) : null;
     }
+
+    if (user != null && !user.isAllowedInApp) {
+      await logout();
+      return null;
+    }
+    return user;
   }
 
   /// Signs out: `POST {gateway}/auth/logout` + clears storage.
@@ -131,4 +211,44 @@ class AuthService {
   }
 
   Future<bool> hasSession() => _session.hasSession();
+
+  // --- Internals ------------------------------------------------------------
+
+  /// Stores the token + user of a login / sign-up response and enforces the
+  /// allowed roles (the server session is closed if the role is not allowed).
+  Future<AuthSession> _startSession(Map<String, dynamic> body) async {
+    final meta = (body['meta'] as Map<String, dynamic>?) ?? const {};
+    final token = (meta['access_token'] ?? '').toString();
+    if (token.isEmpty) {
+      throw const ApiException(
+        ApiErrorType.unknown,
+        'No se pudo iniciar sesión. Inténtalo nuevamente.',
+      );
+    }
+    final tokenType = (meta['token_type'] ?? 'Bearer').toString();
+    final user = AuthUser.fromJsonApi(body);
+
+    // Stored first so logout() can send the token to close the server session.
+    await _session.saveToken(token, tokenType: tokenType);
+    await _session.saveUser(user.toJson());
+
+    if (!user.isAllowedInApp) {
+      await logout();
+      throw ApiException.roleNotAllowed;
+    }
+
+    return AuthSession(
+      accessToken: token,
+      tokenType: tokenType,
+      user: user,
+      expiresAt: DateTime.tryParse((meta['expires_at'] ?? '').toString()),
+    );
+  }
+
+  /// `meta.message` of a success response, or [fallback].
+  String _metaMessage(Map<String, dynamic> body, {required String fallback}) {
+    final meta = body['meta'];
+    final message = meta is Map ? meta['message'] : null;
+    return message is String && message.isNotEmpty ? message : fallback;
+  }
 }
