@@ -95,6 +95,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: LoginForm(
                     onLogin: (email, password) =>
                         _handleLogin(context, email, password),
+                    onRegisterPassenger: () =>
+                        Navigator.pushNamed(context, '/register'),
                   ),
                 ),
               ),
