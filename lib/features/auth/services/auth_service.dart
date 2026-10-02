@@ -4,6 +4,7 @@ import '../../../core/network/api_exception.dart';
 import '../../../core/storage/secure_session_store.dart';
 import '../models/auth_session.dart';
 import '../models/auth_user.dart';
+import '../models/pending_verification.dart';
 
 /// Authentication service for SmartBus Global.
 ///
@@ -32,6 +33,8 @@ class AuthService {
   ///
   /// Throws [ApiException]:
   /// - [ApiErrorType.badCredentials] — wrong email or password.
+  /// - [ApiErrorType.emailNotVerified] — right password, email not verified yet
+  ///   (offer [resendVerificationCode] + [verifyEmail]).
   /// - [ApiErrorType.roleNotAllowed] — the account is not a passenger or driver.
   /// - [ApiErrorType.tooManyRequests] — too many attempts.
   /// - [ApiErrorType.serviceUnavailable] / network errors.
@@ -70,15 +73,14 @@ class AuthService {
 
   /// Passenger sign-up: `POST {gateway}/auth/register/passenger?include=roles`.
   ///
-  /// The backend always creates a **passenger** and signs them in, so on
-  /// success the token and the user are stored exactly like [login].
+  /// The backend creates a **passenger** and emails a 6-digit code, but does
+  /// **not** sign them in: nothing is stored. Continue with [verifyEmail].
   ///
   /// Throws [ApiException]:
   /// - [ApiErrorType.validation] — see [ApiException.fieldErrors]
-  ///   (`name`, `email`, `password`). Nothing is stored.
-  /// - [ApiErrorType.roleNotAllowed] — the created user is not a passenger.
+  ///   (`name`, `email`, `password`).
   /// - [ApiErrorType.tooManyRequests] / network errors.
-  Future<AuthSession> registerPassenger({
+  Future<PendingVerification> registerPassenger({
     required String name,
     required String email,
     required String password,
@@ -94,7 +96,65 @@ class AuthService {
       },
     );
 
+    final data = body['data'];
+    final attributes = data is Map ? data['attributes'] : null;
+    final registeredEmail = attributes is Map ? attributes['email'] : null;
+
+    return PendingVerification(
+      email: registeredEmail is String && registeredEmail.isNotEmpty
+          ? registeredEmail
+          : email,
+      message: _metaMessage(
+        body,
+        fallback: 'Te enviamos un código de verificación a tu correo.',
+      ),
+    );
+  }
+
+  /// Verifies the email with the 6-digit code and **signs the user in**:
+  /// `POST {gateway}/auth/email/verify?include=roles`.
+  ///
+  /// On success the token and the user are stored exactly like [login].
+  ///
+  /// Throws [ApiException]:
+  /// - [ApiErrorType.badRequest] — wrong code, expired code (15 min) or too
+  ///   many wrong attempts (backend message says which).
+  /// - [ApiErrorType.validation] — see [ApiException.fieldErrors]
+  ///   (`email`, `code`).
+  /// - [ApiErrorType.roleNotAllowed] — the account is not a passenger or driver.
+  /// - [ApiErrorType.tooManyRequests] / network errors.
+  Future<AuthSession> verifyEmail({
+    required String email,
+    required String code,
+  }) async {
+    final body = await _client.post(
+      ApiConfig.authEmailVerify(),
+      body: {'email': email, 'code': code},
+    );
+
     return _startSession(body);
+  }
+
+  /// Sends a new email verification code:
+  /// `POST {gateway}/auth/email/resend`.
+  ///
+  /// The backend always answers with the same message (it does not reveal
+  /// whether the email exists or is already verified). Returns that message.
+  ///
+  /// Throws [ApiException]:
+  /// - [ApiErrorType.tooManyRequests] — more than 3 requests per minute.
+  /// - [ApiErrorType.validation] — `fieldErrors['email']`.
+  /// - Network errors.
+  Future<String> resendVerificationCode(String email) async {
+    final body = await _client.post(
+      ApiConfig.authEmailResend(),
+      body: {'email': email},
+    );
+
+    return _metaMessage(
+      body,
+      fallback: 'Te enviamos un código de verificación a tu correo.',
+    );
   }
 
   /// Sends a 6-digit password reset code by email:

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+
 import 'core/theme.dart';
 import 'features/auth/splash_screen.dart';
 import 'features/auth/login_screen.dart';
+import 'features/auth/register_screen.dart';
+import 'features/auth/verify_email_screen.dart';
 import 'features/passenger/passenger_home_screen.dart';
 import 'features/passenger/route_search_screen.dart';
 import 'features/passenger/bus_tracking_screen.dart';
@@ -20,6 +23,7 @@ class SmartBusApp extends StatelessWidget {
   static final Map<String, WidgetBuilder> _routes = {
     '/splash': (_) => const SplashScreen(),
     '/login': (_) => const LoginScreen(),
+    '/register': (_) => const RegisterScreen(),
 
     // Passenger flow (RF-07 to RF-12)
     '/passenger/home': (_) => const PassengerHomeScreen(),
@@ -48,6 +52,11 @@ class SmartBusApp extends StatelessWidget {
           final args = settings.arguments;
           final autoStart = args is Map && args['autoStart'] == true;
           builder = (_) => TripScreen(autoStart: autoStart);
+        } else if (settings.name == '/verify-email') {
+          final args = settings.arguments;
+          // Needs the email to verify; without it there is nothing to show.
+          if (args is! VerifyEmailArgs) return null;
+          builder = (_) => VerifyEmailScreen(args: args);
         } else {
           builder = _routes[settings.name];
         }

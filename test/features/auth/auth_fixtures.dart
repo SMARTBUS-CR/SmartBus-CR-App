@@ -76,3 +76,35 @@ Map<String, dynamic> jsonApiError(int status, String title, String detail) {
 Map<String, dynamic> metaMessage(String message) => {
   'meta': {'message': message},
 };
+
+/// 201 of `POST /register/passenger` since email verification: the user
+/// (unverified) and `meta.verification_required`, but **no token**.
+Map<String, dynamic> pendingVerificationDocument({
+  String email = 'user@passenger.com',
+  String message = 'Te enviamos un código de verificación a tu correo.',
+}) {
+  final document = userDocument(email: email);
+  (document['data']['attributes'] as Map<String, dynamic>)['email_verified'] =
+      false;
+  return {
+    ...document,
+    'meta': {'verification_required': true, 'message': message},
+  };
+}
+
+/// 403 of `POST /login` when the password is right but the email is not
+/// verified yet.
+Map<String, dynamic> emailNotVerifiedError({
+  String detail = 'Debes verificar tu correo antes de iniciar sesión.',
+}) {
+  return {
+    'errors': [
+      {
+        'status': '403',
+        'code': 'email_not_verified',
+        'title': 'Prohibido',
+        'detail': detail,
+      },
+    ],
+  };
+}
