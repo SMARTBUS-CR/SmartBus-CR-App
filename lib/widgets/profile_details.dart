@@ -149,34 +149,88 @@ class _ProfileDetailsState extends State<ProfileDetails> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: SmartBusColors.blanco,
+      appBar: AppBar(
+        backgroundColor: widget.color,
+        elevation: 0,
+        toolbarHeight: 40,
+        automaticallyImplyLeading: false,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: SmartBusColors.blanco),
+          onPressed: () =>
+              Navigator.pushReplacementNamed(context, widget.homeRoute),
+        ),
+      ),
       bottomNavigationBar: widget.bottomNavigationBar,
       body: Column(
         children: [
-          SmartBusHeader(
-            title: 'Mi Cuenta',
-            type: widget.role == 'driver'
-                ? SmartBusUserType.driver
-                : SmartBusUserType.passenger,
-            onBack: () =>
-                Navigator.pushReplacementNamed(context, widget.homeRoute),
+          _buildHeader(),
+          Expanded(
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned(
+                  top: -40,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    clipBehavior: Clip.antiAlias,
+                    decoration: const BoxDecoration(
+                      color: SmartBusColors.blanco,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(24),
+                        topRight: Radius.circular(24),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        // Refreshing over the stored data: thin bar instead of
+                        // hiding the profile behind a spinner.
+                        SizedBox(
+                          height: 3,
+                          child: _isLoading && _user != null
+                              ? LinearProgressIndicator(
+                                  key: const Key('profile_refreshing'),
+                                  minHeight: 3,
+                                  color: widget.color,
+                                  backgroundColor: Colors.transparent,
+                                )
+                              : null,
+                        ),
+                        Expanded(child: _buildContent()),
+                        _buildLogoutButton(),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-          // Refreshing over the stored data: thin bar instead of hiding the
-          // profile behind a spinner.
-          SizedBox(
-            height: 3,
-            child: _isLoading && _user != null
-                ? LinearProgressIndicator(
-                    key: const Key('profile_refreshing'),
-                    minHeight: 3,
-                    color: widget.color,
-                    backgroundColor: Colors.transparent,
-                  )
-                : null,
-          ),
-          Expanded(child: _buildContent()),
-          _buildLogoutButton(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: widget.color,
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(24),
+          bottomRight: Radius.circular(24),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 70),
+      alignment: Alignment.center,
+      child: const Text(
+        'Mi Cuenta',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: SmartBusColors.blanco,
+          fontSize: 24,
+          fontWeight: FontWeight.bold,
+        ),
       ),
     );
   }

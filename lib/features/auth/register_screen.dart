@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../../core/network/api_exception.dart';
 import '../../core/theme.dart';
-import '../../widgets/password_requirements.dart';
-import '../../widgets/slow_request_hint.dart';
 import 'role_home.dart';
 import 'services/auth_service.dart';
+import '../../widgets/password_requirements.dart';
+import '../../widgets/slow_request_hint.dart';
+import 'services/auth_service.dart';
+import 'verify_email_screen.dart';
 
 /// Passenger sign-up screen.
 ///
@@ -13,6 +15,8 @@ import 'services/auth_service.dart';
 /// in the admin panel), so there is no role selector: the backend assigns the
 /// `passenger` role and returns a session, which means a successful sign-up
 /// goes straight to the passenger home (auto-login).
+/// `passenger` role and emails a 6-digit code. A successful sign-up continues
+/// to [VerifyEmailScreen]; the session starts once the email is verified.
 ///
 /// The client-side rules mirror the Auth service `RegisterRequest`, so most
 /// mistakes are caught before the request. Anything the app cannot check
@@ -120,7 +124,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     setState(() => _isLoading = true);
     try {
-      final session = await _authService.registerPassenger(
+      final pending = await _authService.registerPassenger(
         name: _nameController.text.trim(),
         email: _emailController.text.trim(),
         password: _passwordController.text,
@@ -128,16 +132,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
       );
 
       if (!mounted) return;
-      _showMessage(
-        '¡Cuenta creada! Bienvenido(a) a SmartBus.',
-        color: SmartBusColors.completado,
-      );
-      // Auto-login: the sign-up response already carries the session. The
-      // stack is cleared so "back" does not return to the sign-up / login.
-      Navigator.pushNamedAndRemoveUntil(
+      // The account exists but must be verified with the emailed code; the
+      // sign-up is replaced so "back" from verification returns to login.
+      Navigator.pushReplacementNamed(
         context,
-        homeRouteForUser(session.user) ?? '/passenger/home',
-        (_) => false,
+        '/verify-email',
+        arguments: VerifyEmailArgs(
+          email: pending.email,
+          message: pending.message,
+        ),
       );
     } on ApiException catch (e) {
       if (!mounted) return;
