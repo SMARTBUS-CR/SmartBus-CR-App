@@ -24,6 +24,8 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 |---|---|
 | `auth/login_screen.dart` | RF-07 (login pasajero), base para RF-13 conductor |
 | `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register`, auto-login → `/passenger/home` |
+| `auth/verify_email_screen.dart` | Verificación del correo con código de 6 dígitos: ruta `/verify-email` (`VerifyEmailArgs`), reenvío con espera de 60 s; al verificar inicia sesión → home del rol |
+| `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register` → `/verify-email` (sin sesión hasta verificar el correo) |
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal), RF-09 (búsqueda) |
 | `passenger/route_search_screen.dart` | RF-09 |
 | `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar" |
@@ -73,7 +75,9 @@ Gateway (`/auth/*`).
 | Método | Endpoint (Gateway) | Devuelve |
 |---|---|---|
 | `login({email, password})` | `POST /auth/login?include=roles` | `AuthSession` (guarda token + usuario) |
-| `registerPassenger({name, email, password, passwordConfirmation})` | `POST /auth/register/passenger?include=roles` | `AuthSession` con rol `passenger` (queda con la sesión iniciada) |
+| `registerPassenger({name, email, password, passwordConfirmation})` | `POST /auth/register/passenger?include=roles` | `PendingVerification` (`email`, `message`). **No inicia sesión**: el backend envía un código de 6 dígitos al correo → seguir con `verifyEmail` |
+| `verifyEmail({email, code})` | `POST /auth/email/verify?include=roles` | `AuthSession` (guarda token + usuario, igual que `login`) |
+| `resendVerificationCode(email)` | `POST /auth/email/resend` | `String`: mensaje del backend (siempre el mismo, exista o no el correo). Máx. 3 por minuto |
 | `sendResetCode(email)` | `POST /auth/password/forgot` | `String`: mensaje del backend para mostrar |
 | `resetPassword({email, code, password, passwordConfirmation})` | `POST /auth/password/reset` | `String`: mensaje del backend. Cierra la sesión en todos los dispositivos → volver a login |
 | `fetchCurrentUser()` | `GET /auth/user?include=roles` | `AuthUser` actualizado (también lo guarda) |
@@ -81,7 +85,7 @@ Gateway (`/auth/*`).
 | `logout()` | `POST /auth/logout` | — Siempre borra la sesión local, aunque falle el servidor |
 
 **Roles permitidos:** solo `passenger` y `driver` (`AuthUser.isAllowedInApp`).
-Si `login`, `registerPassenger` o `restoreSession` reciben otro rol
+Si `login`, `verifyEmail` o `restoreSession` reciben otro rol
 (`super-admin`, `company-admin`), se cierra la sesión en el servidor y se borra
 la local.
 
@@ -93,9 +97,10 @@ listo para mostrar.
 | `e.type` | Cuándo | Qué hacer en la pantalla |
 |---|---|---|
 | `badCredentials` | `login` con correo o contraseña incorrectos | Mostrar `e.message` |
+| `emailNotVerified` | 403 `email_not_verified`: `login` con contraseña correcta pero correo sin verificar | Ofrecer verificar: `resendVerificationCode` + pantalla `/verify-email` (`VerifyEmailArgs(email, resendOnOpen: true)`) |
 | `roleNotAllowed` | La cuenta no es de pasajero ni conductor | Mostrar `e.message` ("Esta aplicación es solo para pasajeros y conductores.") |
-| `validation` | 422: datos inválidos (`registerPassenger`, `sendResetCode`, `resetPassword`) | Mostrar `e.fieldErrors['email']`, `['password']`, `['name']`, `['code']` debajo de cada campo |
-| `badRequest` | 400: código de recuperación incorrecto o vencido | Mostrar `e.message` (viene del backend) |
+| `validation` | 422: datos inválidos (`registerPassenger`, `verifyEmail`, `sendResetCode`, `resetPassword`) | Mostrar `e.fieldErrors['email']`, `['password']`, `['name']`, `['code']` debajo de cada campo |
+| `badRequest` | 400: código (de recuperación o de verificación) incorrecto, vencido o con demasiados intentos | Mostrar `e.message` (viene del backend) |
 | `tooManyRequests` | 429: demasiados intentos (Auth: 5 por minuto en login/forgot/reset) | Pedir que espere |
 | `unauthorized` | 401: el token venció | Volver a login |
 | `noConnection` / `timeout` | Sin red o la respuesta tardó demasiado | Ofrecer reintentar |
@@ -105,13 +110,18 @@ Ejemplo (registro):
 
 ```dart
 try {
-  final session = await AuthService().registerPassenger(
+  final pending = await AuthService().registerPassenger(
     name: name,
     email: email,
     password: password,
     passwordConfirmation: confirmation,
   );
-  Navigator.pushReplacementNamed(context, homeRouteForUser(session.user)!);
+  // Sin sesión todavía: verificar el correo con el código enviado.
+  Navigator.pushReplacementNamed(
+    context,
+    '/verify-email',
+    arguments: VerifyEmailArgs(email: pending.email, message: pending.message),
+  );
 } on ApiException catch (e) {
   if (e.type == ApiErrorType.validation) {
     setState(() {

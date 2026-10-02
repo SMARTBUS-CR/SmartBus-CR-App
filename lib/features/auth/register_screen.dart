@@ -4,6 +4,10 @@ import '../../core/network/api_exception.dart';
 import '../../core/theme.dart';
 import 'role_home.dart';
 import 'services/auth_service.dart';
+import '../../widgets/password_requirements.dart';
+import '../../widgets/slow_request_hint.dart';
+import 'services/auth_service.dart';
+import 'verify_email_screen.dart';
 
 /// Passenger sign-up screen.
 ///
@@ -11,6 +15,8 @@ import 'services/auth_service.dart';
 /// in the admin panel), so there is no role selector: the backend assigns the
 /// `passenger` role and returns a session, which means a successful sign-up
 /// goes straight to the passenger home (auto-login).
+/// `passenger` role and emails a 6-digit code. A successful sign-up continues
+/// to [VerifyEmailScreen]; the session starts once the email is verified.
 ///
 /// The client-side rules mirror the Auth service `RegisterRequest`, so most
 /// mistakes are caught before the request. Anything the app cannot check
@@ -39,8 +45,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _obscureConfirm = true;
   bool _isLoading = false;
 
-  /// After the first submit, fields re-validate while the user types.
-  bool _submitted = false;
+  /// Lets the password field re-validate the confirmation while typing.
+  final _confirmFieldKey = GlobalKey<FormFieldState<String>>();
 
   /// Backend validation errors (422) per field: `name`, `email`, `password`.
   /// A field's entry is cleared as soon as the user edits it.
@@ -48,7 +54,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   // Same limits as the Auth service `RegisterRequest`.
   static const _maxLength = 100;
-  static const _minPasswordLength = 8;
   static final _emailRegExp = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
 
   @override
@@ -89,28 +94,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final password = value ?? '';
     if (password.isEmpty) return 'Ingresa una contraseña';
 
-    final missing = <String>[
-      if (password.length < _minPasswordLength)
-        'al menos $_minPasswordLength caracteres',
-      if (!password.contains(RegExp(r'[A-Z]'))) 'una mayúscula',
-      if (!password.contains(RegExp(r'[a-z]'))) 'una minúscula',
-      if (!password.contains(RegExp(r'[0-9]'))) 'un número',
-      if (!password.contains(RegExp(r'[^A-Za-z0-9]'))) 'un símbolo',
-    ];
-    if (missing.isEmpty) return null;
-    return 'La contraseña debe tener ${_joinSpanish(missing)}';
+    // Which rules are missing is shown by the checklist below the
+    // field, so the error itself stays short.
+    if (PasswordRule.missing(password).isNotEmpty) {
+      return 'La contraseña no es segura';
+    }
+    return null;
   }
 
   String? _validateConfirm(String? value) {
     if ((value ?? '').isEmpty) return 'Confirma tu contraseña';
-    if (value != _passwordController.text) return 'Las contraseñas no coinciden';
+    if (value != _passwordController.text) {
+      return 'Las contraseñas no coinciden';
+    }
     return null;
-  }
-
-  /// "a", "a y b", "a, b y c".
-  static String _joinSpanish(List<String> items) {
-    if (items.length == 1) return items.first;
-    return '${items.sublist(0, items.length - 1).join(', ')} y ${items.last}';
   }
 
   // ============================================================
@@ -122,15 +119,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (_isLoading) return;
 
     FocusScope.of(context).unfocus();
-    setState(() {
-      _submitted = true;
-      _serverErrors = const {};
-    });
+    setState(() => _serverErrors = const {});
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
     try {
-      final session = await _authService.registerPassenger(
+      final pending = await _authService.registerPassenger(
         name: _nameController.text.trim(),
         email: _emailController.text.trim(),
         password: _passwordController.text,
@@ -138,16 +132,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
       );
 
       if (!mounted) return;
-      _showMessage(
-        '¡Cuenta creada! Bienvenido(a) a SmartBus.',
-        color: SmartBusColors.completado,
-      );
-      // Auto-login: the sign-up response already carries the session. The
-      // stack is cleared so "back" does not return to the sign-up / login.
-      Navigator.pushNamedAndRemoveUntil(
+      // The account exists but must be verified with the emailed code; the
+      // sign-up is replaced so "back" from verification returns to login.
+      Navigator.pushReplacementNamed(
         context,
-        homeRouteForUser(session.user) ?? '/passenger/home',
-        (_) => false,
+        '/verify-email',
+        arguments: VerifyEmailArgs(
+          email: pending.email,
+          message: pending.message,
+        ),
       );
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -246,7 +239,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   Widget _buildHeader(double scale) {
     return Padding(
-      padding: EdgeInsets.fromLTRB(8 * scale, 8 * scale, 27 * scale, 20 * scale),
+      padding: EdgeInsets.fromLTRB(
+        8 * scale,
+        8 * scale,
+        27 * scale,
+        20 * scale,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -304,14 +302,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget _buildForm(double scale) {
     return Form(
       key: _formKey,
-      autovalidateMode: _submitted
-          ? AutovalidateMode.onUserInteraction
-          : AutovalidateMode.disabled,
       child: AutofillGroup(
         child: Column(
           children: [
             // Name
             TextFormField(
+              // Real-time: validates this field as soon as the user types in it.
+              autovalidateMode: AutovalidateMode.onUserInteraction,
               key: const Key('register_name'),
               controller: _nameController,
               enabled: !_isLoading,
@@ -332,6 +329,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
             // Email
             TextFormField(
+              // Real-time: validates this field as soon as the user types in it.
+              autovalidateMode: AutovalidateMode.onUserInteraction,
               key: const Key('register_email'),
               controller: _emailController,
               enabled: !_isLoading,
@@ -353,6 +352,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
             // Password
             TextFormField(
+              // Real-time: validates this field as soon as the user types in it.
+              autovalidateMode: AutovalidateMode.onUserInteraction,
               key: const Key('register_password'),
               controller: _passwordController,
               enabled: !_isLoading,
@@ -360,13 +361,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
               textInputAction: TextInputAction.next,
               autofillHints: const [AutofillHints.newPassword],
               validator: _validatePassword,
-              onChanged: (_) => _clearServerError('password'),
+              onChanged: (_) {
+                _clearServerError('password');
+                // Keep "Las contraseñas no coinciden" in sync.
+                if (_confirmController.text.isNotEmpty) {
+                  _confirmFieldKey.currentState?.validate();
+                }
+              },
               decoration: _inputDecoration(
                 icon: Icons.lock_outline,
                 hint: 'Contraseña',
                 scale: scale,
-                helper:
-                    'Mínimo 8 caracteres, con mayúscula, minúscula, número y símbolo.',
                 serverError: _serverError('password'),
                 suffixIcon: _visibilityToggle(
                   obscured: _obscurePassword,
@@ -377,33 +382,44 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ),
             ),
 
+            PasswordRequirements(controller: _passwordController),
+
             SizedBox(height: 18 * scale),
 
             // Confirm password
-            TextFormField(
+            KeyedSubtree(
               key: const Key('register_password_confirmation'),
-              controller: _confirmController,
-              enabled: !_isLoading,
-              obscureText: _obscureConfirm,
-              textInputAction: TextInputAction.done,
-              validator: _validateConfirm,
-              onFieldSubmitted: (_) => _submit(),
-              decoration: _inputDecoration(
-                icon: Icons.lock_reset_outlined,
-                hint: 'Confirmar contraseña',
-                scale: scale,
-                suffixIcon: _visibilityToggle(
-                  obscured: _obscureConfirm,
+              child: TextFormField(
+                // Real-time: validates this field as soon as the user types in it.
+                autovalidateMode: AutovalidateMode.onUserInteraction,
+                key: _confirmFieldKey,
+                controller: _confirmController,
+                enabled: !_isLoading,
+                obscureText: _obscureConfirm,
+                textInputAction: TextInputAction.done,
+                validator: _validateConfirm,
+                onFieldSubmitted: (_) => _submit(),
+                decoration: _inputDecoration(
+                  icon: Icons.lock_reset_outlined,
+                  hint: 'Confirmar contraseña',
                   scale: scale,
-                  onPressed: () =>
-                      setState(() => _obscureConfirm = !_obscureConfirm),
+                  suffixIcon: _visibilityToggle(
+                    obscured: _obscureConfirm,
+                    scale: scale,
+                    onPressed: () =>
+                        setState(() => _obscureConfirm = !_obscureConfirm),
+                  ),
                 ),
               ),
             ),
 
+            _buildPasswordsMatch(),
+
             SizedBox(height: 28 * scale),
 
             _buildSubmitButton(scale),
+
+            if (_isLoading) const SlowRequestHint(),
 
             SizedBox(height: 18 * scale),
 
@@ -434,6 +450,43 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  /// Green "✓ Las contraseñas coinciden" under the confirmation, updated live
+  /// while either field changes. A mismatch is reported by the validator.
+  Widget _buildPasswordsMatch() {
+    return ListenableBuilder(
+      listenable: Listenable.merge([_passwordController, _confirmController]),
+      builder: (context, _) {
+        final confirm = _confirmController.text;
+        if (confirm.isEmpty || confirm != _passwordController.text) {
+          return const SizedBox.shrink();
+        }
+        return const Padding(
+          key: Key('register_passwords_match'),
+          // Same look as a met rule in [PasswordRequirements].
+          padding: EdgeInsets.only(top: 10, left: 6),
+          child: Row(
+            children: [
+              Icon(
+                Icons.check_circle,
+                size: 16,
+                color: SmartBusColors.verdeTurquesa,
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Las contraseñas coinciden',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: SmartBusColors.verdeMenta,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

@@ -45,9 +45,11 @@ class ApiConfig {
     defaultValue: 'es',
   );
 
-  /// Maximum time to wait for a response. Render's free tier can take several
-  /// seconds to "wake up" after a period of inactivity.
-  static const Duration requestTimeout = Duration(seconds: 30);
+  /// Maximum time to wait for a response. Render's free tier "wakes up" after a
+  /// period of inactivity, and a request may wake **two** services (Gateway +
+  /// Auth): a first login measured ~38 s, so 30 s was not enough. Screens show
+  /// [SlowRequestHint] while waiting.
+  static const Duration requestTimeout = Duration(seconds: 60);
 
   /// How often the driver's GPS position is sent during a trip (issue-4).
   ///
@@ -94,6 +96,14 @@ class ApiConfig {
   /// GET — authenticated user profile (the Gateway validates the token).
   /// `include=roles` embeds the roles, same as [authLogin].
   static Uri authUser() => _uri('$authService/user', {'include': 'roles'});
+
+  /// POST — verify the email with the 6-digit code; logs the user in.
+  /// `include=roles` embeds the roles, same as [authLogin].
+  static Uri authEmailVerify() =>
+      _uri('$authService/email/verify', {'include': 'roles'});
+
+  /// POST — send a new email verification code.
+  static Uri authEmailResend() => _uri('$authService/email/resend');
 
   /// POST — sign out (invalidates the token in the Gateway and the Auth service).
   static Uri authLogout() => _uri('$authService/logout');
