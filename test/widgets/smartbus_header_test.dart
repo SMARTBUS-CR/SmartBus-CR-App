@@ -83,8 +83,11 @@ void main() {
       );
 
       expect(_gradientColors(tester), [
-        SmartBusColors.azulCorporativo,
-        SmartBusColors.azulPrincipal,
+        SmartBusColors.azulDriverCobalto,
+        SmartBusColors.azulDriverBrillante,
+        SmartBusColors.azulDriverIndigo,
+        SmartBusColors.azulDriverMarino,
+        SmartBusColors.azulDriverElectrico,
       ]);
       expect(_bus, findsOneWidget);
       expect(_pin, findsOneWidget);
@@ -100,6 +103,7 @@ void main() {
       );
 
       expect(_gradientColors(tester), [
+        SmartBusColors.verdePasajeroIntenso,
         SmartBusColors.verdePasajero,
         SmartBusColors.verdePasajeroClaro,
       ]);
@@ -166,6 +170,59 @@ void main() {
       );
       expect(title.maxLines, 1);
       expect(title.overflow, TextOverflow.ellipsis);
+    });
+
+    testWidgets('driver and passenger share the compact header composition', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        const SmartBusHeader(title: 'Mi Cuenta', type: SmartBusUserType.driver),
+      );
+      final driverHeight = tester.getSize(_header).height;
+
+      await _pump(
+        tester,
+        const SmartBusHeader(
+          title: 'Mi Cuenta',
+          type: SmartBusUserType.passenger,
+        ),
+      );
+
+      expect(tester.getSize(_header).height, driverHeight);
+      // Both roles share the title row composition; the driver adds its bus.
+      expect(
+        tester.getTopLeft(_pin).dy,
+        lessThan(tester.getBottomLeft(find.text('Mi Cuenta')).dy),
+      );
+      await _pump(
+        tester,
+        const SmartBusHeader(title: 'Mi Cuenta', type: SmartBusUserType.driver),
+      );
+      expect(_bus, findsOneWidget);
+    });
+
+    testWidgets('passenger with subtitle: the drawing goes below the text', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        const SmartBusHeader(
+          title: 'Rastreando tu bus',
+          subtitle: 'Ruta 4 · Sarapiquí – Puerto Viejo',
+          type: SmartBusUserType.passenger,
+          compact: true,
+        ),
+      );
+
+      expect(
+        tester.getTopLeft(_pin).dy,
+        greaterThanOrEqualTo(
+          tester
+              .getBottomLeft(find.text('Ruta 4 · Sarapiquí – Puerto Viejo'))
+              .dy,
+        ),
+      );
     });
 
     testWidgets('uses light status bar icons', (tester) async {
