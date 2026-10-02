@@ -33,6 +33,7 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 | `driver/driver_home_screen.dart` | RF-13 (ruta asignada del día) |
 | `driver/driver_account_screen.dart` | Perfil del conductor ("Mi Cuenta"), solo lectura: aviso "contacta al administrador"; misma carga/401/"Reintentar" que el pasajero |
 | `widgets/profile_details.dart` | Vista de perfil compartida (pasajero y conductor): datos guardados + `fetchCurrentUser()`, 401 → login, "Reintentar" |
+| `widgets/smartbus_header.dart` | Header de todas las pantallas internas: degradado del tema por rol (`SmartBusUserType`), ola, ruta, pin y bus dibujados en código; variante `compact` para pantallas con mapa |
 | `driver/trip_screen.dart` | RF-14 (inicio/fin de recorrido), RF-15 (envío GPS) |
 
 ## 3. Qué es placeholder vs. qué ya está "conectable"

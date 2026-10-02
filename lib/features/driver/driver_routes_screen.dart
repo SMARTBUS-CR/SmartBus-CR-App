@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../../core/theme.dart';
 import '../../widgets/driver_bottom_nav.dart';
 import '../../widgets/placeholder_screen.dart';
+import '../../widgets/smartbus_header.dart';
 
 class DriverRoutesScreen extends StatelessWidget {
   const DriverRoutesScreen({super.key});
@@ -29,7 +29,7 @@ class DriverRoutesScreen extends StatelessWidget {
       title: 'Mis Rutas',
       icon: Icons.map_outlined,
       subtitle: 'Aquí verás el listado de rutas asignadas.',
-      color: SmartBusColors.azulPrincipal,
+      type: SmartBusUserType.driver,
       onBack: () => Navigator.pushReplacementNamed(context, '/driver/home'),
       bottomNavigationBar: DriverBottomNav(
         currentIndex: 1,

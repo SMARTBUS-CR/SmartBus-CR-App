@@ -34,24 +34,24 @@ class PassengerBottomNav extends StatelessWidget {
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        indicatorColor: SmartBusColors.verdeMenta.withValues(alpha: 0.12),
+        indicatorColor: SmartBusColors.verdePasajero.withValues(alpha: 0.12),
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home, color: SmartBusColors.verdeMenta),
+            selectedIcon: Icon(Icons.home, color: SmartBusColors.verdePasajero),
             label: 'Inicio',
           ),
           NavigationDestination(
             icon: Icon(Icons.confirmation_number_outlined),
             selectedIcon: Icon(Icons.confirmation_number,
-                color: SmartBusColors.verdeMenta),
+                color: SmartBusColors.verdePasajero),
             label: 'Mis viajes',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),
             selectedIcon:
-                Icon(Icons.person, color: SmartBusColors.verdeMenta),
+                Icon(Icons.person, color: SmartBusColors.verdePasajero),
             label: 'Cuenta',
           ),
         ],

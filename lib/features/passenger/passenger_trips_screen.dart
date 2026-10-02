@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../../core/theme.dart';
 import '../../widgets/passenger_bottom_nav.dart';
 import '../../widgets/placeholder_screen.dart';
+import '../../widgets/smartbus_header.dart';
 
 /// Passenger "My trips" placeholder — pending wiring to the real trip history.
 class PassengerTripsScreen extends StatelessWidget {
@@ -27,7 +27,7 @@ class PassengerTripsScreen extends StatelessWidget {
       title: 'Mis Viajes',
       icon: Icons.confirmation_number_outlined,
       subtitle: 'Aquí verás tu historial de viajes.',
-      color: SmartBusColors.verdeMenta,
+      type: SmartBusUserType.passenger,
       onBack: () => Navigator.pushReplacementNamed(context, '/passenger/home'),
       bottomNavigationBar: PassengerBottomNav(
         currentIndex: 1,
