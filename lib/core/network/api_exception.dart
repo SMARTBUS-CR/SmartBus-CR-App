@@ -18,6 +18,10 @@ enum ApiErrorType {
   /// 403 — user is authenticated but not allowed.
   forbidden,
 
+  /// 403 with code `email_not_verified` — valid credentials, but the email has
+  /// not been verified yet. The UI should offer to verify it.
+  emailNotVerified,
+
   /// 404 — resource not found.
   notFound,
 
@@ -54,11 +58,16 @@ class ApiException implements Exception {
     this.message, {
     this.statusCode,
     this.fieldErrors = const {},
+    this.code,
   });
 
   final ApiErrorType type;
   final String message;
   final int? statusCode;
+
+  /// Machine-readable error code sent by the backend (`errors[0].code`),
+  /// e.g. `email_not_verified`. `null` when the backend sends none.
+  final String? code;
 
   /// Validation errors per field (422), e.g.
   /// `{'email': ['El correo ya está registrado.']}`. Empty for other errors.
@@ -85,11 +94,13 @@ class ApiException implements Exception {
   /// Builds the exception from an HTTP error status code.
   ///
   /// [serverMessage] is the backend message, used only when it is safe to show
-  /// (400 and 422). [fieldErrors] are the per-field validation errors (422).
+  /// (400, 422 and known 403 codes). [fieldErrors] are the per-field
+  /// validation errors (422). [errorCode] is the backend `errors[0].code`.
   factory ApiException.fromStatus(
     int status, {
     String? serverMessage,
     Map<String, List<String>> fieldErrors = const {},
+    String? errorCode,
   }) {
     switch (status) {
       case 400:
@@ -103,6 +114,13 @@ class ApiException implements Exception {
           ApiErrorType.unauthorized,
           'Tu sesión expiró. Inicia sesión nuevamente.',
           statusCode: 401,
+        );
+      case 403 when errorCode == 'email_not_verified':
+        return ApiException(
+          ApiErrorType.emailNotVerified,
+          serverMessage ?? 'Debes verificar tu correo antes de iniciar sesión.',
+          statusCode: 403,
+          code: errorCode,
         );
       case 403:
         return const ApiException(
