@@ -128,13 +128,9 @@ class _TripScreenState extends State<TripScreen> {
       bottomNavigationBar: DriverBottomNav(currentIndex: 2, onTap: _onTabTap),
       body: Column(
         children: [
-          SmartBusHeader(
+          const SmartBusHeader(
             title: 'Recorrido',
-            // A UUID is too long for the header: the first block is enough
-            // to tell trips apart.
-            subtitle: 'Viaje #${_tripId.split('-').first}',
             type: SmartBusUserType.driver,
-            compact: true,
           ),
           Expanded(
             child: Stack(
