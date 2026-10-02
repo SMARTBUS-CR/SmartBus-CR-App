@@ -22,6 +22,12 @@ class SmartBusColors {
   static const error = Color(0xFFDC2626);
   static const completado = Color(0xFF16A34A);
 
+  // Passenger flow green, taken from the approved header design.
+  // verdePasajero: main accent (header start, icons, nav, avatar).
+  // verdePasajeroClaro: lighter end of the passenger header gradient.
+  static const verdePasajero = Color(0xFF016F58);
+  static const verdePasajeroClaro = Color(0xFF01997A);
+
   // Brand gradient: corporate blue -> primary blue -> turquoise.
   static const brandGradient = LinearGradient(
     begin: Alignment.centerLeft,

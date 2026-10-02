@@ -39,7 +39,7 @@ class PassengerAccountScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ProfileDetails(
-      color: SmartBusColors.verdeMenta,
+      color: SmartBusColors.verdePasajero,
       role: 'passenger',
       homeRoute: '/passenger/home',
       authService: authService,

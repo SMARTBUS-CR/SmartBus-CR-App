@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../../core/theme.dart';
 import '../../widgets/passenger_bottom_nav.dart';
 import '../../widgets/placeholder_screen.dart';
+import '../../widgets/smartbus_header.dart';
 
 class PassengerHomeScreen extends StatelessWidget {
   const PassengerHomeScreen({super.key});
@@ -26,7 +26,7 @@ class PassengerHomeScreen extends StatelessWidget {
       title: 'Inicio',
       icon: Icons.home_outlined,
       subtitle: 'Aquí verás tus rutas cercanas y el mapa principal.',
-      color: SmartBusColors.verdeMenta,
+      type: SmartBusUserType.passenger,
       bottomNavigationBar: PassengerBottomNav(
         currentIndex: 0,
         onTap: (index) => _onTabTap(context, index),

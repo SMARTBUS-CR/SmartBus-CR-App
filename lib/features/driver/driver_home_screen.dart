@@ -3,17 +3,15 @@ import 'package:flutter/material.dart';
 import '../../core/theme.dart';
 import '../../widgets/driver_bottom_nav.dart';
 import '../../widgets/gradient_button.dart';
+import '../../widgets/smartbus_header.dart';
 
 /// Driver home ("Inicio" tab): overview of the day plus the entry point to
 /// start a trip. "Iniciar recorrido" takes the driver to the "Recorrido" tab
 /// ([TripScreen]), where the GPS transmission is actually started.
 ///
-/// The header mirrors [PlaceholderScreen]: solid [SmartBusColors.azulPrincipal],
-/// short app bar and centered title, so every Driver tab looks the same.
+/// Uses the shared [SmartBusHeader] (driver variant), like every Driver tab.
 class DriverHomeScreen extends StatelessWidget {
   const DriverHomeScreen({super.key});
-
-  static const _headerColor = SmartBusColors.azulPrincipal;
 
   void _onTabTap(BuildContext context, int index) {
     switch (index) {
@@ -34,45 +32,23 @@ class DriverHomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: _headerColor,
-        elevation: 0,
-        toolbarHeight: 40,
-        automaticallyImplyLeading: false,
-      ),
+      backgroundColor: SmartBusColors.blanco,
       bottomNavigationBar: DriverBottomNav(
         currentIndex: 0,
         onTap: (index) => _onTabTap(context, index),
       ),
       body: Column(
         children: [
-          Container(
-            width: double.infinity,
-            decoration: const BoxDecoration(
-              color: _headerColor,
-              borderRadius: BorderRadius.only(
-                bottomLeft: Radius.circular(24),
-                bottomRight: Radius.circular(24),
-              ),
-            ),
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 70),
-            alignment: Alignment.center,
-            child: const Text(
-              'Mi ruta del día',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: SmartBusColors.blanco,
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+          const SmartBusHeader(
+            title: 'Mi ruta del día',
+            type: SmartBusUserType.driver,
           ),
           Expanded(
             child: Stack(
               clipBehavior: Clip.none,
               children: [
                 Positioned(
-                  top: -40,
+                  top: 0,
                   left: 0,
                   right: 0,
                   bottom: 0,
@@ -91,8 +67,9 @@ class DriverHomeScreen extends StatelessWidget {
                         Icon(
                           Icons.directions_bus_outlined,
                           size: 64,
-                          color: SmartBusColors.azulPrincipal
-                              .withValues(alpha: 0.35),
+                          color: SmartBusColors.azulPrincipal.withValues(
+                            alpha: 0.35,
+                          ),
                         ),
                         const SizedBox(height: 16),
                         Text(

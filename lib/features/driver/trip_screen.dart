@@ -7,6 +7,7 @@ import '../../core/config/api_config.dart';
 import '../../core/theme.dart';
 import '../../widgets/driver_bottom_nav.dart';
 import '../../widgets/gradient_button.dart';
+import '../../widgets/smartbus_header.dart';
 import '../trip_tracking/services/trip_location_sender.dart';
 
 /// Driver screen for an active trip (issue-4).
@@ -123,22 +124,24 @@ class _TripScreenState extends State<TripScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: SmartBusColors.azulPrincipal,
-        elevation: 0,
-        toolbarHeight: 40,
-        automaticallyImplyLeading: false,
-      ),
+      backgroundColor: SmartBusColors.blanco,
       bottomNavigationBar: DriverBottomNav(currentIndex: 2, onTap: _onTabTap),
       body: Column(
         children: [
-          _Header(tripId: _tripId),
+          SmartBusHeader(
+            title: 'Recorrido',
+            // A UUID is too long for the header: the first block is enough
+            // to tell trips apart.
+            subtitle: 'Viaje #${_tripId.split('-').first}',
+            type: SmartBusUserType.driver,
+            compact: true,
+          ),
           Expanded(
             child: Stack(
               clipBehavior: Clip.none,
               children: [
                 Positioned(
-                  top: -40,
+                  top: 0,
                   left: 0,
                   right: 0,
                   bottom: 0,
@@ -172,53 +175,6 @@ class _TripScreenState extends State<TripScreen> {
 
 // ---------------------------------------------------------------------------
 
-class _Header extends StatelessWidget {
-  const _Header({required this.tripId});
-
-  final String tripId;
-
-  /// A UUID is too long for the header: the first block is enough to tell trips apart.
-  String get _shortTripId => tripId.split('-').first;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 70),
-      decoration: const BoxDecoration(
-        color: SmartBusColors.azulPrincipal,
-        borderRadius: BorderRadius.only(
-          bottomLeft: Radius.circular(24),
-          bottomRight: Radius.circular(24),
-        ),
-      ),
-      child: Column(
-        children: [
-          const Text(
-            'Recorrido',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: SmartBusColors.blanco,
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Viaje #$_shortTripId',
-            style: TextStyle(
-              color: SmartBusColors.blanco.withValues(alpha: 0.85),
-              fontSize: 14,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-
 class _Body extends StatelessWidget {
   const _Body({
     required this.snap,
@@ -235,22 +191,22 @@ class _Body extends StatelessWidget {
     return switch (snap.state) {
       TripTrackingState.tracking => _TrackingView(snap: snap, onStop: onStop),
       TripTrackingState.permissionDenied => _BlockedView(
-          icon: Icons.location_off_outlined,
-          title: 'Permiso de ubicación denegado',
-          message:
-              'Actívalo en los ajustes de la app para poder enviar la posición '
-              'del autobús durante el recorrido.',
-          actionLabel: 'Abrir ajustes',
-          onAction: Geolocator.openAppSettings,
-        ),
+        icon: Icons.location_off_outlined,
+        title: 'Permiso de ubicación denegado',
+        message:
+            'Actívalo en los ajustes de la app para poder enviar la posición '
+            'del autobús durante el recorrido.',
+        actionLabel: 'Abrir ajustes',
+        onAction: Geolocator.openAppSettings,
+      ),
       TripTrackingState.locationServicesDisabled => _BlockedView(
-          icon: Icons.gps_off,
-          title: 'Ubicación desactivada',
-          message:
-              'Activa la ubicación (GPS) del dispositivo e inténtalo de nuevo.',
-          actionLabel: 'Activar ubicación',
-          onAction: Geolocator.openLocationSettings,
-        ),
+        icon: Icons.gps_off,
+        title: 'Ubicación desactivada',
+        message:
+            'Activa la ubicación (GPS) del dispositivo e inténtalo de nuevo.',
+        actionLabel: 'Activar ubicación',
+        onAction: Geolocator.openLocationSettings,
+      ),
       _ => _IdleView(snap: snap, onStart: onStart),
     };
   }
@@ -287,7 +243,7 @@ class _IdleView extends StatelessWidget {
           stopped
               ? 'Se enviaron ${snap.sentCount} ubicaciones.'
               : 'Al iniciar, se enviará la ubicación del autobús cada pocos '
-                  'segundos hasta que termines el recorrido.',
+                    'segundos hasta que termines el recorrido.',
           textAlign: TextAlign.center,
           style: TextStyle(color: Colors.grey.shade600),
         ),
@@ -454,10 +410,7 @@ class _BlockedView extends StatelessWidget {
           style: TextStyle(color: Colors.grey.shade600),
         ),
         const SizedBox(height: 24),
-        FilledButton(
-          onPressed: () => onAction(),
-          child: Text(actionLabel),
-        ),
+        FilledButton(onPressed: () => onAction(), child: Text(actionLabel)),
       ],
     );
   }
@@ -480,8 +433,9 @@ class _StatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color =
-        highlight ? SmartBusColors.retraso : SmartBusColors.azulPrincipal;
+    final color = highlight
+        ? SmartBusColors.retraso
+        : SmartBusColors.azulPrincipal;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
       decoration: BoxDecoration(
