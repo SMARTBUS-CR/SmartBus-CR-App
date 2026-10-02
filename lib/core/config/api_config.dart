@@ -97,6 +97,14 @@ class ApiConfig {
   /// `include=roles` embeds the roles, same as [authLogin].
   static Uri authUser() => _uri('$authService/user', {'include': 'roles'});
 
+  /// POST — verify the email with the 6-digit code; logs the user in.
+  /// `include=roles` embeds the roles, same as [authLogin].
+  static Uri authEmailVerify() =>
+      _uri('$authService/email/verify', {'include': 'roles'});
+
+  /// POST — send a new email verification code.
+  static Uri authEmailResend() => _uri('$authService/email/resend');
+
   /// POST — sign out (invalidates the token in the Gateway and the Auth service).
   static Uri authLogout() => _uri('$authService/logout');
 
