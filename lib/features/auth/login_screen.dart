@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/network/api_exception.dart';
@@ -5,6 +7,7 @@ import '../../core/theme.dart';
 import '../../widgets/login_form.dart';
 import 'role_home.dart';
 import 'services/auth_service.dart';
+import 'verify_email_screen.dart';
 
 /// Single login screen for SmartBus Global.
 ///
@@ -13,14 +16,17 @@ import 'services/auth_service.dart';
 /// authentication response; navigation to the matching interface happens after
 /// login, not here.
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.authService});
+
+  /// Injectable for tests; defaults to a real [AuthService].
+  final AuthService? authService;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final AuthService _authService = AuthService();
+  late final AuthService _authService = widget.authService ?? AuthService();
 
   // ============================================================
   // LOGIN
@@ -54,11 +60,54 @@ class _LoginScreenState extends State<LoginScreen> {
       Navigator.pushReplacementNamed(context, route);
     } on ApiException catch (e) {
       if (!context.mounted) return;
+      if (e.type == ApiErrorType.emailNotVerified) {
+        // Not awaited: the login request is over, so the button must stop
+        // its spinner while the dialog is open.
+        unawaited(_offerEmailVerification(context, email, e.message));
+        return;
+      }
       _showError(context, e.message);
     } catch (_) {
       if (!context.mounted) return;
       _showError(context, 'Ocurrió un error inesperado. Inténtalo nuevamente.');
     }
+  }
+
+  /// Right password but unverified email: offer to send a new code (the one
+  /// from sign-up may have expired) and continue on the verification screen.
+  Future<void> _offerEmailVerification(
+    BuildContext context,
+    String email,
+    String message,
+  ) async {
+    final verify = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(
+          Icons.mark_email_unread_outlined,
+          color: SmartBusColors.azulPrincipal,
+        ),
+        title: const Text('Verifica tu correo'),
+        content: Text('$message\n\nTe enviaremos un código nuevo a $email.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Ahora no'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Enviar código'),
+          ),
+        ],
+      ),
+    );
+
+    if (verify != true || !context.mounted) return;
+    Navigator.pushNamed(
+      context,
+      '/verify-email',
+      arguments: VerifyEmailArgs(email: email, resendOnOpen: true),
+    );
   }
 
   void _showError(BuildContext context, String message) {

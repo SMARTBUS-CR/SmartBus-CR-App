@@ -84,7 +84,19 @@ class ApiClient {
       status,
       serverMessage: _messageFrom(body),
       fieldErrors: _fieldErrorsFrom(body),
+      errorCode: _errorCodeFrom(body),
     );
+  }
+
+  /// `code` of the first JSON:API error (e.g. `email_not_verified`), if any.
+  String? _errorCodeFrom(Map<String, dynamic> body) {
+    final errors = body['errors'];
+    if (errors is! List) return null;
+    for (final error in errors.whereType<Map>()) {
+      final code = error['code'];
+      if (code is String && code.isNotEmpty) return code;
+    }
+    return null;
   }
 
   Map<String, dynamic> _decode(String raw) {

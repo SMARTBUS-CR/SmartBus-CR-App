@@ -102,17 +102,53 @@ void main() {
       );
       expect(await h.store.hasSession(), isFalse);
     });
+
+    test('maps 403 email_not_verified to emailNotVerified', () async {
+      final h = _Harness((_) async => _json(emailNotVerifiedError(), 403));
+
+      await expectLater(
+        h.service.login(email: 'user@passenger.com', password: 'Secret123!'),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.type, 'type', ApiErrorType.emailNotVerified)
+              .having((e) => e.code, 'code', 'email_not_verified')
+              .having(
+                (e) => e.message,
+                'message',
+                'Debes verificar tu correo antes de iniciar sesión.',
+              ),
+        ),
+      );
+      expect(await h.store.hasSession(), isFalse);
+    });
+
+    test('a 403 without that code stays a plain forbidden', () async {
+      final h = _Harness(
+        (_) async => _json(jsonApiError(403, 'Forbidden', 'Nope'), 403),
+      );
+
+      await expectLater(
+        h.service.login(email: 'user@passenger.com', password: 'x'),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.type,
+            'type',
+            ApiErrorType.forbidden,
+          ),
+        ),
+      );
+    });
   });
 
   group('AC1 · registerPassenger', () {
     test(
-      'sends the sign-up, stores the session and returns a passenger',
+      'sends the sign-up and returns a pending verification, no session',
       () async {
         final h = _Harness(
-          (_) async => _json(userDocument(token: 'new-passenger-token'), 201),
+          (_) async => _json(pendingVerificationDocument(), 201),
         );
 
-        final session = await h.service.registerPassenger(
+        final pending = await h.service.registerPassenger(
           name: 'Passenger User',
           email: 'user@passenger.com',
           password: 'Secret123!',
@@ -130,15 +166,106 @@ void main() {
           'password_confirmation': 'Secret123!',
         });
 
-        expect(session.user.id, passengerId);
-        expect(session.user.isPassenger, isTrue);
-        expect(await h.store.readToken(), 'new-passenger-token');
+        expect(pending.email, 'user@passenger.com');
         expect(
-          AuthUser.fromStorage((await h.store.readUser())!).id,
-          passengerId,
+          pending.message,
+          'Te enviamos un código de verificación a tu correo.',
         );
+        // Not signed in until the email is verified.
+        expect(await h.store.hasSession(), isFalse);
+        expect(await h.store.readUser(), isNull);
       },
     );
+  });
+
+  group('email verification', () {
+    test('verifyEmail sends email + code and stores the session', () async {
+      final h = _Harness(
+        (_) async => _json(userDocument(token: 'verified-token'), 200),
+      );
+
+      final session = await h.service.verifyEmail(
+        email: 'user@passenger.com',
+        code: '482913',
+      );
+
+      final request = h.requests.single;
+      expect(request.method, 'POST');
+      expect(request.url.path, endsWith('/auth/email/verify'));
+      expect(request.url.queryParameters['include'], 'roles');
+      expect(jsonDecode(request.body), {
+        'email': 'user@passenger.com',
+        'code': '482913',
+      });
+      expect(session.user.isPassenger, isTrue);
+      expect(await h.store.readToken(), 'verified-token');
+    });
+
+    test('verifyEmail: wrong or expired code (400) keeps the backend '
+        'message and stores nothing', () async {
+      final h = _Harness(
+        (_) async => _json(
+          jsonApiError(
+            400,
+            'Solicitud incorrecta',
+            'El código ingresado es incorrecto.',
+          ),
+          400,
+        ),
+      );
+
+      await expectLater(
+        h.service.verifyEmail(email: 'user@passenger.com', code: '000000'),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.type, 'type', ApiErrorType.badRequest)
+              .having(
+                (e) => e.message,
+                'message',
+                'El código ingresado es incorrecto.',
+              ),
+        ),
+      );
+      expect(await h.store.hasSession(), isFalse);
+    });
+
+    test(
+      'resendVerificationCode posts the email and returns the message',
+      () async {
+        final h = _Harness(
+          (_) async => _json(
+            metaMessage('Te enviamos un código de verificación a tu correo.'),
+            200,
+          ),
+        );
+
+        final message = await h.service.resendVerificationCode(
+          'user@passenger.com',
+        );
+
+        final request = h.requests.single;
+        expect(request.url.path, endsWith('/auth/email/resend'));
+        expect(jsonDecode(request.body), {'email': 'user@passenger.com'});
+        expect(message, 'Te enviamos un código de verificación a tu correo.');
+      },
+    );
+
+    test('resendVerificationCode: 429 throws tooManyRequests', () async {
+      final h = _Harness(
+        (_) async => _json(jsonApiError(429, 'Too Many', 'Too many'), 429),
+      );
+
+      await expectLater(
+        h.service.resendVerificationCode('user@passenger.com'),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.type,
+            'type',
+            ApiErrorType.tooManyRequests,
+          ),
+        ),
+      );
+    });
   });
 
   group('AC2 · field validation errors', () {
@@ -400,24 +527,19 @@ void main() {
       );
     }
 
-    test('registerPassenger rejects a user without an allowed role', () async {
+    test('verifyEmail rejects a user without an allowed role', () async {
       final h = _Harness((request) async {
         if (request.url.path.endsWith('/auth/logout')) {
           return _json(metaMessage('Sesión cerrada.'), 200);
         }
         return _json(
           userDocument(role: 'company-admin', token: 'unexpected-token'),
-          201,
+          200,
         );
       });
 
       await expectLater(
-        h.service.registerPassenger(
-          name: 'X',
-          email: 'x@smartbus.test',
-          password: 'Secret123!',
-          passwordConfirmation: 'Secret123!',
-        ),
+        h.service.verifyEmail(email: 'x@smartbus.test', code: '123456'),
         throwsA(
           isA<ApiException>().having(
             (e) => e.type,
