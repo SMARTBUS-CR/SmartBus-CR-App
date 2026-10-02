@@ -11,6 +11,7 @@ import 'package:smartbus_drivers/core/network/api_client.dart';
 import 'package:smartbus_drivers/core/storage/secure_session_store.dart';
 import 'package:smartbus_drivers/features/auth/register_screen.dart';
 import 'package:smartbus_drivers/features/auth/services/auth_service.dart';
+import 'package:smartbus_drivers/features/auth/verify_email_screen.dart';
 
 import 'auth_fixtures.dart';
 
@@ -64,6 +65,15 @@ Future<List<http.Request>> _pumpScreen(
         '/register': (_) => RegisterScreen(authService: service),
         '/passenger/home': (_) => const Scaffold(body: Text('PASSENGER HOME')),
       },
+      onGenerateRoute: (settings) => settings.name == '/verify-email'
+          ? MaterialPageRoute<void>(
+              settings: settings,
+              builder: (_) {
+                final args = settings.arguments! as VerifyEmailArgs;
+                return Scaffold(body: Text('VERIFY ${args.email}'));
+              },
+            )
+          : null,
     ),
   );
   final navigator = tester.state<NavigatorState>(find.byType(Navigator));
@@ -285,13 +295,14 @@ void main() {
     });
   });
 
-  group('AC4 · successful sign-up (auto-login)', () {
-    testWidgets('sends the payload without a role and opens passenger home', (
+  group('AC4 · successful sign-up → verify email', () {
+    testWidgets('sends the payload without a role and opens verification', (
       tester,
     ) async {
       final requests = await _pumpScreen(
         tester,
-        (_) async => _json(userDocument(token: 'new-token'), 201),
+        (_) async =>
+            _json(pendingVerificationDocument(email: 'ana@mail.com'), 201),
       );
 
       await _fillForm(tester, name: '  Ana Pérez  ', email: ' ana@mail.com ');
@@ -309,13 +320,15 @@ void main() {
         'password_confirmation': 'Secret#123',
       });
 
-      expect(find.text('PASSENGER HOME'), findsOneWidget);
-      expect(find.textContaining('Cuenta creada'), findsOneWidget);
-      expect(await SecureSessionStore().readToken(), 'new-token');
+      // Goes to verification with the registered email; not signed in yet.
+      expect(find.text('VERIFY ana@mail.com'), findsOneWidget);
+      expect(await SecureSessionStore().readToken(), isNull);
 
-      // Back does not return to the sign-up (or the login).
+      // The sign-up was replaced: back returns to the login.
       final navigator = tester.state<NavigatorState>(find.byType(Navigator));
-      expect(navigator.canPop(), isFalse);
+      navigator.pop();
+      await tester.pumpAndSettle();
+      expect(find.text('LOGIN'), findsOneWidget);
     });
   });
 
