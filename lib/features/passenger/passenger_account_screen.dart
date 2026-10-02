@@ -1,14 +1,27 @@
 import 'package:flutter/material.dart';
 
+import '../../core/storage/secure_session_store.dart';
 import '../../core/theme.dart';
 import '../../widgets/passenger_bottom_nav.dart';
-import '../../widgets/placeholder_screen.dart';
+import '../../widgets/profile_details.dart';
 import '../auth/services/auth_service.dart';
 
-/// Passenger "Account" placeholder — pending wiring to the real profile
-/// (data, sign out, etc.).
+/// Passenger "Mi Cuenta" tab: read-only profile of the signed-in user.
+///
+/// Read-only: passengers have no self-update endpoint yet. Loading, 401 and
+/// retry handling live in [ProfileDetails].
 class PassengerAccountScreen extends StatelessWidget {
-  const PassengerAccountScreen({super.key});
+  const PassengerAccountScreen({
+    super.key,
+    this.authService,
+    this.sessionStore,
+  });
+
+  /// Injectable for tests; defaults to a real [AuthService].
+  final AuthService? authService;
+
+  /// Injectable for tests; defaults to a real [SecureSessionStore].
+  final SecureSessionStore? sessionStore;
 
   void _onTabTap(BuildContext context, int index) {
     switch (index) {
@@ -25,32 +38,15 @@ class PassengerAccountScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return PlaceholderScreen(
-      title: 'Mi Cuenta',
-      icon: Icons.person_outline,
-      subtitle: 'Aquí verás tu perfil de pasajero.',
+    return ProfileDetails(
       color: SmartBusColors.verdeMenta,
-      onBack: () => Navigator.pushReplacementNamed(context, '/passenger/home'),
+      role: 'passenger',
+      homeRoute: '/passenger/home',
+      authService: authService,
+      sessionStore: sessionStore,
       bottomNavigationBar: PassengerBottomNav(
         currentIndex: 2,
         onTap: (index) => _onTabTap(context, index),
-      ),
-      footer: Padding(
-        padding: const EdgeInsets.all(20),
-        child: ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.redAccent,
-            minimumSize: const Size(double.infinity, 48),
-          ),
-          icon: const Icon(Icons.logout),
-          label: const Text('Cerrar sesión'),
-          onPressed: () async {
-            await AuthService().logout();
-            if (context.mounted) {
-              Navigator.pushReplacementNamed(context, '/login');
-            }
-          },
-        ),
       ),
     );
   }

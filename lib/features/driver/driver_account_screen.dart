@@ -1,14 +1,27 @@
 import 'package:flutter/material.dart';
 
+import '../../core/storage/secure_session_store.dart';
 import '../../core/theme.dart';
 import '../../widgets/driver_bottom_nav.dart';
-import '../../widgets/placeholder_screen.dart';
+import '../../widgets/profile_details.dart';
 import '../auth/services/auth_service.dart';
 
-/// Driver "My account" placeholder — pending wiring to the real profile
-/// (data, assigned unit, sign out, etc.).
+/// Driver "Mi Cuenta" tab: read-only profile of the signed-in driver.
+///
+/// Driver accounts are created and maintained in the admin panel, so nothing
+/// can be edited here. Loading, 401 and retry handling live in
+/// [ProfileDetails].
 class DriverAccountScreen extends StatelessWidget {
-  const DriverAccountScreen({super.key});
+  const DriverAccountScreen({super.key, this.authService, this.sessionStore});
+
+  static const readOnlyNotice =
+      'Para actualizar tus datos, contacta al administrador de tu empresa.';
+
+  /// Injectable for tests; defaults to a real [AuthService].
+  final AuthService? authService;
+
+  /// Injectable for tests; defaults to a real [SecureSessionStore].
+  final SecureSessionStore? sessionStore;
 
   void _onTabTap(BuildContext context, int index) {
     switch (index) {
@@ -28,32 +41,16 @@ class DriverAccountScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return PlaceholderScreen(
-      title: 'Mi Cuenta',
-      icon: Icons.person_outline,
-      subtitle: 'Aquí verás tu perfil de conductor.',
+    return ProfileDetails(
       color: SmartBusColors.azulPrincipal,
-      onBack: () => Navigator.pushReplacementNamed(context, '/driver/home'),
+      role: 'driver',
+      homeRoute: '/driver/home',
+      readOnlyNotice: readOnlyNotice,
+      authService: authService,
+      sessionStore: sessionStore,
       bottomNavigationBar: DriverBottomNav(
         currentIndex: 3,
         onTap: (index) => _onTabTap(context, index),
-      ),
-      footer: Padding(
-        padding: const EdgeInsets.all(20),
-        child: ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.redAccent,
-            minimumSize: const Size(double.infinity, 48),
-          ),
-          icon: const Icon(Icons.logout),
-          label: const Text('Cerrar sesión'),
-          onPressed: () async {
-            await AuthService().logout();
-            if (context.mounted) {
-              Navigator.pushReplacementNamed(context, '/login');
-            }
-          },
-        ),
       ),
     );
   }
