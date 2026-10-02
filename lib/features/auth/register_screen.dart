@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../core/network/api_exception.dart';
 import '../../core/theme.dart';
+import 'role_home.dart';
+import 'services/auth_service.dart';
 import '../../widgets/password_requirements.dart';
 import '../../widgets/slow_request_hint.dart';
 import 'services/auth_service.dart';
@@ -11,6 +13,8 @@ import 'verify_email_screen.dart';
 ///
 /// Only **passengers** can create an account from the app (drivers are created
 /// in the admin panel), so there is no role selector: the backend assigns the
+/// `passenger` role and returns a session, which means a successful sign-up
+/// goes straight to the passenger home (auto-login).
 /// `passenger` role and emails a 6-digit code. A successful sign-up continues
 /// to [VerifyEmailScreen]; the session starts once the email is verified.
 ///
