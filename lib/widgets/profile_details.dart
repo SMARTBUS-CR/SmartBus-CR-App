@@ -17,6 +17,9 @@ import 'smartbus_header.dart';
 ///
 /// No field is editable. The only other request it sends is
 /// `POST /auth/logout` from the "Cerrar sesión" button.
+///
+/// With [onDeleteAccount], an "Eliminar cuenta" button is shown; it asks for
+/// confirmation and only then calls [onDeleteAccount].
 class ProfileDetails extends StatefulWidget {
   const ProfileDetails({
     super.key,
@@ -25,6 +28,7 @@ class ProfileDetails extends StatefulWidget {
     required this.homeRoute,
     required this.bottomNavigationBar,
     this.readOnlyNotice,
+    this.onDeleteAccount,
     this.authService,
     this.sessionStore,
   });
@@ -42,6 +46,10 @@ class ProfileDetails extends StatefulWidget {
 
   /// Optional notice shown under the profile (e.g. who can change the data).
   final String? readOnlyNotice;
+
+  /// Called after the user confirms "Eliminar cuenta". When null (drivers),
+  /// the button is not shown.
+  final VoidCallback? onDeleteAccount;
 
   /// Injectable for tests; defaults to a real [AuthService].
   final AuthService? authService;
@@ -132,6 +140,33 @@ class _ProfileDetailsState extends State<ProfileDetails> {
     Navigator.pushReplacementNamed(context, '/login');
   }
 
+  Future<void> _confirmDeleteAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('delete_account_dialog'),
+        title: const Text('¿Eliminar tu cuenta?'),
+        content: const Text('¿Estás seguro? Esta acción no se puede deshacer.'),
+        actions: [
+          TextButton(
+            key: const Key('delete_account_cancel'),
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            key: const Key('delete_account_confirm'),
+            style: TextButton.styleFrom(foregroundColor: SmartBusColors.error),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    // Tapping outside or pressing back returns null: same as "Cancelar".
+    if (confirmed == true && mounted) widget.onDeleteAccount?.call();
+  }
+
   void _showMessage(String message, {Color? color}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -175,6 +210,7 @@ class _ProfileDetailsState extends State<ProfileDetails> {
                 : null,
           ),
           Expanded(child: _buildContent()),
+          if (widget.onDeleteAccount != null) _buildDeleteAccountButton(),
           _buildLogoutButton(),
         ],
       ),
@@ -347,6 +383,23 @@ class _ProfileDetailsState extends State<ProfileDetails> {
             child: const Text('Reintentar'),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Secondary, red-text action: clearly different from "Cerrar sesión".
+  Widget _buildDeleteAccountButton() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+      child: TextButton.icon(
+        key: const Key('profile_delete_account'),
+        style: TextButton.styleFrom(
+          foregroundColor: SmartBusColors.error,
+          minimumSize: const Size(double.infinity, 44),
+        ),
+        icon: const Icon(Icons.delete_outline),
+        label: const Text('Eliminar cuenta'),
+        onPressed: _confirmDeleteAccount,
       ),
     );
   }
