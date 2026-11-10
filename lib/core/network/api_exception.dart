@@ -25,6 +25,10 @@ enum ApiErrorType {
   /// 404 — resource not found.
   notFound,
 
+  /// 409 — the request conflicts with the current state of the resource
+  /// (e.g. GPS: the trip is not in progress).
+  conflict,
+
   /// 422 — validation error on the submitted data.
   /// See [ApiException.fieldErrors] for the errors of each field.
   validation,
@@ -133,6 +137,12 @@ class ApiException implements Exception {
           ApiErrorType.notFound,
           'No se encontró el recurso solicitado.',
           statusCode: 404,
+        );
+      case 409:
+        return const ApiException(
+          ApiErrorType.conflict,
+          'La acción no se puede realizar en este momento.',
+          statusCode: 409,
         );
       case 422:
         return ApiException(
