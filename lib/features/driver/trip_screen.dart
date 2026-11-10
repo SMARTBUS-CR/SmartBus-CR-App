@@ -31,8 +31,10 @@ class TripScreen extends StatefulWidget {
   // TODO: recibir el viaje activo desde la pantalla de rutas cuando exista
   //       (Navigator.pushNamed(context, '/driver/trip', arguments: tripId)).
   //
-  // Demo trip: must be the UUID of a `scheduled` / `in_progress` trip of the
-  // backend DB. Override it without touching code:
+  // Demo trip: must be the UUID of an `in_progress` trip of the backend DB
+  // (the GPS service answers 409 to any other status; the trip is started by
+  // the Dashboard). The driver must be the one assigned to it (403 otherwise).
+  // Override it without touching code:
   //   flutter run --dart-define=DEMO_TRIP_ID=<trip-uuid>
   static const String _demoTripId = String.fromEnvironment(
     'DEMO_TRIP_ID',
@@ -194,6 +196,13 @@ class _Body extends StatelessWidget {
             'del autobús durante el recorrido.',
         actionLabel: 'Abrir ajustes',
         onAction: Geolocator.openAppSettings,
+      ),
+      TripTrackingState.rejected => _BlockedView(
+        icon: Icons.block,
+        title: 'No se puede enviar la ubicación',
+        message: snap.lastError ?? 'El servidor rechazó la ubicación.',
+        actionLabel: 'Reintentar',
+        onAction: onStart,
       ),
       TripTrackingState.locationServicesDisabled => _BlockedView(
         icon: Icons.gps_off,
@@ -389,7 +398,7 @@ class _BlockedView extends StatelessWidget {
   final String title;
   final String message;
   final String actionLabel;
-  final Future<bool> Function() onAction;
+  final FutureOr<void> Function() onAction;
 
   @override
   Widget build(BuildContext context) {
