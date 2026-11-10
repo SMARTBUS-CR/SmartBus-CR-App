@@ -29,18 +29,20 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal), RF-09 (búsqueda) |
 | `passenger/route_search_screen.dart` | RF-09 |
 | `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar" |
-| `passenger/bus_tracking_screen.dart` | RF-10 (ubicación en vivo), RF-11 (ETA), RF-12 (alertas) |
+| `passenger/bus_tracking_screen.dart` | RF-10 (ubicación en vivo, **conectada**: ver sección 7). RF-11 (ETA) y RF-12 (alertas) pendientes |
 | `driver/driver_home_screen.dart` | RF-13 (ruta asignada del día) |
 | `driver/driver_account_screen.dart` | Perfil del conductor ("Mi Cuenta"), solo lectura: aviso "contacta al administrador"; misma carga/401/"Reintentar" que el pasajero |
 | `widgets/profile_details.dart` | Vista de perfil compartida (pasajero y conductor): datos guardados + `fetchCurrentUser()`, 401 → login, "Reintentar" |
 | `widgets/smartbus_header.dart` | Header de todas las pantallas internas: degradado del tema por rol (`SmartBusUserType`), ola, ruta, pin y bus dibujados en código; variante `compact` para pantallas con mapa |
-| `driver/trip_screen.dart` | RF-14 (inicio/fin de recorrido), RF-15 (envío GPS) |
+| `driver/trip_screen.dart` | RF-15 (envío GPS). El inicio/fin del viaje (RF-14) lo hace el Dashboard: esta pantalla solo empieza y deja de enviar la ubicación (ver sección 8) |
 
 ## 3. Qué es placeholder vs. qué ya está "conectable"
-- **Placeholder puro** (solo UI, sin lógica): mapa de seguimiento del bus
-  (`Container` gris), listas de rutas, ETA fijo, estado del bus.
+- **Placeholder puro** (solo UI, sin lógica): listas de rutas, ETA.
 - **Mapa del pasajero (real):** inicio del pasajero con MapLibre + OpenFreeMap
   (ver la sección 6).
+- **Seguimiento del bus en vivo (real):** "Rastreando tu bus" con la posición
+  del bus en tiempo real (ver la sección 7). Mientras no exista la búsqueda de
+  viajes, se abre desde el chip **"Mis viajes"** del inicio con `DEMO_TRIP_ID`.
 - **Autenticación real (ya conectada al API Gateway):**
   - `core/config/api_config.dart` — URL única del Gateway (`--dart-define`).
   - `core/network/api_client.dart` — cliente HTTP reutilizable; adjunta el
@@ -58,10 +60,9 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
   Al reabrir la app, `SplashScreen` llama `restoreSession()`.
 
 ## 4. Siguientes pasos sugeridos
-1. Dibujar rutas, paradas y buses sobre el mapa del pasajero (sección 6).
-2. Conectar `bus_tracking_screen.dart` a WebSockets (Laravel Reverb + Laravel
-   Echo) para las posiciones en tiempo real, y al microservicio de IA para el
-   ETA (RF-16).
+1. Dibujar rutas y paradas sobre el mapa del pasajero (sección 6).
+2. Elegir el viaje a seguir (búsqueda de viajes / salidas por parada del
+   Dashboard) en vez de `DEMO_TRIP_ID`, y conectar el ETA (RF-16).
 3. Definir manejo de estado (Provider, Riverpod o Bloc) antes de que crezcan
    las pantallas — con `setState` alcanza solo para esta etapa.
 4. Agregar los nuevos microservicios en `ApiConfig` (`trips`, `gps`, `eta`, …)
@@ -199,3 +200,157 @@ flutter run \
 recibe un `mapBuilder` y un `LocationService` falsos
 (`test/features/passenger/passenger_home_screen_test.dart`). El mapa real se
 verifica a mano en un dispositivo.
+
+## 7. Seguimiento del bus en vivo (pasajero)
+
+"Rastreando tu bus" (`passenger/bus_tracking_screen.dart`, ruta
+`/passenger/tracking`, argumento opcional: el UUID del viaje) muestra el bus de
+un viaje moviéndose en el mapa, sin recargar.
+
+### Piezas
+
+| Pieza | Archivo |
+|---|---|
+| Pantalla: mapa, marcador del bus, panel de estado | `features/passenger/bus_tracking_screen.dart` |
+| Marcador del bus en el mapa (`showBus`, `BusMarker`) | `features/passenger/map/passenger_map.dart` |
+| Lógica: GET + eventos + frescura + reconexión | `features/trip_tracking/services/live_trip_tracker.dart` |
+| Canal del viaje (`private-trip.{id}`, evento `BusLocationUpdated`) | `features/trip_tracking/services/trip_live_feed.dart` |
+| Cliente WebSocket (protocolo Pusher de Reverb) | `core/realtime/pusher_connection.dart` |
+| Modelos: `TripTracking`, `BusPosition`, `BusLocationUpdate`, `TripStatus`, `TrackingFreshness` | `features/trip_tracking/models/trip_tracking.dart` |
+| Llamadas HTTP (`latestForTrip`, `authorizeChannel`) | `features/trip_tracking/services/gps_location_service.dart` |
+
+### Cómo funciona
+
+```
+abrir "Rastreando tu bus"
+  → GET  /gps/trips/{id}/location             estado del viaje + posición actual
+  → WebSocket a Reverb (wss://<gateway>/app/<KEY>)
+  → POST /gps/broadcasting/auth               el Gateway valida el token y firma
+  → suscribe private-trip.{id}
+  → cada BusLocationUpdated: mueve el bus (solo si es más nuevo que el actual)
+  → 15 s sin posiciones: repite el GET  →  status completed / cancelled = fin
+  → se cae la conexión: reconecta sola y repite el GET
+  → salir de la pantalla: cierra la conexión
+```
+
+1. **Al abrir**, `GET /gps/trips/{id}/location` trae el estado del viaje y la
+   última posición, para mostrar el bus antes del primer evento.
+2. **En vivo:** cada `BusLocationUpdated` mueve el marcador. Los eventos pueden
+   llegar desordenados en redes móviles: se queda siempre la posición con el
+   **mayor `recorded_at`** y se ignoran las viejas o repetidas.
+3. **Viaje terminado (regla de los 15 s):** el conductor envía su posición cada
+   ~5 s, así que **15 s sin posiciones** ya es raro. Entonces la app repite el
+   `GET`: si `status` es `completed` o `cancelled`, muestra "Viaje finalizado" /
+   "Viaje cancelado" y sale del canal. Así el fin del viaje se ve en
+   **~15–20 s**, sin que el Dashboard tenga que avisar nada. Si el bus solo está
+   sin señal (un túnel), se pregunta **como máximo cada 15 s**. Mientras las
+   posiciones llegan normalmente **no se hace ninguna consulta**.
+4. **Reconexión:** si se cae el WebSocket, reconecta solo (espera 1, 2, 5, 10 y
+   30 s entre intentos) y al volver repite el `GET`, porque **Reverb no guarda
+   historial**: lo enviado mientras estaba desconectado se perdió.
+5. **Sin tiempo real** (sin `REVERB_APP_KEY` o sin conexión al WebSocket): la
+   pantalla igual funciona consultando la posición cada 15 s.
+
+La frescura se calcula con el **reloj de este teléfono** (desde que se recibió
+la posición), no con el `recorded_at` del teléfono del conductor, que puede
+tener la hora desfasada. `recorded_at` solo se usa para ordenar.
+
+### Qué ve el pasajero
+
+| Estado | Texto | Marcador |
+|---|---|---|
+| Cargando | "Buscando tu bus…" | — |
+| Viaje programado | "El viaje aún no inicia" | — |
+| En curso, sin ninguna posición todavía | "Esperando la ubicación del bus" | — |
+| Posición de los últimos 30 s | "En vivo · Actualizado hace 4 s · 38 km/h" | verde |
+| Posición de hace 30 s – 5 min | "Señal débil · Última ubicación hace 2 min" | gris |
+| Posición de hace más de 5 min | "Sin señal del bus" | gris |
+| Terminado / cancelado | "Viaje finalizado" / "Viaje cancelado" | — |
+| No existe (404) | "No encontramos este viaje" | — |
+| Falla la primera carga | "No se pudo cargar el viaje" + **Reintentar** | — |
+| Sin tiempo real | aviso "Conectando en tiempo real…" | (se actualiza cada 15 s) |
+
+Los umbrales de 30 s y 5 min son los mismos del servicio GPS
+(`TrackingFreshness.liveSeconds` / `staleSeconds`).
+
+### Por qué WebSocket
+
+- **El bus se mueve solo:** con HTTP la app tendría que preguntar una y otra vez
+  "¿dónde está el bus?". Con el WebSocket la conexión queda abierta y el
+  servidor **empuja** cada posición apenas el conductor la envía.
+- **Costo:** 100 pasajeros preguntando cada 5 s serían 1 200 peticiones por
+  minuto al Gateway, al GPS y a la base de datos (el Gateway limita a 60 por
+  minuto y Render gratis no aguanta eso). Con WebSocket cada posición se envía
+  **una vez** y Reverb la reparte a todos.
+- **Seguridad:** el canal es **privado**. Para suscribirse, la app pide la firma
+  a `POST /gps/broadcasting/auth` por el Gateway, que valida el token. El GPS
+  solo autoriza viajes programados o en curso.
+- **Por qué también el `GET`:** Reverb no guarda historial. El `GET` cubre la
+  posición inicial, lo perdido al reconectar y la detección del fin del viaje.
+
+### Por qué un cliente WebSocket propio
+
+Reverb (Laravel) habla el **protocolo de Pusher**. El paquete
+`pusher_channels_flutter` está hecho para el servicio comercial de Pusher y no
+permite apuntar a un servidor propio como Reverb. El protocolo es chico
+(conectar, autorizar el canal, suscribirse, responder `ping`, reconectar), así
+que `PusherConnection` lo implementa con el `WebSocket` que ya trae Dart
+(`dart:io`), **sin paquetes nuevos**.
+
+### Por qué el Dashboard no avisa "viaje terminado"
+
+El Dashboard es el dueño de `trips` y es quien inicia y termina el viaje. Se
+evaluó que emitiera un evento `TripTrackingEnded` por el WebSocket, pero se
+**descartó**: obligaba al Dashboard a conectarse al Reverb del GPS y compartir
+sus credenciales. La regla de los 15 s da el mismo resultado (con ~15–20 s de
+demora) sin tocar el Dashboard ni el GPS.
+
+- **Inicio del viaje:** no necesita aviso. La primera posición que llega por el
+  canal ya pasa la pantalla de "El viaje aún no inicia" a "En vivo".
+- **Si algún día se necesita el aviso instantáneo:** que la app del conductor,
+  después de terminar el viaje en el Dashboard, llame a un endpoint del GPS que
+  verifique en la base que el viaje terminó y emita el evento. La pantalla del
+  pasajero ya sabe reaccionar a un viaje terminado.
+
+### Configuración
+
+`REVERB_APP_KEY`, `REVERB_HOST`, `REVERB_PORT`, `REVERB_SCHEME` y
+`DEMO_TRIP_ID` (ver la tabla de `--dart-define` y la sección 5.7 del
+[README raíz](../README.md)). En Render solo hace falta `REVERB_APP_KEY`.
+
+### Tests
+
+| Qué | Archivo |
+|---|---|
+| Protocolo Pusher: suscripción firmada, eventos, ping, reconexión, error 4001 | `test/core/realtime/pusher_connection_test.dart` |
+| Tracker: orden de eventos, frescura, regla de 15 s, reconexión, sin tiempo real, 404 | `test/features/trip_tracking/live_trip_tracker_test.dart` |
+| Lectura de `trip-trackings` y de `BusLocationUpdated` | `test/features/trip_tracking/trip_tracking_test.dart` |
+| Pantalla: cada estado y el marcador | `test/features/passenger/bus_tracking_screen_test.dart` |
+
+## 8. Envío de GPS del conductor (Recorrido)
+
+`TripLocationSender` envía la posición cada `GPS_INTERVAL_SECONDS` (5 s) con
+`latitude`, `longitude`, `speed_kmh`, `accuracy_meters` (precisión del GPS del
+teléfono, si la reporta) y `recorded_at`.
+
+| Respuesta del GPS | Qué hace la app |
+|---|---|
+| `201` guardada / `202` (`broadcast_only`, `duplicate`, `stale`) | Cuenta como enviada |
+| Sin red, timeout, 5xx, 429 | La deja en cola y reintenta en el siguiente envío |
+| `409` el viaje no está en curso | **Deja de enviar**: "El viaje no está en curso: todavía no se ha iniciado o ya terminó." |
+| `403` no es el conductor asignado | **Deja de enviar**: "No eres el conductor asignado a este viaje." |
+| `404` el viaje no existe | **Deja de enviar**: "No se encontró el viaje." |
+| `401` sesión vencida | **Deja de enviar**: "Tu sesión expiró. Inicia sesión nuevamente." |
+| Otro 4xx (datos inválidos) | Descarta esa lectura y sigue |
+
+En los casos que **dejan de enviar**, reintentar cada 5 s no sirve de nada: la
+pantalla muestra el motivo (`TripTrackingState.rejected`) y un botón
+**Reintentar** para cuando se corrija (por ejemplo, después de que el Dashboard
+inicie el viaje).
+
+**El viaje lo inicia y lo termina el Dashboard** (`trips/{id}/start` y
+`/complete`). "Iniciar / Finalizar recorrido" en esta app solo empieza o deja
+de enviar la ubicación; cuando el Dashboard publique esos endpoints por el
+Gateway, esos botones también los llamarán.
+
+Tests: `test/features/trip_tracking/trip_location_sender_test.dart`.
