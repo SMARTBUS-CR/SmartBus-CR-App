@@ -10,6 +10,10 @@ import '../auth/services/auth_service.dart';
 ///
 /// Read-only: passengers have no self-update endpoint yet. Loading, 401 and
 /// retry handling live in [ProfileDetails].
+///
+/// "Eliminar cuenta" is UI only for now: Auth has no self-service deletion
+/// endpoint yet (`DELETE /api/users/{user}` requires `users.delete` and
+/// rejects deleting yourself), so confirming only shows a notice.
 class PassengerAccountScreen extends StatelessWidget {
   const PassengerAccountScreen({
     super.key,
@@ -36,12 +40,23 @@ class PassengerAccountScreen extends StatelessWidget {
     }
   }
 
+  /// Temporary until the backend supports self-service account deletion.
+  void _onDeleteAccount(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Esta función estará disponible pronto.'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ProfileDetails(
       color: SmartBusColors.verdePasajero,
       role: 'passenger',
       homeRoute: '/passenger/home',
+      onDeleteAccount: () => _onDeleteAccount(context),
       authService: authService,
       sessionStore: sessionStore,
       bottomNavigationBar: PassengerBottomNav(
