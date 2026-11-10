@@ -330,12 +330,27 @@ void main() {
     });
   });
 
-  group('Delete account button (UI only)', () {
+  group('Delete account (soft delete)', () {
     final deleteButton = find.byKey(const Key('profile_delete_account'));
     final dialog = find.byKey(const Key('delete_account_dialog'));
     final cancel = find.byKey(const Key('delete_account_cancel'));
     final confirm = find.byKey(const Key('delete_account_confirm'));
-    const comingSoon = 'Esta función estará disponible pronto.';
+    final password = find.byKey(const Key('delete_account_password'));
+    final dialogError = find.byKey(const Key('delete_account_error'));
+    const deletedMessage = 'Cuenta eliminada correctamente.';
+
+    /// GET /auth/user answers the profile; DELETE /auth/user answers [delete].
+    _Handler withDelete(_Handler delete) => (request) async =>
+        request.method == 'DELETE' ? delete(request) : _json(userDocument(), 200);
+
+    /// Opens the dialog, types [pass] and taps "Eliminar".
+    Future<void> confirmWith(WidgetTester tester, String pass) async {
+      await tester.tap(deleteButton);
+      await tester.pumpAndSettle();
+      await tester.enterText(password, pass);
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+    }
 
     testWidgets('AC1: red "Eliminar cuenta" button next to "Cerrar sesión"', (
       tester,
@@ -371,6 +386,7 @@ void main() {
         find.text('¿Estás seguro? Esta acción no se puede deshacer.'),
         findsOneWidget,
       );
+      expect(password, findsOneWidget);
       expect(find.text('Cancelar'), findsOneWidget);
       expect(find.text('Eliminar'), findsOneWidget);
       expect(
@@ -394,8 +410,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(dialog, findsNothing);
-      expect(find.text(comingSoon), findsNothing);
       expect(requests, hasLength(1)); // only the initial GET /auth/user
+      expect(await SecureSessionStore().readToken(), 'stored-token');
     });
 
     testWidgets('AC4: tapping outside closes the dialog and does nothing', (
@@ -410,28 +426,162 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(dialog, findsNothing);
-      expect(find.text(comingSoon), findsNothing);
+      expect(await SecureSessionStore().readToken(), 'stored-token');
     });
 
-    testWidgets('AC5: "Eliminar" shows the notice, sends nothing and keeps '
-        'the session', (tester) async {
+    testWidgets('empty password: asks for it and sends nothing', (
+      tester,
+    ) async {
       final requests = await _pumpScreen(
         tester,
-        (_) async => _json(userDocument(), 200),
+        withDelete((_) async => _json(metaMessage(deletedMessage), 200)),
       );
+      await tester.pumpAndSettle();
+
+      await confirmWith(tester, '');
+
+      expect(dialog, findsOneWidget);
+      expect(find.text('Ingresa tu contraseña.'), findsOneWidget);
+      expect(requests.where((r) => r.method == 'DELETE'), isEmpty);
+    });
+
+    testWidgets('success: calls DELETE /auth/user, clears the session and '
+        'opens login without a way back', (tester) async {
+      final requests = await _pumpScreen(
+        tester,
+        withDelete((_) async => _json(metaMessage(deletedMessage), 200)),
+      );
+      await tester.pumpAndSettle();
+
+      await confirmWith(tester, 'Secret1!');
+
+      final delete = requests.singleWhere((r) => r.method == 'DELETE');
+      expect(delete.url.path, endsWith('/auth/user'));
+      expect(delete.headers['Authorization'], 'Bearer stored-token');
+      expect(jsonDecode(delete.body), {
+        'current_password': 'Secret1!',
+        'confirm_deletion': true,
+      });
+
+      expect(find.text('LOGIN'), findsOneWidget);
+      expect(find.text(deletedMessage), findsOneWidget);
+      expect(await SecureSessionStore().readToken(), isNull);
+      expect(await SecureSessionStore().readUser(), isNull);
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      expect(navigator.canPop(), isFalse);
+    });
+
+    testWidgets('while deleting: shows progress and cannot be dismissed', (
+      tester,
+    ) async {
+      final response = Completer<http.Response>();
+      await _pumpScreen(tester, withDelete((_) => response.future));
       await tester.pumpAndSettle();
 
       await tester.tap(deleteButton);
       await tester.pumpAndSettle();
+      await tester.enterText(password, 'Secret1!');
       await tester.tap(confirm);
+      await tester.pump();
+
+      expect(find.byKey(const Key('delete_account_progress')), findsOneWidget);
+      expect(tester.widget<TextButton>(cancel).onPressed, isNull);
+      await tester.tapAt(const Offset(10, 10)); // barrier
+      await tester.pump();
+      expect(dialog, findsOneWidget);
+
+      response.complete(_json(metaMessage(deletedMessage), 200));
+      await tester.pumpAndSettle();
+      expect(find.text('LOGIN'), findsOneWidget);
+    });
+
+    testWidgets('wrong password (422): error under the field, session kept', (
+      tester,
+    ) async {
+      await _pumpScreen(
+        tester,
+        withDelete(
+          (_) async => _json(
+            validationErrors({
+              'current_password': ['La contraseña es incorrecta.'],
+            }),
+            422,
+          ),
+        ),
+      );
       await tester.pumpAndSettle();
 
-      expect(dialog, findsNothing);
-      expect(find.text(comingSoon), findsOneWidget);
-      expect(requests, hasLength(1)); // only the initial GET /auth/user
-      expect(requests.single.method, 'GET');
+      await confirmWith(tester, 'wrong');
+
+      expect(dialog, findsOneWidget);
+      expect(find.text('La contraseña es incorrecta.'), findsOneWidget);
       expect(await SecureSessionStore().readToken(), 'stored-token');
-      expect(_name, findsOneWidget); // still on "Mi Cuenta"
+    });
+
+    testWidgets('401: "session expired" and login', (tester) async {
+      await _pumpScreen(
+        tester,
+        withDelete(
+          (_) async => _json({'message': 'Invalid or expired token.'}, 401),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await confirmWith(tester, 'Secret1!');
+
+      expect(find.text('LOGIN'), findsOneWidget);
+      expect(
+        find.text('Tu sesión expiró. Inicia sesión nuevamente.'),
+        findsOneWidget,
+      );
+      expect(await SecureSessionStore().readToken(), isNull);
+    });
+
+    testWidgets('403: "action not allowed", stays on the profile', (
+      tester,
+    ) async {
+      await _pumpScreen(
+        tester,
+        withDelete(
+          (_) async =>
+              _json(jsonApiError(403, 'Forbidden', 'Forbidden.'), 403),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await confirmWith(tester, 'Secret1!');
+
+      expect(dialog, findsNothing);
+      expect(
+        find.text('Acción no permitida: esta cuenta no se puede eliminar.'),
+        findsOneWidget,
+      );
+      expect(_name, findsOneWidget);
+      expect(await SecureSessionStore().readToken(), 'stored-token');
+    });
+
+    testWidgets('no connection: error in the dialog, can retry', (
+      tester,
+    ) async {
+      var deletes = 0;
+      await _pumpScreen(
+        tester,
+        withDelete((_) async {
+          deletes++;
+          if (deletes == 1) throw const SocketException('offline');
+          return _json(metaMessage(deletedMessage), 200);
+        }),
+      );
+      await tester.pumpAndSettle();
+
+      await confirmWith(tester, 'Secret1!');
+      expect(dialog, findsOneWidget);
+      expect(dialogError, findsOneWidget);
+      expect(find.text('Sin conexión a Internet.'), findsWidgets);
+
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(find.text('LOGIN'), findsOneWidget);
     });
 
     testWidgets('AC6: button and dialog fit a small screen', (tester) async {
