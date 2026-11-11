@@ -25,16 +25,15 @@ typedef LiveTripTrackerFactory = LiveTripTracker Function(String tripId);
 class BusTrackingScreen extends StatefulWidget {
   const BusTrackingScreen({
     super.key,
-    this.tripId,
+    required this.tripId,
     this.trackerFactory,
     this.mapBuilder = buildMapLibrePassengerMap,
     this.locationService = const LocationService(),
     this.clock = DateTime.now,
   });
 
-  /// UUID of the trip to follow. Until the trip search exists it falls back
-  /// to `--dart-define=DEMO_TRIP_ID=<trip-uuid>`.
-  final String? tripId;
+  /// UUID of the trip to follow (picked in "Buses en curso").
+  final String tripId;
 
   final LiveTripTrackerFactory? trackerFactory;
   final PassengerMapBuilder mapBuilder;
@@ -46,11 +45,6 @@ class BusTrackingScreen extends StatefulWidget {
   /// "Now" for the freshness of the position (tests move it by hand). Must be
   /// the same clock as the tracker's.
   final DateTime Function() clock;
-
-  static const String _demoTripId = String.fromEnvironment(
-    'DEMO_TRIP_ID',
-    defaultValue: '01a09332-3457-7315-885e-4ebb218f7262',
-  );
 
   static LiveTripTracker _defaultTracker(String tripId) {
     final service = GpsLocationService();
@@ -73,7 +67,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
   DeviceLocation? _userLocation;
   StreamSubscription<DeviceLocation>? _userLocationSub;
 
-  String get _tripId => widget.tripId ?? BusTrackingScreen._demoTripId;
+  String get _tripId => widget.tripId;
 
   @override
   void initState() {
