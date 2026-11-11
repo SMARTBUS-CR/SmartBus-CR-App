@@ -135,7 +135,7 @@ Por defecto la app apunta a `https://smartbus-api-gateway-dev.onrender.com/api`
 | `GPS_GATEWAY_URL` | = `API_GATEWAY_URL` | Base **solo** para los endpoints de GPS/recorrido |
 | `GPS_INTERVAL_SECONDS` | `5` | Cada cuántos segundos se envía la posición |
 | `API_LANGUAGE` | `es` | Header `Accept-Language` (`en` \| `es`) |
-| `DEMO_TRIP_ID` | un UUID de prueba | Viaje que usan **Recorrido** (conductor) y **Rastreando tu bus** (pasajero) mientras no exista la selección de viajes. Debe estar `in_progress` |
+| `OPS_GATEWAY_URL` | = `API_GATEWAY_URL` | Base **solo** para los endpoints del Dashboard (`ops/*`: viajes del conductor, rutas, buses en curso) |
 | `REVERB_APP_KEY` | vacío | Key de Reverb del servicio GPS (está en su `.env`; **no es secreta**). Vacío = sin tiempo real: el pasajero ve el bus consultando cada 15 s |
 | `REVERB_HOST` | host de `GPS_GATEWAY_URL` | Host del WebSocket. En Render no hace falta: el nginx del Gateway reenvía `/app/*` a Reverb |
 | `REVERB_PORT` | puerto de `GPS_GATEWAY_URL` (443 / 80) | Puerto del WebSocket (`8080` con Reverb local) |
@@ -241,18 +241,23 @@ flutter run -d emulator-5554 --dart-define=GPS_GATEWAY_URL=http://10.0.2.2:8001/
 
 ### 5.6 Requisitos del viaje de prueba
 
-El GPS solo acepta ubicaciones si:
-- el viaje (`DEMO_TRIP_ID`) está **`in_progress`**. Lo inicia el **Dashboard**
-  (`POST /api/v1/operations/trips/{id}/start`), no esta app ni el GPS. Si no,
-  la app del conductor muestra *"El viaje no está en curso"* (409);
-- el usuario logueado es el **conductor asignado** a ese viaje (si no: *"No
-  eres el conductor asignado a este viaje"*, 403).
+Ya no hay `DEMO_TRIP_ID`: los viajes salen del **Dashboard** (`ops/*` por el
+Gateway). Mientras el proxy `ops` no esté desplegado en Render, levanta también
+el Dashboard y un Gateway local con la rama del proxy `ops`
+(`OPERATIONS_SERVICE_URL` en su `.env` apuntando al Dashboard, p. ej.
+`http://localhost:8003`) y pasa `--dart-define=OPS_GATEWAY_URL=http://localhost:8001/api`.
+
+- El conductor necesita un viaje **asignado a él para hoy** (`scheduled` o
+  `in_progress`). Aparece en **Inicio**; **Iniciar recorrido** lo pone
+  `in_progress` en el Dashboard y empieza a enviar el GPS.
+- El usuario logueado debe ser el **conductor asignado** (si no: 403).
+- El pasajero solo ve buses de viajes **`in_progress`**.
 
 ### 5.7 Probar el seguimiento en vivo del pasajero (tiempo real)
 
 Hacen falta **dos dispositivos** (o teléfono + emulador): uno con la cuenta del
-conductor enviando GPS (**Recorrido → Iniciar recorrido**) y otro con una cuenta
-de pasajero (**Inicio → chip "Mis viajes"** → *Rastreando tu bus*).
+conductor enviando GPS (**Inicio → Iniciar recorrido**) y otro con una cuenta
+de pasajero (**Inicio → chip "Buses en curso"** → ruta → **Ver en vivo**).
 
 1. En el `.env` del GPS: `BROADCAST_CONNECTION=reverb` y las `REVERB_*`.
 2. Levanta Reverb además de los dos `php artisan serve`:
@@ -270,7 +275,7 @@ de pasajero (**Inicio → chip "Mis viajes"** → *Rastreando tu bus*).
    ```powershell
    flutter run -d <id> `
      --dart-define=GPS_GATEWAY_URL=http://localhost:8001/api `
-     --dart-define=DEMO_TRIP_ID=<uuid-del-viaje> `
+     --dart-define=OPS_GATEWAY_URL=http://localhost:8001/api `
      --dart-define=REVERB_APP_KEY=<REVERB_APP_KEY-del-.env-del-GPS> `
      --dart-define=REVERB_HOST=localhost `
      --dart-define=REVERB_PORT=8080 `
@@ -293,10 +298,12 @@ actualiza cada 15 s. En Render bastará con `--dart-define=REVERB_APP_KEY=...`.
 | Pantalla Recorrido: *"No se encontró el recurso solicitado"* (404) | El GPS va al Gateway equivocado (uno sin `/gps`). Pasa `--dart-define=GPS_GATEWAY_URL=` al Gateway local. |
 | Pantalla Recorrido: *"Sin conexión estable"* y "Pendientes" sube | El Gateway local no responde o tarda demasiado. Revisa `GPS_SERVICE_URL` en su `.env` (debe ser `:8000`), que ambos `php artisan serve` estén arriba, y `adb reverse`. |
 | HTTP local no conecta en release | Los builds release son HTTPS-only por diseño; usa `--debug`. |
-| Recorrido: *"El viaje no está en curso…"* y deja de enviar | El viaje no está `in_progress` (409). Inícialo desde el Dashboard y toca **Reintentar**. |
+| Inicio del conductor: *"No tienes viajes asignados hoy"* | No hay viaje de hoy para ese conductor en el Dashboard, o `OPS_GATEWAY_URL` apunta a un Gateway sin el proxy `ops`. |
+| Recorrido: no se pudo iniciar el viaje (409) | El Dashboard no permite iniciarlo (por ejemplo, todavía no es la hora o ya terminó). |
+| Recorrido: *"El viaje no está en curso…"* y deja de enviar | El viaje dejó de estar `in_progress` (lo terminaron o cancelaron en el Dashboard). |
 | Recorrido: *"No eres el conductor asignado a este viaje"* | Iniciaste sesión con un conductor que no es el del viaje (403). |
 | Rastreando tu bus: sale *"Conectando en tiempo real…"* todo el tiempo | No llega al WebSocket: revisa `REVERB_APP_KEY`, que `reverb:start` esté corriendo, `REVERB_HOST/PORT/SCHEME` y el `adb reverse tcp:8080`. Mientras tanto el bus igual se actualiza cada 15 s. |
-| Rastreando tu bus: *"El viaje aún no inicia"* con el conductor enviando | Los dos usan viajes distintos: pasa el mismo `DEMO_TRIP_ID` a ambas apps. |
+| Buses en curso: *"No hay buses en curso en este recorrido"* con el conductor enviando | El conductor está en otro recorrido (sentido) de la ruta, o su viaje no está `in_progress`. |
 
 ---
 
