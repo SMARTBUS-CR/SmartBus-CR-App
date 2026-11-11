@@ -20,6 +20,10 @@ import 'smartbus_header.dart';
 ///
 /// With [onDeleteAccount], an "Eliminar cuenta" button is shown; it asks for
 /// confirmation and only then calls [onDeleteAccount].
+///
+/// With [onEditProfile] / [onChangePassword] (passengers), "Editar perfil" and
+/// "Cambiar contraseña" entries are shown; editing happens on their own
+/// screens, never inline.
 class ProfileDetails extends StatefulWidget {
   const ProfileDetails({
     super.key,
@@ -29,6 +33,8 @@ class ProfileDetails extends StatefulWidget {
     required this.bottomNavigationBar,
     this.readOnlyNotice,
     this.onDeleteAccount,
+    this.onEditProfile,
+    this.onChangePassword,
     this.authService,
     this.sessionStore,
   });
@@ -50,6 +56,13 @@ class ProfileDetails extends StatefulWidget {
   /// Called after the user confirms "Eliminar cuenta". When null (drivers),
   /// the button is not shown.
   final VoidCallback? onDeleteAccount;
+
+  /// Opens "Editar perfil" with the current user and completes when the user
+  /// comes back. When null (drivers), the entry is not shown.
+  final Future<void> Function(AuthUser user)? onEditProfile;
+
+  /// Opens "Cambiar contraseña". When null (drivers), the entry is not shown.
+  final Future<void> Function()? onChangePassword;
 
   /// Injectable for tests; defaults to a real [AuthService].
   final AuthService? authService;
@@ -138,6 +151,19 @@ class _ProfileDetailsState extends State<ProfileDetails> {
     await _authService.logout();
     if (!mounted) return;
     Navigator.pushReplacementNamed(context, '/login');
+  }
+
+  Future<void> _openEditProfile(AuthUser user) async {
+    await widget.onEditProfile!(user);
+    // The edit screen stores the updated user: show it right away, without
+    // another request.
+    await _reloadStoredUser();
+  }
+
+  Future<void> _reloadStoredUser() async {
+    final stored = await _session.readUser();
+    if (!mounted || stored == null) return;
+    setState(() => _user = AuthUser.fromStorage(stored));
   }
 
   Future<void> _confirmDeleteAccount() async {
@@ -274,6 +300,20 @@ class _ProfileDetailsState extends State<ProfileDetails> {
             style: const TextStyle(fontSize: 15),
           ),
         ),
+        if (widget.onEditProfile != null)
+          _buildActionTile(
+            key: const Key('profile_edit'),
+            icon: Icons.edit_outlined,
+            label: 'Editar perfil',
+            onTap: () => _openEditProfile(user),
+          ),
+        if (widget.onChangePassword != null)
+          _buildActionTile(
+            key: const Key('profile_change_password'),
+            icon: Icons.lock_outline,
+            label: 'Cambiar contraseña',
+            onTap: widget.onChangePassword!,
+          ),
         if (widget.readOnlyNotice != null) ...[
           const SizedBox(height: 4),
           _buildReadOnlyNotice(widget.readOnlyNotice!),
@@ -343,6 +383,46 @@ class _ProfileDetailsState extends State<ProfileDetails> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Tappable row with a chevron, same look as the info tiles.
+  Widget _buildActionTile({
+    required Key key,
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: SmartBusColors.grisClaro,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          key: key,
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            child: Row(
+              children: [
+                Icon(icon, color: widget.color),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: Colors.grey.shade500),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

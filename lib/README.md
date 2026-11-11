@@ -28,7 +28,9 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 | `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register` → `/verify-email` (sin sesión hasta verificar el correo) |
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal), RF-09 (búsqueda) |
 | `passenger/route_search_screen.dart` | RF-09 |
-| `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar". Botón "Eliminar cuenta" con confirmación (solo UI: aún no llama al backend) |
+| `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar". Entradas "Editar perfil" y "Cambiar contraseña". Botón "Eliminar cuenta" con confirmación (solo UI: aún no llama al backend) |
+| `passenger/edit_profile_screen.dart` | Editar nombre y correo (`updateProfile`): solo envía lo que cambió; cambiar el correo pide la contraseña actual y luego verificar el nuevo correo con código |
+| `passenger/change_password_screen.dart` | Cambiar contraseña (`changePassword`): actual + nueva (requisitos en vivo) + confirmación |
 | `passenger/bus_tracking_screen.dart` | RF-10 (ubicación en vivo), RF-11 (ETA), RF-12 (alertas) |
 | `driver/driver_home_screen.dart` | RF-13 (ruta asignada del día) |
 | `driver/driver_account_screen.dart` | Perfil del conductor ("Mi Cuenta"), solo lectura: aviso "contacta al administrador"; misma carga/401/"Reintentar" que el pasajero |
@@ -82,6 +84,8 @@ Gateway (`/auth/*`).
 | `sendResetCode(email)` | `POST /auth/password/forgot` | `String`: mensaje del backend para mostrar |
 | `resetPassword({email, code, password, passwordConfirmation})` | `POST /auth/password/reset` | `String`: mensaje del backend. Cierra la sesión en todos los dispositivos → volver a login |
 | `fetchCurrentUser()` | `GET /auth/user?include=roles` | `AuthUser` actualizado (también lo guarda) |
+| `updateProfile({name?, email?, currentPassword?})` | `PATCH /auth/user?include=roles` | `ProfileUpdate`. Solo pasajeros; enviar solo lo que cambió (`currentPassword` obligatorio si cambia el correo). Solo nombre → guarda el usuario. Correo → el backend lo deja sin verificar: **borra la sesión local** y `requiresEmailVerification = true` → ir a `/verify-email` (`resendOnOpen: true`). Máx. 5 por minuto |
+| `changePassword({currentPassword, password, passwordConfirmation})` | `PUT /auth/user/password` | `String`: mensaje del backend. Solo pasajeros; sigue la sesión en este dispositivo, el backend cierra las demás. Máx. 5 por minuto |
 | `restoreSession()` | `GET /auth/user?include=roles` | `AuthUser?`: `null` si no hay sesión, el token venció o el rol no está permitido. Sin red devuelve el usuario guardado |
 | `logout()` | `POST /auth/logout` | — Siempre borra la sesión local, aunque falle el servidor |
 
