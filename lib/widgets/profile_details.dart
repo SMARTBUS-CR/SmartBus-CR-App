@@ -5,6 +5,7 @@ import '../core/storage/secure_session_store.dart';
 import '../core/theme.dart';
 import '../features/auth/models/auth_user.dart';
 import '../features/auth/services/auth_service.dart';
+import 'delete_account_dialog.dart';
 import 'smartbus_header.dart';
 
 /// Read-only "Mi Cuenta" view shared by the passenger and driver flows.
@@ -15,8 +16,14 @@ import 'smartbus_header.dart';
 /// - No connection / timeout / 5xx → the stored data stays visible with a
 ///   "Reintentar" action.
 ///
-/// No field is editable. The only other request it sends is
-/// `POST /auth/logout` from the "Cerrar sesión" button.
+/// With [onEditProfile] / [onChangePassword] (passengers), "Editar perfil" and
+/// "Cambiar contraseña" entries are shown; editing happens on their own
+/// screens, never inline.
+///
+/// No field is editable. Other requests: `POST /auth/logout` from
+/// "Cerrar sesión" and, with [canDeleteAccount], `DELETE /auth/user` from
+/// "Eliminar cuenta" (after confirming with the current password). A deleted
+/// account goes to login and the back stack is removed.
 class ProfileDetails extends StatefulWidget {
   const ProfileDetails({
     super.key,
@@ -25,6 +32,9 @@ class ProfileDetails extends StatefulWidget {
     required this.homeRoute,
     required this.bottomNavigationBar,
     this.readOnlyNotice,
+    this.onEditProfile,
+    this.onChangePassword,
+    this.canDeleteAccount = false,
     this.authService,
     this.sessionStore,
   });
@@ -42,6 +52,17 @@ class ProfileDetails extends StatefulWidget {
 
   /// Optional notice shown under the profile (e.g. who can change the data).
   final String? readOnlyNotice;
+
+  /// Opens "Editar perfil" with the current user and completes when the user
+  /// comes back. When null (drivers), the entry is not shown.
+  final Future<void> Function(AuthUser user)? onEditProfile;
+
+  /// Opens "Cambiar contraseña". When null (drivers), the entry is not shown.
+  final Future<void> Function()? onChangePassword;
+
+  /// Shows "Eliminar cuenta". Only passengers can delete their own account
+  /// (the backend rejects any other role), so drivers leave it `false`.
+  final bool canDeleteAccount;
 
   /// Injectable for tests; defaults to a real [AuthService].
   final AuthService? authService;
@@ -132,6 +153,45 @@ class _ProfileDetailsState extends State<ProfileDetails> {
     Navigator.pushReplacementNamed(context, '/login');
   }
 
+  Future<void> _openEditProfile(AuthUser user) async {
+    await widget.onEditProfile!(user);
+    // The edit screen stores the updated user: show it right away, without
+    // another request.
+    await _reloadStoredUser();
+  }
+
+  Future<void> _reloadStoredUser() async {
+    final stored = await _session.readUser();
+    if (!mounted || stored == null) return;
+    setState(() => _user = AuthUser.fromStorage(stored));
+  }
+
+  Future<void> _confirmDeleteAccount() async {
+    final outcome = await DeleteAccountDialog.show(
+      context,
+      (password) => _authService.deleteAccount(currentPassword: password),
+    );
+
+    // Tapping outside, back or "Cancelar" returns null: nothing happens.
+    if (outcome == null || !mounted) return;
+
+    final error = outcome.error;
+    if (error == null) {
+      // The session is already cleared by AuthService.deleteAccount.
+      _showMessage(outcome.message!, color: SmartBusColors.success);
+      Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+      return;
+    }
+    if (error.type == ApiErrorType.unauthorized) {
+      await _onSessionExpired();
+      return;
+    }
+    _showMessage(
+      'Acción no permitida: esta cuenta no se puede eliminar.',
+      color: SmartBusColors.error,
+    );
+  }
+
   void _showMessage(String message, {Color? color}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -175,6 +235,7 @@ class _ProfileDetailsState extends State<ProfileDetails> {
                 : null,
           ),
           Expanded(child: _buildContent()),
+          if (widget.canDeleteAccount) _buildDeleteAccountButton(),
           _buildLogoutButton(),
         ],
       ),
@@ -238,6 +299,20 @@ class _ProfileDetailsState extends State<ProfileDetails> {
             style: const TextStyle(fontSize: 15),
           ),
         ),
+        if (widget.onEditProfile != null)
+          _buildActionTile(
+            key: const Key('profile_edit'),
+            icon: Icons.edit_outlined,
+            label: 'Editar perfil',
+            onTap: () => _openEditProfile(user),
+          ),
+        if (widget.onChangePassword != null)
+          _buildActionTile(
+            key: const Key('profile_change_password'),
+            icon: Icons.lock_outline,
+            label: 'Cambiar contraseña',
+            onTap: widget.onChangePassword!,
+          ),
         if (widget.readOnlyNotice != null) ...[
           const SizedBox(height: 4),
           _buildReadOnlyNotice(widget.readOnlyNotice!),
@@ -311,6 +386,46 @@ class _ProfileDetailsState extends State<ProfileDetails> {
     );
   }
 
+  /// Tappable row with a chevron, same look as the info tiles.
+  Widget _buildActionTile({
+    required Key key,
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: SmartBusColors.grisClaro,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          key: key,
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            child: Row(
+              children: [
+                Icon(icon, color: widget.color),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: Colors.grey.shade500),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildReadOnlyNotice(String message) {
     return Row(
       key: const Key('profile_read_only_notice'),
@@ -347,6 +462,23 @@ class _ProfileDetailsState extends State<ProfileDetails> {
             child: const Text('Reintentar'),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Secondary, red-text action: clearly different from "Cerrar sesión".
+  Widget _buildDeleteAccountButton() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+      child: TextButton.icon(
+        key: const Key('profile_delete_account'),
+        style: TextButton.styleFrom(
+          foregroundColor: SmartBusColors.error,
+          minimumSize: const Size(double.infinity, 44),
+        ),
+        icon: const Icon(Icons.delete_outline),
+        label: const Text('Eliminar cuenta'),
+        onPressed: _confirmDeleteAccount,
       ),
     );
   }

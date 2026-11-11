@@ -586,4 +586,105 @@ void main() {
       expect(await h.store.hasSession(), isFalse);
     });
   });
+
+  group('deleteAccount (soft delete)', () {
+    test('sends DELETE /auth/user with the password and confirmation, '
+        'then clears the local session', () async {
+      final h = _Harness(
+        (_) async => _json(metaMessage('Tu cuenta fue eliminada.'), 200),
+      );
+      await _storeSession(h.store);
+
+      final message = await h.service.deleteAccount(currentPassword: 'Secret1!');
+
+      expect(message, 'Tu cuenta fue eliminada.');
+      final request = h.requests.single;
+      expect(request.method, 'DELETE');
+      expect(request.url.path, endsWith('/auth/user'));
+      expect(request.headers['Authorization'], 'Bearer stored-token');
+      expect(jsonDecode(request.body), {
+        'current_password': 'Secret1!',
+        'confirm_deletion': true,
+      });
+      expect(await h.store.readToken(), isNull);
+      expect(await h.store.readUser(), isNull);
+      // The backend already revoked every token: no logout call.
+      expect(h.sentTo('/auth/logout'), isEmpty);
+    });
+
+    test('204 without a body uses the default message', () async {
+      final h = _Harness((_) async => http.Response('', 204));
+      await _storeSession(h.store);
+
+      expect(
+        await h.service.deleteAccount(currentPassword: 'Secret1!'),
+        'Cuenta eliminada correctamente.',
+      );
+      expect(await h.store.hasSession(), isFalse);
+    });
+
+    test('wrong password (422) keeps the session and the field error', () async {
+      final h = _Harness(
+        (_) async => _json(
+          validationErrors({
+            'current_password': ['La contraseña es incorrecta.'],
+          }),
+          422,
+        ),
+      );
+      await _storeSession(h.store);
+
+      await expectLater(
+        h.service.deleteAccount(currentPassword: 'wrong'),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.type, 'type', ApiErrorType.validation)
+              .having(
+                (e) => e.fieldErrors['current_password'],
+                'fieldErrors',
+                ['La contraseña es incorrecta.'],
+              ),
+        ),
+      );
+      expect(await h.store.readToken(), 'stored-token');
+    });
+
+    test('401 clears the local session', () async {
+      final h = _Harness(
+        (_) async => _json({'message': 'Invalid or expired token.'}, 401),
+      );
+      await _storeSession(h.store);
+
+      await expectLater(
+        h.service.deleteAccount(currentPassword: 'Secret1!'),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.type,
+            'type',
+            ApiErrorType.unauthorized,
+          ),
+        ),
+      );
+      expect(await h.store.hasSession(), isFalse);
+    });
+
+    test('403 keeps the session', () async {
+      final h = _Harness(
+        (_) async => _json(jsonApiError(403, 'Forbidden', 'Forbidden.'), 403),
+      );
+      await _storeSession(h.store);
+
+      await expectLater(
+        h.service.deleteAccount(currentPassword: 'Secret1!'),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.type,
+            'type',
+            ApiErrorType.forbidden,
+          ),
+        ),
+      );
+      expect(await h.store.readToken(), 'stored-token');
+    });
+  });
 }
