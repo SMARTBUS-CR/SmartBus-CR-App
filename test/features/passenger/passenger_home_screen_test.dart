@@ -105,8 +105,7 @@ Future<void> _pump(
       ),
       routes: {
         '/passenger/search': (_) => const Scaffold(body: Text('search-screen')),
-        '/passenger/tracking': (_) =>
-            const Scaffold(body: Text('tracking-screen')),
+        '/passenger/buses': (_) => const Scaffold(body: Text('buses-screen')),
       },
     ),
   );
@@ -142,7 +141,8 @@ void main() {
     expect(find.byKey(const Key('fake-map')), findsOneWidget);
     expect(find.text('¿A dónde vas?'), findsOneWidget);
     expect(find.text('Paradas cercanas'), findsOneWidget);
-    expect(find.text('Mis viajes'), findsWidgets); // chip + bottom nav tab
+    expect(find.text('Buses en curso'), findsOneWidget);
+    expect(find.text('Mis viajes'), findsOneWidget); // bottom nav tab
     expect(find.text('Favoritos'), findsOneWidget);
     expect(find.text('Hola, Keyna'), findsOneWidget);
     expect(find.byKey(const Key('my-location-button')), findsOneWidget);
@@ -339,7 +339,7 @@ void main() {
     expect(find.text('Favoritos: próximamente.'), findsOneWidget);
   });
 
-  testWidgets('"Mis viajes" chip opens the live bus tracking (demo trip)', (
+  testWidgets('"Buses en curso" chip opens the list of routes with buses', (
     tester,
   ) async {
     await _pump(
@@ -354,12 +354,12 @@ void main() {
     await tester.tap(
       find.descendant(
         of: find.byType(MapQuickChips),
-        matching: find.text('Mis viajes'),
+        matching: find.text('Buses en curso'),
       ),
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('tracking-screen'), findsOneWidget);
+    expect(find.text('buses-screen'), findsOneWidget);
   });
 
   testWidgets('AC6 · dark mode keeps the light streets map (with places)', (
