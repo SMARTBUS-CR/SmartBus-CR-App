@@ -8,8 +8,9 @@ import '../auth/services/auth_service.dart';
 
 /// Passenger "Mi Cuenta" tab: read-only profile of the signed-in user.
 ///
-/// Read-only: passengers have no self-update endpoint yet. Loading, 401 and
-/// retry handling live in [ProfileDetails].
+/// Name, email and password are edited on their own screens ("Editar perfil",
+/// "Cambiar contraseña"). Loading, 401 and retry handling live in
+/// [ProfileDetails].
 ///
 /// "Eliminar cuenta" is UI only for now: Auth has no self-service deletion
 /// endpoint yet (`DELETE /api/users/{user}` requires `users.delete` and
@@ -57,6 +58,13 @@ class PassengerAccountScreen extends StatelessWidget {
       role: 'passenger',
       homeRoute: '/passenger/home',
       onDeleteAccount: () => _onDeleteAccount(context),
+      onEditProfile: (user) => Navigator.pushNamed(
+        context,
+        '/passenger/account/edit',
+        arguments: user,
+      ),
+      onChangePassword: () =>
+          Navigator.pushNamed(context, '/passenger/account/password'),
       authService: authService,
       sessionStore: sessionStore,
       bottomNavigationBar: PassengerBottomNav(
