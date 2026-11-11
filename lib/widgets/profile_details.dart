@@ -5,6 +5,7 @@ import '../core/storage/secure_session_store.dart';
 import '../core/theme.dart';
 import '../features/auth/models/auth_user.dart';
 import '../features/auth/services/auth_service.dart';
+import 'delete_account_dialog.dart';
 import 'smartbus_header.dart';
 
 /// Read-only "Mi Cuenta" view shared by the passenger and driver flows.
@@ -15,11 +16,10 @@ import 'smartbus_header.dart';
 /// - No connection / timeout / 5xx → the stored data stays visible with a
 ///   "Reintentar" action.
 ///
-/// No field is editable. The only other request it sends is
-/// `POST /auth/logout` from the "Cerrar sesión" button.
-///
-/// With [onDeleteAccount], an "Eliminar cuenta" button is shown; it asks for
-/// confirmation and only then calls [onDeleteAccount].
+/// No field is editable. Other requests: `POST /auth/logout` from
+/// "Cerrar sesión" and, with [canDeleteAccount], `DELETE /auth/user` from
+/// "Eliminar cuenta" (after confirming with the current password). A deleted
+/// account goes to login and the back stack is removed.
 class ProfileDetails extends StatefulWidget {
   const ProfileDetails({
     super.key,
@@ -28,7 +28,7 @@ class ProfileDetails extends StatefulWidget {
     required this.homeRoute,
     required this.bottomNavigationBar,
     this.readOnlyNotice,
-    this.onDeleteAccount,
+    this.canDeleteAccount = false,
     this.authService,
     this.sessionStore,
   });
@@ -47,9 +47,9 @@ class ProfileDetails extends StatefulWidget {
   /// Optional notice shown under the profile (e.g. who can change the data).
   final String? readOnlyNotice;
 
-  /// Called after the user confirms "Eliminar cuenta". When null (drivers),
-  /// the button is not shown.
-  final VoidCallback? onDeleteAccount;
+  /// Shows "Eliminar cuenta". Only passengers can delete their own account
+  /// (the backend rejects any other role), so drivers leave it `false`.
+  final bool canDeleteAccount;
 
   /// Injectable for tests; defaults to a real [AuthService].
   final AuthService? authService;
@@ -141,30 +141,29 @@ class _ProfileDetailsState extends State<ProfileDetails> {
   }
 
   Future<void> _confirmDeleteAccount() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        key: const Key('delete_account_dialog'),
-        title: const Text('¿Eliminar tu cuenta?'),
-        content: const Text('¿Estás seguro? Esta acción no se puede deshacer.'),
-        actions: [
-          TextButton(
-            key: const Key('delete_account_cancel'),
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            key: const Key('delete_account_confirm'),
-            style: TextButton.styleFrom(foregroundColor: SmartBusColors.error),
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Eliminar'),
-          ),
-        ],
-      ),
+    final outcome = await DeleteAccountDialog.show(
+      context,
+      (password) => _authService.deleteAccount(currentPassword: password),
     );
 
-    // Tapping outside or pressing back returns null: same as "Cancelar".
-    if (confirmed == true && mounted) widget.onDeleteAccount?.call();
+    // Tapping outside, back or "Cancelar" returns null: nothing happens.
+    if (outcome == null || !mounted) return;
+
+    final error = outcome.error;
+    if (error == null) {
+      // The session is already cleared by AuthService.deleteAccount.
+      _showMessage(outcome.message!, color: SmartBusColors.success);
+      Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+      return;
+    }
+    if (error.type == ApiErrorType.unauthorized) {
+      await _onSessionExpired();
+      return;
+    }
+    _showMessage(
+      'Acción no permitida: esta cuenta no se puede eliminar.',
+      color: SmartBusColors.error,
+    );
   }
 
   void _showMessage(String message, {Color? color}) {
@@ -210,7 +209,7 @@ class _ProfileDetailsState extends State<ProfileDetails> {
                 : null,
           ),
           Expanded(child: _buildContent()),
-          if (widget.onDeleteAccount != null) _buildDeleteAccountButton(),
+          if (widget.canDeleteAccount) _buildDeleteAccountButton(),
           _buildLogoutButton(),
         ],
       ),

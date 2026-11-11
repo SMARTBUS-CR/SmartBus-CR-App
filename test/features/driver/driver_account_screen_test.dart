@@ -151,6 +151,8 @@ void main() {
       expect(find.textContaining('Editar'), findsNothing);
       expect(find.byIcon(Icons.edit), findsNothing);
       expect(find.byIcon(Icons.edit_outlined), findsNothing);
+      // Only passengers can delete their own account.
+      expect(find.byKey(const Key('profile_delete_account')), findsNothing);
       expect(_readOnlyNotice, findsOneWidget);
       expect(
         find.text(
