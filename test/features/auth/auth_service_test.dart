@@ -586,4 +586,136 @@ void main() {
       expect(await h.store.hasSession(), isFalse);
     });
   });
+
+  group('updateProfile', () {
+    test('name only: PATCH with just the name, stores the user, keeps the '
+        'session', () async {
+      final h = _Harness(
+        (_) async => _json(userDocument(name: 'Ana Rojas'), 200),
+      );
+      await _storeSession(h.store);
+
+      final result = await h.service.updateProfile(name: 'Ana Rojas');
+
+      final request = h.requests.single;
+      expect(request.method, 'PATCH');
+      expect(request.url.path, endsWith('/auth/user'));
+      expect(request.url.queryParameters['include'], 'roles');
+      expect(request.headers['Authorization'], 'Bearer stored-token');
+      expect(jsonDecode(request.body), {'name': 'Ana Rojas'});
+
+      expect(result.user.name, 'Ana Rojas');
+      expect(result.requiresEmailVerification, isFalse);
+      expect((await h.store.readUser())?['name'], 'Ana Rojas');
+      expect(await h.store.readToken(), 'stored-token');
+    });
+
+    test('email: sends current_password, clears the session and asks for '
+        'verification', () async {
+      final h = _Harness(
+        (_) async => _json(userDocument(email: 'nuevo@mail.com'), 200),
+      );
+      await _storeSession(h.store);
+
+      final result = await h.service.updateProfile(
+        email: 'nuevo@mail.com',
+        currentPassword: 'Secret#123',
+      );
+
+      expect(jsonDecode(h.requests.single.body), {
+        'email': 'nuevo@mail.com',
+        'current_password': 'Secret#123',
+      });
+      expect(result.requiresEmailVerification, isTrue);
+      expect(result.user.email, 'nuevo@mail.com');
+      expect(await h.store.hasSession(), isFalse);
+      expect(await h.store.readUser(), isNull);
+    });
+
+    test('422: field errors, nothing stored', () async {
+      final h = _Harness(
+        (_) async => _json(
+          validationErrors({
+            'email': ['El correo electrónico ya ha sido registrado.'],
+            'current_password': ['La contraseña es incorrecta.'],
+          }),
+          422,
+        ),
+      );
+      await _storeSession(h.store);
+
+      await expectLater(
+        h.service.updateProfile(
+          email: 'usado@mail.com',
+          currentPassword: 'wrong',
+        ),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.type, 'type', ApiErrorType.validation)
+              .having((e) => e.fieldErrors, 'fieldErrors', {
+                'email': ['El correo electrónico ya ha sido registrado.'],
+                'current_password': ['La contraseña es incorrecta.'],
+              }),
+        ),
+      );
+      expect(await h.store.readToken(), 'stored-token');
+      expect((await h.store.readUser())?['email'], 'user@passenger.com');
+    });
+  });
+
+  group('changePassword', () {
+    test(
+      'PUT with the three fields, returns the message, keeps the session',
+      () async {
+        final h = _Harness(
+          (_) async => _json(metaMessage('Contraseña actualizada.'), 200),
+        );
+        await _storeSession(h.store);
+
+        final message = await h.service.changePassword(
+          currentPassword: 'Old#1234',
+          password: 'New#12345',
+          passwordConfirmation: 'New#12345',
+        );
+
+        final request = h.requests.single;
+        expect(request.method, 'PUT');
+        expect(request.url.path, endsWith('/auth/user/password'));
+        expect(jsonDecode(request.body), {
+          'current_password': 'Old#1234',
+          'password': 'New#12345',
+          'password_confirmation': 'New#12345',
+        });
+        expect(message, 'Contraseña actualizada.');
+        expect(await h.store.readToken(), 'stored-token');
+      },
+    );
+
+    test('422: wrong current password comes back as a field error', () async {
+      final h = _Harness(
+        (_) async => _json(
+          validationErrors({
+            'current_password': ['La contraseña es incorrecta.'],
+          }),
+          422,
+        ),
+      );
+      await _storeSession(h.store);
+
+      await expectLater(
+        h.service.changePassword(
+          currentPassword: 'wrong',
+          password: 'New#12345',
+          passwordConfirmation: 'New#12345',
+        ),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.fieldErrors['current_password'],
+            'current_password',
+            ['La contraseña es incorrecta.'],
+          ),
+        ),
+      );
+    });
+  });
 }
