@@ -20,6 +20,11 @@ enum TripTrackingState {
 
   /// The user denied the location permission.
   permissionDenied,
+
+  /// The backend refused the readings for good (not the assigned driver, the
+  /// trip is not in progress, the trip does not exist or the session expired).
+  /// Transmission stopped; [TripTrackingSnapshot.lastError] says why.
+  rejected,
 }
 
 /// Immutable snapshot the UI watches (via [TripLocationSender.snapshot]).
@@ -97,10 +102,18 @@ class TripTrackingSnapshot {
 /// the activity (low memory), tracking stops until the driver reopens the app —
 ///
 /// **Retry:** a failed send stays in an in-memory queue and is retried on the
-/// next tick — but only for network / 5xx / 429 errors. A 4xx (bad data, expired
-/// token) is not retried: the fix is dropped and the reason surfaces in
-/// [TripTrackingSnapshot.lastError]. The queue is capped at [maxQueue] so a long
-/// outage cannot grow memory without bound (oldest fixes are dropped first).
+/// next tick — but only for network / 5xx / 429 errors. The queue is capped at
+/// [maxQueue] so a long outage cannot grow memory without bound (oldest fixes
+/// are dropped first).
+///
+/// **Rejected:** 401 (session expired), 403 (not the driver assigned to the
+/// trip), 404 (the trip does not exist) and 409 (the trip is not in progress)
+/// will fail for every next fix too, so transmission stops with
+/// [TripTrackingState.rejected] instead of failing every few seconds. Any other
+/// 4xx (bad data) only drops that fix.
+///
+/// A `202` (`broadcast_only`, `duplicate`, `stale`) is a success: the backend
+/// accepted the reading, even if it did not store it.
 class TripLocationSender {
   TripLocationSender({
     GpsLocationService? service,
@@ -120,8 +133,9 @@ class TripLocationSender {
   final LocationAccuracy accuracy;
 
   /// The current state — watch this from the UI.
-  final ValueNotifier<TripTrackingSnapshot> snapshot =
-      ValueNotifier(const TripTrackingSnapshot());
+  final ValueNotifier<TripTrackingSnapshot> snapshot = ValueNotifier(
+    const TripTrackingSnapshot(),
+  );
 
   final Queue<GpsFix> _pending = Queue<GpsFix>();
   StreamSubscription<Position>? _positionSub;
@@ -149,13 +163,14 @@ class TripLocationSender {
 
     // The stream keeps a foreground notification (Android) / background updates
     // (iOS) alive and feeds [_latest]; the timer paces the sends.
-    _positionSub = Geolocator.getPositionStream(
-      locationSettings: _buildLocationSettings(),
-    ).listen(
-      (position) => _latest = position,
-      onError: (Object _) =>
-          _set(lastError: 'No se pudo obtener la ubicación del dispositivo.'),
-    );
+    _positionSub =
+        Geolocator.getPositionStream(locationSettings: _buildLocationSettings())
+            .listen(
+              (position) => _latest = position,
+              onError: (Object _) => _set(
+                lastError: 'No se pudo obtener la ubicación del dispositivo.',
+              ),
+            );
 
     _timer = Timer.periodic(interval, (_) => _tick());
     _set(state: TripTrackingState.tracking);
@@ -165,13 +180,7 @@ class TripLocationSender {
   /// Stops transmission. Queued (un-sent) fixes are discarded and the
   /// foreground notification disappears.
   void stop() {
-    _timer?.cancel();
-    _timer = null;
-    final sub = _positionSub;
-    _positionSub = null;
-    if (sub != null) unawaited(sub.cancel());
-    _latest = null;
-    _pending.clear();
+    _shutdown();
     _set(state: TripTrackingState.stopped, pendingCount: 0);
   }
 
@@ -183,6 +192,35 @@ class TripLocationSender {
   }
 
   // --- internals --------------------------------------------------------
+
+  /// Cancels the timer and the location stream and empties the queue.
+  void _shutdown() {
+    _timer?.cancel();
+    _timer = null;
+    final sub = _positionSub;
+    _positionSub = null;
+    if (sub != null) unawaited(sub.cancel());
+    _latest = null;
+    _pending.clear();
+  }
+
+  /// Message for the driver when the backend refuses the readings for good, or
+  /// `null` when the error only affects this fix (or can be retried).
+  static String? _rejectionMessage(ApiException e) {
+    switch (e.type) {
+      case ApiErrorType.unauthorized:
+        return e.message; // "Tu sesión expiró. Inicia sesión nuevamente."
+      case ApiErrorType.forbidden:
+        return 'No eres el conductor asignado a este viaje.';
+      case ApiErrorType.notFound:
+        return 'No se encontró el viaje.';
+      case ApiErrorType.conflict:
+        return 'El viaje no está en curso: todavía no se ha iniciado o ya '
+            'terminó.';
+      default:
+        return null;
+    }
+  }
 
   /// Minimum displacement (meters) before the OS emits a new position on the
   /// stream. This is a **battery/GPS-radio** optimization only — it does NOT
@@ -261,7 +299,18 @@ class TripLocationSender {
             _set(lastError: e.message, pendingCount: _pending.length);
             break;
           }
-          // 4xx: retrying will not help. Drop this fix and continue.
+          final rejection = _rejectionMessage(e);
+          if (rejection != null) {
+            // Every next fix would fail the same way: stop sending.
+            _shutdown();
+            _set(
+              state: TripTrackingState.rejected,
+              lastError: rejection,
+              pendingCount: 0,
+            );
+            break;
+          }
+          // Other 4xx: retrying will not help. Drop this fix and continue.
           _pending.removeFirst();
           _set(lastError: e.message, pendingCount: _pending.length);
         }

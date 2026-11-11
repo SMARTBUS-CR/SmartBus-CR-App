@@ -31,6 +31,9 @@ class _FakeMap implements PassengerMapHandle {
   Future<void> showUserLocation(DeviceLocation location) async =>
       userLocations.add(location);
 
+  @override
+  Future<void> showBus(BusMarker? bus) async {}
+
   PassengerMapBuilder get builder => (context, options) {
     mode = options.mode;
     return _FakeMapWidget(onReady: () => options.onReady(this));
@@ -102,6 +105,7 @@ Future<void> _pump(
       ),
       routes: {
         '/passenger/search': (_) => const Scaffold(body: Text('search-screen')),
+        '/passenger/buses': (_) => const Scaffold(body: Text('buses-screen')),
       },
     ),
   );
@@ -137,7 +141,8 @@ void main() {
     expect(find.byKey(const Key('fake-map')), findsOneWidget);
     expect(find.text('¿A dónde vas?'), findsOneWidget);
     expect(find.text('Paradas cercanas'), findsOneWidget);
-    expect(find.text('Mis viajes'), findsWidgets); // chip + bottom nav tab
+    expect(find.text('Buses en curso'), findsOneWidget);
+    expect(find.text('Mis viajes'), findsOneWidget); // bottom nav tab
     expect(find.text('Favoritos'), findsOneWidget);
     expect(find.text('Hola, Keyna'), findsOneWidget);
     expect(find.byKey(const Key('my-location-button')), findsOneWidget);
@@ -332,6 +337,29 @@ void main() {
     await tester.pump();
 
     expect(find.text('Favoritos: próximamente.'), findsOneWidget);
+  });
+
+  testWidgets('"Buses en curso" chip opens the list of routes with buses', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      location: _FakeLocationService(
+        access: LocationAccess.granted,
+        location: _user,
+      ),
+      map: _FakeMap(),
+    );
+
+    await tester.tap(
+      find.descendant(
+        of: find.byType(MapQuickChips),
+        matching: find.text('Buses en curso'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('buses-screen'), findsOneWidget);
   });
 
   testWidgets('AC6 · dark mode keeps the light streets map (with places)', (

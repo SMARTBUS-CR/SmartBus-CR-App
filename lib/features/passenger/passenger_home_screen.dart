@@ -37,7 +37,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     with WidgetsBindingObserver {
   static const _chips = [
     MapQuickChip(Icons.signpost_outlined, 'Paradas cercanas'),
-    MapQuickChip(Icons.confirmation_number_outlined, 'Mis viajes'),
+    MapQuickChip(Icons.directions_bus_outlined, 'Buses en curso'),
     MapQuickChip(Icons.star_border, 'Favoritos'),
   ];
 
@@ -189,6 +189,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   }
 
   void _onChipTap(MapQuickChip chip) {
+    // Route -> buses running now -> live tracking.
+    if (chip.label == 'Buses en curso') {
+      Navigator.pushNamed(context, '/passenger/buses');
+      return;
+    }
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(

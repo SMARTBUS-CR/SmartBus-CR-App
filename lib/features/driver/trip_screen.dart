@@ -4,60 +4,90 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../core/config/api_config.dart';
+import '../../core/network/api_exception.dart';
 import '../../core/theme.dart';
 import '../../widgets/driver_bottom_nav.dart';
 import '../../widgets/gradient_button.dart';
 import '../../widgets/smartbus_header.dart';
+import '../operations/models/operations_models.dart';
+import '../operations/services/operations_service.dart';
+import '../trip_tracking/models/trip_tracking.dart';
 import '../trip_tracking/services/trip_location_sender.dart';
 
-/// Driver screen for an active trip (issue-4).
+/// Arguments of the `/driver/trip` route.
+class TripScreenArgs {
+  const TripScreenArgs({required this.trip, this.autoStart = false});
+
+  final DriverTrip trip;
+  final bool autoStart;
+}
+
+/// Driver screen for a trip (issue-4) with the real Dashboard trip.
 ///
-/// "Iniciar recorrido" starts sending the bus GPS location to the backend every
-/// few seconds; "Terminar recorrido" stops it. All the logic lives in
-/// [TripLocationSender]; this screen only renders its
-/// [TripLocationSender.snapshot].
+/// "Iniciar recorrido" first starts the trip in the Dashboard
+/// (`POST ops/trips/{id}/start`, so it becomes `in_progress`) and then sends
+/// the bus GPS location every few seconds ([TripLocationSender]). "Finalizar
+/// recorrido" stops the GPS and completes the trip (`POST .../complete`).
+///
+/// Opened from the "Recorrido" tab without a trip, it looks for the driver's
+/// trip that is already in progress (e.g. the app was closed mid-trip).
 class TripScreen extends StatefulWidget {
-  const TripScreen({super.key, this.tripId, this.autoStart = false});
+  const TripScreen({
+    super.key,
+    this.trip,
+    this.autoStart = false,
+    this.operations,
+    this.sender,
+  });
 
-  /// UUID of the active trip. Passed in once the trip-selection flow exists; for
-  /// now it falls back to [_demoTripId] so the screen is testable end to end.
-  final String? tripId;
+  /// The trip picked on the home tab; `null` = look for the one in progress.
+  final DriverTrip? trip;
 
-  /// When `true`, the trip GPS transmission starts as soon as the screen opens
-  /// (the driver tapped "Iniciar recorrido" on the home tab). Otherwise the
-  /// screen shows the idle state with its own "Iniciar recorrido" button.
+  /// When `true`, the trip starts as soon as the screen opens (the driver
+  /// tapped "Iniciar recorrido" on the home tab).
   final bool autoStart;
 
-  // TODO: recibir el viaje activo desde la pantalla de rutas cuando exista
-  //       (Navigator.pushNamed(context, '/driver/trip', arguments: tripId)).
-  //
-  // Demo trip: must be the UUID of a `scheduled` / `in_progress` trip of the
-  // backend DB. Override it without touching code:
-  //   flutter run --dart-define=DEMO_TRIP_ID=<trip-uuid>
-  static const String _demoTripId = String.fromEnvironment(
-    'DEMO_TRIP_ID',
-    defaultValue: '01a09332-3457-7315-885e-4ebb218f7262',
-  );
+  final OperationsService? operations;
+
+  /// Tests plug in a fake (the real one needs the device GPS).
+  final TripLocationSender? sender;
 
   @override
   State<TripScreen> createState() => _TripScreenState();
 }
 
 class _TripScreenState extends State<TripScreen> {
-  final TripLocationSender _sender = TripLocationSender(
-    interval: Duration(seconds: ApiConfig.gpsIntervalSeconds),
-  );
+  late final TripLocationSender _sender =
+      widget.sender ??
+      TripLocationSender(
+        interval: Duration(seconds: ApiConfig.gpsIntervalSeconds),
+      );
+  late final OperationsService _operations =
+      widget.operations ?? OperationsService();
   Timer? _ticker; // rebuilds every second so "hace Ns" stays fresh
 
-  String get _tripId => widget.tripId ?? TripScreen._demoTripId;
+  DriverTrip? _trip;
+  bool _loadingTrip = false;
+
+  /// A call to the Dashboard (start / complete) is running.
+  bool _busy = false;
+
+  /// Last Dashboard error (start, complete or loading the trip).
+  String? _tripError;
+
+  /// The GPS stopped but the Dashboard did not complete the trip.
+  bool _completeFailed = false;
 
   @override
   void initState() {
     super.initState();
     _sender.snapshot.addListener(_onSnapshot);
-    if (widget.autoStart) {
+    _trip = widget.trip;
+    if (_trip == null) {
+      _loadActiveTrip();
+    } else if (widget.autoStart) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _sender.start(tripId: _tripId);
+        if (mounted) _start();
       });
     }
   }
@@ -82,6 +112,61 @@ class _TripScreenState extends State<TripScreen> {
     }
   }
 
+  /// The driver's trip already in progress, if any.
+  Future<void> _loadActiveTrip() async {
+    setState(() {
+      _loadingTrip = true;
+      _tripError = null;
+    });
+    try {
+      final trips = await _operations.driverTrips(
+        status: TripStatus.inProgress,
+      );
+      if (!mounted) return;
+      setState(() => _trip = trips.firstOrNull);
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _tripError = e.message);
+    } finally {
+      if (mounted) setState(() => _loadingTrip = false);
+    }
+  }
+
+  /// Starts the trip in the Dashboard (if still scheduled), then the GPS.
+  Future<void> _start() async {
+    var trip = _trip;
+    if (trip == null || _busy) return;
+
+    if (trip.status == TripStatus.scheduled) {
+      setState(() {
+        _busy = true;
+        _tripError = null;
+      });
+      try {
+        trip = await _operations.startTrip(trip.id);
+      } on ApiException catch (e) {
+        if (mounted) {
+          setState(() {
+            _busy = false;
+            _tripError = e.message;
+          });
+        }
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _trip = trip;
+      });
+    }
+
+    if (trip.status != TripStatus.inProgress) {
+      setState(() => _tripError = 'Este viaje ya no está en curso.');
+      return;
+    }
+    setState(() => _tripError = null);
+    await _sender.start(tripId: trip.id);
+  }
+
   Future<void> _stop() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -89,7 +174,7 @@ class _TripScreenState extends State<TripScreen> {
         title: const Text('Finalizar recorrido'),
         content: const Text(
           '¿Seguro que quieres finalizar el recorrido? Se dejará de enviar la '
-          'ubicación del autobús.',
+          'ubicación del autobús y el viaje quedará finalizado.',
         ),
         actions: [
           TextButton(
@@ -105,13 +190,40 @@ class _TripScreenState extends State<TripScreen> {
     );
     if (confirmed == true) {
       _sender.stop();
+      await _complete();
     }
   }
+
+  /// Completes the trip in the Dashboard (the GPS is already stopped).
+  Future<void> _complete() async {
+    final trip = _trip;
+    if (trip == null || !mounted) return;
+    setState(() {
+      _busy = true;
+      _tripError = null;
+      _completeFailed = false;
+    });
+    try {
+      final done = await _operations.completeTrip(trip.id);
+      if (!mounted) return;
+      setState(() => _trip = done);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _tripError = e.message;
+        _completeFailed = true;
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _goHome() => Navigator.pushReplacementNamed(context, '/driver/home');
 
   void _onTabTap(int index) {
     switch (index) {
       case 0:
-        Navigator.pushReplacementNamed(context, '/driver/home');
+        _goHome();
       case 1:
         Navigator.pushReplacementNamed(context, '/driver/routes');
       case 2:
@@ -128,43 +240,90 @@ class _TripScreenState extends State<TripScreen> {
       bottomNavigationBar: DriverBottomNav(currentIndex: 2, onTap: _onTabTap),
       body: Column(
         children: [
-          const SmartBusHeader(
+          SmartBusHeader(
             title: 'Recorrido',
+            subtitle: _trip?.title,
             type: SmartBusUserType.driver,
           ),
           Expanded(
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      color: SmartBusColors.blanco,
-                      borderRadius: BorderRadius.only(
-                        topLeft: Radius.circular(24),
-                        topRight: Radius.circular(24),
-                      ),
-                    ),
-                    padding: const EdgeInsets.fromLTRB(20, 28, 20, 20),
-                    child: ValueListenableBuilder<TripTrackingSnapshot>(
-                      valueListenable: _sender.snapshot,
-                      builder: (context, snap, _) => _Body(
-                        snap: snap,
-                        onStart: () => _sender.start(tripId: _tripId),
-                        onStop: _stop,
-                      ),
-                    ),
-                  ),
+            child: Container(
+              decoration: const BoxDecoration(
+                color: SmartBusColors.blanco,
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(24),
+                  topRight: Radius.circular(24),
                 ),
-              ],
+              ),
+              padding: const EdgeInsets.fromLTRB(20, 28, 20, 20),
+              child: _content(),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _content() {
+    final trip = _trip;
+    if (_loadingTrip) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (trip == null) {
+      return _BlockedView(
+        icon: Icons.event_busy_outlined,
+        title: 'Sin recorrido en curso',
+        message:
+            _tripError ??
+            'Elige tu viaje del día en Inicio para empezar el recorrido.',
+        actionLabel: 'Ir a Inicio',
+        onAction: _goHome,
+      );
+    }
+    if (_busy) {
+      return _BusyView(
+        label: trip.status == TripStatus.scheduled
+            ? 'Iniciando el viaje…'
+            : 'Finalizando el viaje…',
+      );
+    }
+    if (_completeFailed) {
+      return _BlockedView(
+        icon: Icons.sync_problem,
+        title: 'No se pudo finalizar el viaje',
+        message:
+            '${_tripError ?? ''}\nYa no se envía la ubicación; '
+            'reintenta para cerrar el viaje.',
+        actionLabel: 'Reintentar',
+        onAction: _complete,
+      );
+    }
+    if (trip.status.isFinished) {
+      return _FinishedView(
+        trip: trip,
+        sentCount: _sender.snapshot.value.sentCount,
+        onHome: _goHome,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _TripSummary(trip: trip),
+        const SizedBox(height: 16),
+        Expanded(
+          child: ValueListenableBuilder<TripTrackingSnapshot>(
+            valueListenable: _sender.snapshot,
+            builder: (context, snap, _) => _Body(
+              snap: snap,
+              startLabel: trip.status == TripStatus.inProgress
+                  ? 'Continuar recorrido'
+                  : 'Iniciar recorrido',
+              tripError: _tripError,
+              onStart: _start,
+              onStop: _stop,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -174,11 +333,17 @@ class _TripScreenState extends State<TripScreen> {
 class _Body extends StatelessWidget {
   const _Body({
     required this.snap,
+    required this.startLabel,
+    required this.tripError,
     required this.onStart,
     required this.onStop,
   });
 
   final TripTrackingSnapshot snap;
+  final String startLabel;
+
+  /// Error of the Dashboard (e.g. the trip could not be started).
+  final String? tripError;
   final VoidCallback onStart;
   final VoidCallback onStop;
 
@@ -195,6 +360,13 @@ class _Body extends StatelessWidget {
         actionLabel: 'Abrir ajustes',
         onAction: Geolocator.openAppSettings,
       ),
+      TripTrackingState.rejected => _BlockedView(
+        icon: Icons.block,
+        title: 'No se puede enviar la ubicación',
+        message: snap.lastError ?? 'El servidor rechazó la ubicación.',
+        actionLabel: 'Reintentar',
+        onAction: onStart,
+      ),
       TripTrackingState.locationServicesDisabled => _BlockedView(
         icon: Icons.gps_off,
         title: 'Ubicación desactivada',
@@ -203,7 +375,12 @@ class _Body extends StatelessWidget {
         actionLabel: 'Activar ubicación',
         onAction: Geolocator.openLocationSettings,
       ),
-      _ => _IdleView(snap: snap, onStart: onStart),
+      _ => _IdleView(
+        snap: snap,
+        startLabel: startLabel,
+        error: snap.lastError ?? tripError,
+        onStart: onStart,
+      ),
     };
   }
 }
@@ -211,49 +388,163 @@ class _Body extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _IdleView extends StatelessWidget {
-  const _IdleView({required this.snap, required this.onStart});
+  const _IdleView({
+    required this.snap,
+    required this.startLabel,
+    required this.error,
+    required this.onStart,
+  });
 
   final TripTrackingSnapshot snap;
+  final String startLabel;
+  final String? error;
   final VoidCallback onStart;
 
   @override
   Widget build(BuildContext context) {
     final starting = snap.state == TripTrackingState.starting;
-    final stopped = snap.state == TripTrackingState.stopped;
 
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Icon(
-          stopped ? Icons.check_circle_outline : Icons.navigation_outlined,
+          Icons.navigation_outlined,
           size: 64,
           color: SmartBusColors.azulPrincipal.withValues(alpha: 0.35),
         ),
         const SizedBox(height: 16),
         Text(
-          stopped ? 'Recorrido finalizado' : 'Listo para iniciar',
+          'Listo para iniciar',
           style: Theme.of(context).textTheme.titleLarge,
         ),
         const SizedBox(height: 6),
         Text(
-          stopped
-              ? 'Se enviaron ${snap.sentCount} ubicaciones.'
-              : 'Al iniciar, se enviará la ubicación del autobús cada pocos '
-                    'segundos hasta que termines el recorrido.',
+          'Al iniciar, se enviará la ubicación del autobús cada pocos '
+          'segundos hasta que termines el recorrido.',
           textAlign: TextAlign.center,
           style: TextStyle(color: Colors.grey.shade600),
         ),
         const SizedBox(height: 28),
         GradientButton(
-          label: starting ? 'Solicitando permiso…' : 'Iniciar recorrido',
+          label: starting ? 'Solicitando permiso…' : startLabel,
           icon: Icons.play_arrow_rounded,
           busy: starting,
           onPressed: starting ? null : onStart,
         ),
-        if (snap.lastError != null && !starting) ...[
+        if (error != null && !starting) ...[
           const SizedBox(height: 14),
-          _ErrorLine(message: snap.lastError!),
+          _ErrorLine(message: error!),
         ],
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+/// Route, destination and planned times of the trip.
+class _TripSummary extends StatelessWidget {
+  const _TripSummary({required this.trip});
+
+  final DriverTrip trip;
+
+  @override
+  Widget build(BuildContext context) {
+    final departure = trip.scheduledDepartureAt;
+    final details = [
+      if (trip.headsign != null) 'Hacia ${trip.headsign}',
+      if (departure != null) 'Salida ${formatHour(departure)}',
+    ];
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: SmartBusColors.grisClaro,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.directions_bus_filled,
+            color: SmartBusColors.azulPrincipal,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  trip.title,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                if (details.isNotEmpty)
+                  Text(
+                    details.join(' · '),
+                    style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BusyView extends StatelessWidget {
+  const _BusyView({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const CircularProgressIndicator(),
+        const SizedBox(height: 16),
+        Text(label, style: Theme.of(context).textTheme.titleMedium),
+      ],
+    );
+  }
+}
+
+class _FinishedView extends StatelessWidget {
+  const _FinishedView({
+    required this.trip,
+    required this.sentCount,
+    required this.onHome,
+  });
+
+  final DriverTrip trip;
+  final int sentCount;
+  final VoidCallback onHome;
+
+  @override
+  Widget build(BuildContext context) {
+    final cancelled = trip.status == TripStatus.cancelled;
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(
+          cancelled ? Icons.cancel_outlined : Icons.check_circle_outline,
+          size: 64,
+          color: cancelled ? SmartBusColors.error : SmartBusColors.completado,
+        ),
+        const SizedBox(height: 16),
+        Text(
+          cancelled ? 'Viaje cancelado' : 'Recorrido finalizado',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        const SizedBox(height: 6),
+        Text(
+          sentCount > 0
+              ? 'Se enviaron $sentCount ubicaciones.'
+              : 'El viaje ya no está en curso.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.grey.shade600),
+        ),
+        const SizedBox(height: 24),
+        FilledButton(onPressed: onHome, child: const Text('Volver a Inicio')),
       ],
     );
   }
@@ -389,7 +680,7 @@ class _BlockedView extends StatelessWidget {
   final String title;
   final String message;
   final String actionLabel;
-  final Future<bool> Function() onAction;
+  final FutureOr<void> Function() onAction;
 
   @override
   Widget build(BuildContext context) {

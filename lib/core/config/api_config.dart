@@ -39,6 +39,15 @@ class ApiConfig {
     defaultValue: gatewayBaseUrl,
   );
 
+  /// Base URL for the **Dashboard (operations)** endpoints: routes, buses
+  /// running and the driver's trips. Defaults to [gatewayBaseUrl]; point it at
+  /// a local Gateway while the `ops` proxy is not deployed:
+  ///   --dart-define=OPS_GATEWAY_URL=http://127.0.0.1:8001/api
+  static const String opsBaseUrl = String.fromEnvironment(
+    'OPS_GATEWAY_URL',
+    defaultValue: gatewayBaseUrl,
+  );
+
   /// Value for the `Accept-Language` header (backend supports: en | es).
   static const String language = String.fromEnvironment(
     'API_LANGUAGE',
@@ -62,19 +71,72 @@ class ApiConfig {
     defaultValue: 5,
   );
 
+  // --- Real time (GPS service, Laravel Reverb — Pusher protocol) -----------
+  //
+  // The passenger map receives the bus position over a WebSocket. In Render
+  // the Gateway's nginx forwards `wss://<gateway>/app/<KEY>` to Reverb, so by
+  // default the socket goes to the same host as [gpsBaseUrl].
+  //
+  // Local test (Gateway with `php artisan serve` has no nginx): point it at
+  // Reverb directly:
+  //   --dart-define=REVERB_APP_KEY=<key> --dart-define=REVERB_HOST=192.168.1.100
+  //   --dart-define=REVERB_PORT=8080 --dart-define=REVERB_SCHEME=ws
+
+  /// `REVERB_APP_KEY` of the GPS service. It is **not** a secret (the secret
+  /// never leaves the backend). Empty = no real time: the map falls back to
+  /// asking the position every few seconds.
+  static const String reverbAppKey = String.fromEnvironment('REVERB_APP_KEY');
+
+  /// Empty = the host of [gpsBaseUrl].
+  static const String reverbHost = String.fromEnvironment('REVERB_HOST');
+
+  /// `0` = the port of [gpsBaseUrl] (443 / 80 when it has none).
+  static const int reverbPort = int.fromEnvironment('REVERB_PORT');
+
+  /// `wss` or `ws`. Empty = `wss` when [gpsBaseUrl] is https, `ws` otherwise.
+  static const String reverbScheme = String.fromEnvironment('REVERB_SCHEME');
+
+  /// WebSocket URL of Reverb, or `null` when [reverbAppKey] is not set.
+  static Uri? reverbUri() {
+    if (reverbAppKey.isEmpty) return null;
+    final base = Uri.parse(gpsBaseUrl);
+    final scheme = reverbScheme.isNotEmpty
+        ? reverbScheme
+        : (base.scheme == 'https' ? 'wss' : 'ws');
+    final port = reverbPort != 0
+        ? reverbPort
+        : (base.hasPort ? base.port : (scheme == 'wss' ? 443 : 80));
+    return Uri(
+      scheme: scheme,
+      host: reverbHost.isNotEmpty ? reverbHost : base.host,
+      port: port,
+      path: '/app/$reverbAppKey',
+      queryParameters: const {
+        'protocol': '7',
+        'client': 'smartbus-flutter',
+        'version': '1.0',
+        'flash': 'false',
+      },
+    );
+  }
+
   // --- Microservice identifiers (first path segment of the proxy) -----------
   static const String authService = 'auth';
   static const String gpsService = 'gps';
+  static const String opsService = 'ops';
 
   // --- Routes through the Gateway -----------------------------------------
-  static Uri _uri(String path, [Map<String, dynamic>? query]) => Uri.parse(
-        '$gatewayBaseUrl/$path',
-      ).replace(queryParameters: query);
+  static Uri _uri(String path, [Map<String, dynamic>? query]) =>
+      Uri.parse('$gatewayBaseUrl/$path').replace(queryParameters: query);
 
   /// Same as [_uri] but against [gpsBaseUrl] (may be a local Gateway).
-  static Uri _gpsUri(String path, [Map<String, dynamic>? query]) => Uri.parse(
-        '$gpsBaseUrl/$path',
-      ).replace(queryParameters: query);
+  static Uri _gpsUri(String path, [Map<String, dynamic>? query]) =>
+      Uri.parse('$gpsBaseUrl/$path').replace(queryParameters: query);
+
+  /// Same as [_uri] but against [opsBaseUrl] (may be a local Gateway).
+  static Uri _opsUri(String path, [Map<String, dynamic>? query]) =>
+      Uri.parse('$opsBaseUrl/$opsService/$path')
+          .replace(queryParameters: query);
 
   /// POST — sign in. Equivalent to the Auth service `POST /login`.
   /// `include=roles` embeds the role value/label in the JSON:API response.
@@ -127,4 +189,33 @@ class ApiConfig {
   /// GET — latest known location of a trip. GPS service `GET /trips/{id}/location`.
   static Uri gpsTripLocation(String tripId) =>
       _gpsUri('$gpsService/trips/$tripId/location');
+
+  /// POST — signature for a private real-time channel (`private-trip.{id}`).
+  /// GPS service `POST /broadcasting/auth`.
+  static Uri gpsBroadcastingAuth() => _gpsUri('$gpsService/broadcasting/auth');
+
+  // --- Dashboard (operations), JSON:API -------------------------------------
+
+  /// GET — trips of the logged-in driver (token). Dashboard `driver/trips`.
+  static Uri opsDriverTrips([Map<String, dynamic>? query]) =>
+      _opsUri('driver/trips', query);
+
+  /// POST — the assigned driver starts a trip (token).
+  static Uri opsTripStart(String tripId) => _opsUri('trips/$tripId/start');
+
+  /// POST — the assigned driver completes a trip (token).
+  static Uri opsTripComplete(String tripId) =>
+      _opsUri('trips/$tripId/complete');
+
+  /// GET — public route catalogue.
+  static Uri opsRoutes([Map<String, dynamic>? query]) =>
+      _opsUri('routes', query);
+
+  /// GET — directions (patterns) of a route, with line and stops.
+  static Uri opsRoutePatterns(String routeId) =>
+      _opsUri('routes/$routeId/patterns');
+
+  /// GET — buses running now on a pattern (public, no driver data).
+  static Uri opsPatternTrips(String patternId, [Map<String, dynamic>? query]) =>
+      _opsUri('route-patterns/$patternId/trips', query);
 }

@@ -8,6 +8,7 @@ import 'features/auth/verify_email_screen.dart';
 import 'features/passenger/passenger_home_screen.dart';
 import 'features/passenger/route_search_screen.dart';
 import 'features/passenger/bus_tracking_screen.dart';
+import 'features/passenger/buses_in_progress_screen.dart';
 import 'features/passenger/passenger_trips_screen.dart';
 import 'features/passenger/passenger_account_screen.dart';
 import 'features/passenger/edit_profile_screen.dart';
@@ -31,7 +32,7 @@ class SmartBusApp extends StatelessWidget {
     // Passenger flow (RF-07 to RF-12)
     '/passenger/home': (_) => const PassengerHomeScreen(),
     '/passenger/search': (_) => const RouteSearchScreen(),
-    '/passenger/tracking': (_) => const BusTrackingScreen(),
+    '/passenger/buses': (_) => const BusesInProgressScreen(),
     '/passenger/trips': (_) => const PassengerTripsScreen(),
     '/passenger/account': (_) => const PassengerAccountScreen(),
     '/passenger/account/password': (_) => const ChangePasswordScreen(),
@@ -53,9 +54,17 @@ class SmartBusApp extends StatelessWidget {
       onGenerateRoute: (settings) {
         final WidgetBuilder? builder;
         if (settings.name == '/driver/trip') {
+          // From Home: the picked trip. From the tab: none (the screen looks
+          // for the trip in progress).
           final args = settings.arguments;
-          final autoStart = args is Map && args['autoStart'] == true;
-          builder = (_) => TripScreen(autoStart: autoStart);
+          builder = (_) => args is TripScreenArgs
+              ? TripScreen(trip: args.trip, autoStart: args.autoStart)
+              : const TripScreen();
+        } else if (settings.name == '/passenger/tracking') {
+          // Needs the trip UUID (from "Buses en curso").
+          final args = settings.arguments;
+          if (args is! String) return null;
+          builder = (_) => BusTrackingScreen(tripId: args);
         } else if (settings.name == '/verify-email') {
           final args = settings.arguments;
           // Needs the email to verify; without it there is nothing to show.

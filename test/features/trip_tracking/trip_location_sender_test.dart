@@ -4,6 +4,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:smartbus_drivers/core/network/api_exception.dart';
 import 'package:smartbus_drivers/features/trip_tracking/models/gps_fix.dart';
+import 'package:smartbus_drivers/features/trip_tracking/models/trip_tracking.dart';
 import 'package:smartbus_drivers/features/trip_tracking/services/gps_location_service.dart';
 import 'package:smartbus_drivers/features/trip_tracking/services/trip_location_sender.dart';
 
@@ -34,11 +35,19 @@ class _FakeGpsService implements GpsLocationService {
   }
 
   @override
-  Future<Map<String, dynamic>> latestForTrip(String tripId) async => const {};
+  Future<TripTracking> latestForTrip(String tripId) =>
+      throw UnimplementedError();
+
+  @override
+  Future<String> authorizeChannel({
+    required String socketId,
+    required String channelName,
+  }) => throw UnimplementedError();
 }
 
 /// Fake device GPS.
-class _FakeGeolocator extends GeolocatorPlatform with MockPlatformInterfaceMixin {
+class _FakeGeolocator extends GeolocatorPlatform
+    with MockPlatformInterfaceMixin {
   bool serviceEnabled = true;
   LocationPermission permission = LocationPermission.always;
   Position? lastKnown = _position();
@@ -53,15 +62,20 @@ class _FakeGeolocator extends GeolocatorPlatform with MockPlatformInterfaceMixin
   Future<LocationPermission> requestPermission() async => permission;
 
   @override
-  Future<Position?> getLastKnownPosition({bool forceLocationManager = false}) async =>
-      lastKnown;
+  Future<Position?> getLastKnownPosition({
+    bool forceLocationManager = false,
+  }) async => lastKnown;
 
   @override
   Stream<Position> getPositionStream({LocationSettings? locationSettings}) =>
       const Stream<Position>.empty();
 }
 
-Position _position({double lat = 9.93, double lng = -84.08, double speed = 10}) {
+Position _position({
+  double lat = 9.93,
+  double lng = -84.08,
+  double speed = 10,
+}) {
   return Position(
     latitude: lat,
     longitude: lng,
@@ -149,6 +163,8 @@ void main() {
       expect(fix.latitude, 9.93);
       expect(fix.longitude, -84.08);
       expect(fix.speedKmh, closeTo(36, 0.001)); // 10 m/s -> 36 km/h
+      expect(fix.accuracyMeters, 5);
+      expect(fix.toJsonApi()['data']['attributes']['accuracy_meters'], 5);
       expect(fix.recordedAt.isUtc, isTrue);
       expect(sender.snapshot.value.sentCount, service.sent.length);
 
@@ -156,8 +172,7 @@ void main() {
     });
   });
 
-  test('retries network failures: queued fixes are all sent once it recovers',
-      () {
+  test('retries network failures: queued fixes are all sent once it recovers', () {
     fakeAsync((async) {
       service.failFirst = 2; // first 2 sends fail with "no connection"
       final sender = build();
@@ -175,41 +190,107 @@ void main() {
     });
   });
 
-  test('keeps fixes queued while offline (retryable errors grow the queue)', () {
-    fakeAsync((async) {
-      service.failAlwaysWith = ApiException.noConnection;
-      final sender = build();
+  test(
+    'keeps fixes queued while offline (retryable errors grow the queue)',
+    () {
+      fakeAsync((async) {
+        service.failAlwaysWith = ApiException.noConnection;
+        final sender = build();
 
-      sender.start(tripId: _tripId);
-      async.flushMicrotasks();
-      async.elapse(interval * 3);
-      async.flushMicrotasks();
+        sender.start(tripId: _tripId);
+        async.flushMicrotasks();
+        async.elapse(interval * 3);
+        async.flushMicrotasks();
 
-      expect(service.sent, isEmpty);
-      expect(sender.snapshot.value.pendingCount, greaterThan(0));
-      expect(sender.snapshot.value.lastError, isNotNull);
+        expect(service.sent, isEmpty);
+        expect(sender.snapshot.value.pendingCount, greaterThan(0));
+        expect(sender.snapshot.value.lastError, isNotNull);
 
-      sender.dispose();
-    });
+        sender.dispose();
+      });
+    },
+  );
+
+  test(
+    'does NOT retry 4xx errors: the fix is dropped, the queue stays empty',
+    () {
+      fakeAsync((async) {
+        service.failAlwaysWith = const ApiException(
+          ApiErrorType.validation,
+          'Datos inválidos.',
+        );
+        final sender = build();
+
+        sender.start(tripId: _tripId);
+        async.flushMicrotasks();
+        async.elapse(interval * 3);
+        async.flushMicrotasks();
+
+        expect(service.sent, isEmpty);
+        expect(sender.snapshot.value.pendingCount, 0); // dropped, not retried
+        expect(sender.snapshot.value.lastError, 'Datos inválidos.');
+
+        sender.dispose();
+      });
+    },
+  );
+
+  test('omits accuracy_meters when the device does not report it', () {
+    final fix = GpsFix.fromPosition(
+      Position(
+        latitude: 9.93,
+        longitude: -84.08,
+        timestamp: DateTime.utc(2026, 9, 7, 12),
+        accuracy: 0,
+        altitude: 0,
+        altitudeAccuracy: 0,
+        heading: 0,
+        headingAccuracy: 0,
+        speed: -1,
+        speedAccuracy: 0,
+      ),
+      tripId: _tripId,
+    );
+
+    final attributes = fix.toJsonApi()['data']['attributes'] as Map;
+    expect(attributes.containsKey('accuracy_meters'), isFalse);
+    expect(attributes.containsKey('speed_kmh'), isFalse);
   });
 
-  test('does NOT retry 4xx errors: the fix is dropped, the queue stays empty',
-      () {
-    fakeAsync((async) {
-      service.failAlwaysWith =
-          const ApiException(ApiErrorType.validation, 'Datos inválidos.');
-      final sender = build();
+  final rejections = {
+    409: 'El viaje no está en curso: todavía no se ha iniciado o ya terminó.',
+    403: 'No eres el conductor asignado a este viaje.',
+    404: 'No se encontró el viaje.',
+    401: 'Tu sesión expiró. Inicia sesión nuevamente.',
+  };
+  rejections.forEach((status, message) {
+    test('$status stops the transmission with a clear message', () {
+      fakeAsync((async) {
+        service.failAlwaysWith = ApiException.fromStatus(status);
+        final sender = build();
 
-      sender.start(tripId: _tripId);
-      async.flushMicrotasks();
-      async.elapse(interval * 3);
-      async.flushMicrotasks();
+        sender.start(tripId: _tripId);
+        async.flushMicrotasks();
 
-      expect(service.sent, isEmpty);
-      expect(sender.snapshot.value.pendingCount, 0); // dropped, not retried
-      expect(sender.snapshot.value.lastError, 'Datos inválidos.');
+        expect(sender.snapshot.value.state, TripTrackingState.rejected);
+        expect(sender.snapshot.value.lastError, message);
+        expect(sender.snapshot.value.pendingCount, 0);
 
-      sender.dispose();
+        // It does not keep failing every interval.
+        final calls = service.calls;
+        async.elapse(interval * 3);
+        async.flushMicrotasks();
+        expect(service.calls, calls);
+
+        // "Reintentar" starts again once the problem is fixed.
+        service.failAlwaysWith = null;
+        sender.start(tripId: _tripId);
+        async.flushMicrotasks();
+        expect(sender.snapshot.value.state, TripTrackingState.tracking);
+        expect(service.sent, isNotEmpty);
+
+        sender.dispose();
+      });
     });
   });
 
