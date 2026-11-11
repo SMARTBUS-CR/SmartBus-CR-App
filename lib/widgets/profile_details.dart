@@ -16,15 +16,10 @@ import 'smartbus_header.dart';
 /// - No connection / timeout / 5xx → the stored data stays visible with a
 ///   "Reintentar" action.
 ///
-/// No field is editable. The only other request it sends is
-/// `POST /auth/logout` from the "Cerrar sesión" button.
-///
-/// With [onDeleteAccount], an "Eliminar cuenta" button is shown; it asks for
-/// confirmation and only then calls [onDeleteAccount].
-///
 /// With [onEditProfile] / [onChangePassword] (passengers), "Editar perfil" and
 /// "Cambiar contraseña" entries are shown; editing happens on their own
 /// screens, never inline.
+///
 /// No field is editable. Other requests: `POST /auth/logout` from
 /// "Cerrar sesión" and, with [canDeleteAccount], `DELETE /auth/user` from
 /// "Eliminar cuenta" (after confirming with the current password). A deleted
@@ -37,7 +32,6 @@ class ProfileDetails extends StatefulWidget {
     required this.homeRoute,
     required this.bottomNavigationBar,
     this.readOnlyNotice,
-    this.onDeleteAccount,
     this.onEditProfile,
     this.onChangePassword,
     this.canDeleteAccount = false,
@@ -59,16 +53,13 @@ class ProfileDetails extends StatefulWidget {
   /// Optional notice shown under the profile (e.g. who can change the data).
   final String? readOnlyNotice;
 
-  /// Called after the user confirms "Eliminar cuenta". When null (drivers),
-  /// the button is not shown.
-  final VoidCallback? onDeleteAccount;
-
   /// Opens "Editar perfil" with the current user and completes when the user
   /// comes back. When null (drivers), the entry is not shown.
   final Future<void> Function(AuthUser user)? onEditProfile;
 
   /// Opens "Cambiar contraseña". When null (drivers), the entry is not shown.
   final Future<void> Function()? onChangePassword;
+
   /// Shows "Eliminar cuenta". Only passengers can delete their own account
   /// (the backend rejects any other role), so drivers leave it `false`.
   final bool canDeleteAccount;
@@ -175,31 +166,6 @@ class _ProfileDetailsState extends State<ProfileDetails> {
     setState(() => _user = AuthUser.fromStorage(stored));
   }
 
-  Future<void> _confirmDeleteAccount() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        key: const Key('delete_account_dialog'),
-        title: const Text('¿Eliminar tu cuenta?'),
-        content: const Text('¿Estás seguro? Esta acción no se puede deshacer.'),
-        actions: [
-          TextButton(
-            key: const Key('delete_account_cancel'),
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            key: const Key('delete_account_confirm'),
-            style: TextButton.styleFrom(foregroundColor: SmartBusColors.error),
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Eliminar'),
-          ),
-        ],
-      ),
-    );
-
-    // Tapping outside or pressing back returns null: same as "Cancelar".
-    if (confirmed == true && mounted) widget.onDeleteAccount?.call();
   Future<void> _confirmDeleteAccount() async {
     final outcome = await DeleteAccountDialog.show(
       context,

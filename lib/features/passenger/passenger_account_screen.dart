@@ -12,11 +12,8 @@ import '../auth/services/auth_service.dart';
 /// "Cambiar contraseña"). Loading, 401 and retry handling live in
 /// [ProfileDetails].
 ///
-/// "Eliminar cuenta" is UI only for now: Auth has no self-service deletion
-/// endpoint yet (`DELETE /api/users/{user}` requires `users.delete` and
-/// rejects deleting yourself), so confirming only shows a notice.
-/// Loading, 401, retry and "Eliminar cuenta" (soft delete through
-/// `DELETE /auth/user`) live in [ProfileDetails].
+/// "Eliminar cuenta" (soft delete through `DELETE /auth/user`) also lives in
+/// [ProfileDetails].
 class PassengerAccountScreen extends StatelessWidget {
   const PassengerAccountScreen({
     super.key,
@@ -43,23 +40,12 @@ class PassengerAccountScreen extends StatelessWidget {
     }
   }
 
-  /// Temporary until the backend supports self-service account deletion.
-  void _onDeleteAccount(BuildContext context) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Esta función estará disponible pronto.'),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return ProfileDetails(
       color: SmartBusColors.verdePasajero,
       role: 'passenger',
       homeRoute: '/passenger/home',
-      onDeleteAccount: () => _onDeleteAccount(context),
       onEditProfile: (user) => Navigator.pushNamed(
         context,
         '/passenger/account/edit',
