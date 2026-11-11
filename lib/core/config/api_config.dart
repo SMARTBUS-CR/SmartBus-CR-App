@@ -39,6 +39,15 @@ class ApiConfig {
     defaultValue: gatewayBaseUrl,
   );
 
+  /// Base URL for the **Dashboard (operations)** endpoints: routes, buses
+  /// running and the driver's trips. Defaults to [gatewayBaseUrl]; point it at
+  /// a local Gateway while the `ops` proxy is not deployed:
+  ///   --dart-define=OPS_GATEWAY_URL=http://127.0.0.1:8001/api
+  static const String opsBaseUrl = String.fromEnvironment(
+    'OPS_GATEWAY_URL',
+    defaultValue: gatewayBaseUrl,
+  );
+
   /// Value for the `Accept-Language` header (backend supports: en | es).
   static const String language = String.fromEnvironment(
     'API_LANGUAGE',
@@ -114,6 +123,7 @@ class ApiConfig {
   // --- Microservice identifiers (first path segment of the proxy) -----------
   static const String authService = 'auth';
   static const String gpsService = 'gps';
+  static const String opsService = 'ops';
 
   // --- Routes through the Gateway -----------------------------------------
   static Uri _uri(String path, [Map<String, dynamic>? query]) =>
@@ -122,6 +132,11 @@ class ApiConfig {
   /// Same as [_uri] but against [gpsBaseUrl] (may be a local Gateway).
   static Uri _gpsUri(String path, [Map<String, dynamic>? query]) =>
       Uri.parse('$gpsBaseUrl/$path').replace(queryParameters: query);
+
+  /// Same as [_uri] but against [opsBaseUrl] (may be a local Gateway).
+  static Uri _opsUri(String path, [Map<String, dynamic>? query]) =>
+      Uri.parse('$opsBaseUrl/$opsService/$path')
+          .replace(queryParameters: query);
 
   /// POST — sign in. Equivalent to the Auth service `POST /login`.
   /// `include=roles` embeds the role value/label in the JSON:API response.
@@ -165,4 +180,29 @@ class ApiConfig {
   /// POST — signature for a private real-time channel (`private-trip.{id}`).
   /// GPS service `POST /broadcasting/auth`.
   static Uri gpsBroadcastingAuth() => _gpsUri('$gpsService/broadcasting/auth');
+
+  // --- Dashboard (operations), JSON:API -------------------------------------
+
+  /// GET — trips of the logged-in driver (token). Dashboard `driver/trips`.
+  static Uri opsDriverTrips([Map<String, dynamic>? query]) =>
+      _opsUri('driver/trips', query);
+
+  /// POST — the assigned driver starts a trip (token).
+  static Uri opsTripStart(String tripId) => _opsUri('trips/$tripId/start');
+
+  /// POST — the assigned driver completes a trip (token).
+  static Uri opsTripComplete(String tripId) =>
+      _opsUri('trips/$tripId/complete');
+
+  /// GET — public route catalogue.
+  static Uri opsRoutes([Map<String, dynamic>? query]) =>
+      _opsUri('routes', query);
+
+  /// GET — directions (patterns) of a route, with line and stops.
+  static Uri opsRoutePatterns(String routeId) =>
+      _opsUri('routes/$routeId/patterns');
+
+  /// GET — buses running now on a pattern (public, no driver data).
+  static Uri opsPatternTrips(String patternId, [Map<String, dynamic>? query]) =>
+      _opsUri('route-patterns/$patternId/trips', query);
 }
