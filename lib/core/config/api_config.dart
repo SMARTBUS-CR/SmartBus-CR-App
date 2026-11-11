@@ -97,6 +97,15 @@ class ApiConfig {
   /// `include=roles` embeds the roles, same as [authLogin].
   static Uri authUser() => _uri('$authService/user', {'include': 'roles'});
 
+  /// PATCH — the passenger updates their own name and/or email.
+  /// Auth service `PATCH /user`. Returns the updated user, like [authUser].
+  static Uri authUpdateProfile() =>
+      _uri('$authService/user', {'include': 'roles'});
+
+  /// PUT — the passenger changes their own password (current one required).
+  /// Auth service `PUT /user/password`.
+  static Uri authChangePassword() => _uri('$authService/user/password');
+
   /// POST — verify the email with the 6-digit code; logs the user in.
   /// `include=roles` embeds the roles, same as [authLogin].
   static Uri authEmailVerify() =>
