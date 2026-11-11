@@ -81,6 +81,28 @@ Future<List<http.Request>> _pumpScreen(
         '/passenger/trips': (_) => const Scaffold(body: Text('TRIPS')),
         '/passenger/account': (_) =>
             PassengerAccountScreen(authService: service, sessionStore: store),
+        '/passenger/account/password': (_) =>
+            const Scaffold(body: Text('CHANGE PASSWORD')),
+      },
+      // Stub of "Editar perfil": shows the user it received and, on tap,
+      // stores a renamed user and pops (like a successful save).
+      onGenerateRoute: (settings) {
+        if (settings.name != '/passenger/account/edit') return null;
+        final user = settings.arguments! as AuthUser;
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                await store.saveUser(
+                  user.copyWith(name: 'Ana Editada').toJson(),
+                );
+                if (context.mounted) Navigator.pop(context);
+              },
+              child: Text('EDIT ${user.name}'),
+            ),
+          ),
+        );
       },
     ),
   );
@@ -327,6 +349,50 @@ void main() {
         expect(text.maxLines, 2);
         expect(text.overflow, TextOverflow.ellipsis);
       }
+    });
+  });
+
+  group('Edit profile / change password entries', () {
+    final edit = find.byKey(const Key('profile_edit'));
+    final changePassword = find.byKey(const Key('profile_change_password'));
+
+    testWidgets('AC1: passengers see both entries', (tester) async {
+      await _pumpScreen(tester, (_) async => _json(userDocument(), 200));
+      await tester.pumpAndSettle();
+
+      expect(edit, findsOneWidget);
+      expect(find.text('Editar perfil'), findsOneWidget);
+      expect(changePassword, findsOneWidget);
+      expect(find.text('Cambiar contraseña'), findsOneWidget);
+    });
+
+    testWidgets('"Editar perfil" opens with the current user and the new '
+        'data shows right away on return', (tester) async {
+      final requests = await _pumpScreen(
+        tester,
+        (_) async => _json(userDocument(name: 'Ana Pérez'), 200),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(edit);
+      await tester.pumpAndSettle();
+      expect(find.text('EDIT Ana Pérez'), findsOneWidget);
+
+      await tester.tap(find.text('EDIT Ana Pérez'));
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Text>(_name).data, 'Ana Editada');
+      expect(requests, hasLength(1)); // no extra GET to refresh
+    });
+
+    testWidgets('"Cambiar contraseña" opens its screen', (tester) async {
+      await _pumpScreen(tester, (_) async => _json(userDocument(), 200));
+      await tester.pumpAndSettle();
+
+      await tester.tap(changePassword);
+      await tester.pumpAndSettle();
+
+      expect(find.text('CHANGE PASSWORD'), findsOneWidget);
     });
   });
 

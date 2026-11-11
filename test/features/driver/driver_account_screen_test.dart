@@ -177,6 +177,17 @@ void main() {
       expect(requests, hasLength(2));
       expect(requests.map((r) => r.method), everyElement('GET'));
     });
+
+    testWidgets('no passenger self-service options (edit, password, delete)',
+        (tester) async {
+      await _pumpScreen(tester, (_) async => _json(_driverDocument(), 200));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('profile_edit')), findsNothing);
+      expect(find.byKey(const Key('profile_change_password')), findsNothing);
+      expect(find.byKey(const Key('profile_delete_account')), findsNothing);
+      expect(_logout, findsOneWidget);
+    });
   });
 
   group('AC3 · fresh data from the backend', () {

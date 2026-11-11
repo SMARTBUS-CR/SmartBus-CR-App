@@ -10,6 +10,9 @@ import 'features/passenger/route_search_screen.dart';
 import 'features/passenger/bus_tracking_screen.dart';
 import 'features/passenger/passenger_trips_screen.dart';
 import 'features/passenger/passenger_account_screen.dart';
+import 'features/passenger/edit_profile_screen.dart';
+import 'features/passenger/change_password_screen.dart';
+import 'features/auth/models/auth_user.dart';
 import 'features/driver/driver_home_screen.dart';
 import 'features/driver/trip_screen.dart';
 import 'features/driver/driver_routes_screen.dart';
@@ -31,6 +34,7 @@ class SmartBusApp extends StatelessWidget {
     '/passenger/tracking': (_) => const BusTrackingScreen(),
     '/passenger/trips': (_) => const PassengerTripsScreen(),
     '/passenger/account': (_) => const PassengerAccountScreen(),
+    '/passenger/account/password': (_) => const ChangePasswordScreen(),
 
     // Driver flow (RF-13 to RF-15)
     '/driver/home': (_) => const DriverHomeScreen(),
@@ -57,6 +61,11 @@ class SmartBusApp extends StatelessWidget {
           // Needs the email to verify; without it there is nothing to show.
           if (args is! VerifyEmailArgs) return null;
           builder = (_) => VerifyEmailScreen(args: args);
+        } else if (settings.name == '/passenger/account/edit') {
+          final args = settings.arguments;
+          // Needs the current profile to pre-fill the form.
+          if (args is! AuthUser) return null;
+          builder = (_) => EditProfileScreen(user: args);
         } else {
           builder = _routes[settings.name];
         }

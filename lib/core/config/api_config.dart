@@ -97,6 +97,14 @@ class ApiConfig {
   /// `include=roles` embeds the roles, same as [authLogin].
   static Uri authUser() => _uri('$authService/user', {'include': 'roles'});
 
+  /// PATCH — the passenger updates their own name and/or email.
+  /// Auth service `PATCH /user`. Returns the updated user, like [authUser].
+  static Uri authUpdateProfile() =>
+      _uri('$authService/user', {'include': 'roles'});
+
+  /// PUT — the passenger changes their own password (current one required).
+  /// Auth service `PUT /user/password`.
+  static Uri authChangePassword() => _uri('$authService/user/password');
   /// DELETE — soft-deletes the signed-in passenger's own account and revokes
   /// all of their tokens. Auth service `DELETE /user` (body:
   /// `current_password`, `confirm_deletion`).
