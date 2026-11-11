@@ -52,6 +52,11 @@ class SmartBusApp extends StatelessWidget {
           final args = settings.arguments;
           final autoStart = args is Map && args['autoStart'] == true;
           builder = (_) => TripScreen(autoStart: autoStart);
+        } else if (settings.name == '/passenger/tracking') {
+          // Optional trip UUID; without it the screen uses DEMO_TRIP_ID.
+          final args = settings.arguments;
+          builder = (_) =>
+              BusTrackingScreen(tripId: args is String ? args : null);
         } else if (settings.name == '/verify-email') {
           final args = settings.arguments;
           // Needs the email to verify; without it there is nothing to show.
