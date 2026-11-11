@@ -105,6 +105,10 @@ class ApiConfig {
   /// PUT — the passenger changes their own password (current one required).
   /// Auth service `PUT /user/password`.
   static Uri authChangePassword() => _uri('$authService/user/password');
+  /// DELETE — soft-deletes the signed-in passenger's own account and revokes
+  /// all of their tokens. Auth service `DELETE /user` (body:
+  /// `current_password`, `confirm_deletion`).
+  static Uri authDeleteAccount() => _uri('$authService/user');
 
   /// POST — verify the email with the 6-digit code; logs the user in.
   /// `include=roles` embeds the roles, same as [authLogin].

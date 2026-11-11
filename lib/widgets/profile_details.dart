@@ -5,6 +5,7 @@ import '../core/storage/secure_session_store.dart';
 import '../core/theme.dart';
 import '../features/auth/models/auth_user.dart';
 import '../features/auth/services/auth_service.dart';
+import 'delete_account_dialog.dart';
 import 'smartbus_header.dart';
 
 /// Read-only "Mi Cuenta" view shared by the passenger and driver flows.
@@ -24,6 +25,10 @@ import 'smartbus_header.dart';
 /// With [onEditProfile] / [onChangePassword] (passengers), "Editar perfil" and
 /// "Cambiar contraseña" entries are shown; editing happens on their own
 /// screens, never inline.
+/// No field is editable. Other requests: `POST /auth/logout` from
+/// "Cerrar sesión" and, with [canDeleteAccount], `DELETE /auth/user` from
+/// "Eliminar cuenta" (after confirming with the current password). A deleted
+/// account goes to login and the back stack is removed.
 class ProfileDetails extends StatefulWidget {
   const ProfileDetails({
     super.key,
@@ -35,6 +40,7 @@ class ProfileDetails extends StatefulWidget {
     this.onDeleteAccount,
     this.onEditProfile,
     this.onChangePassword,
+    this.canDeleteAccount = false,
     this.authService,
     this.sessionStore,
   });
@@ -63,6 +69,9 @@ class ProfileDetails extends StatefulWidget {
 
   /// Opens "Cambiar contraseña". When null (drivers), the entry is not shown.
   final Future<void> Function()? onChangePassword;
+  /// Shows "Eliminar cuenta". Only passengers can delete their own account
+  /// (the backend rejects any other role), so drivers leave it `false`.
+  final bool canDeleteAccount;
 
   /// Injectable for tests; defaults to a real [AuthService].
   final AuthService? authService;
@@ -191,6 +200,30 @@ class _ProfileDetailsState extends State<ProfileDetails> {
 
     // Tapping outside or pressing back returns null: same as "Cancelar".
     if (confirmed == true && mounted) widget.onDeleteAccount?.call();
+  Future<void> _confirmDeleteAccount() async {
+    final outcome = await DeleteAccountDialog.show(
+      context,
+      (password) => _authService.deleteAccount(currentPassword: password),
+    );
+
+    // Tapping outside, back or "Cancelar" returns null: nothing happens.
+    if (outcome == null || !mounted) return;
+
+    final error = outcome.error;
+    if (error == null) {
+      // The session is already cleared by AuthService.deleteAccount.
+      _showMessage(outcome.message!, color: SmartBusColors.success);
+      Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+      return;
+    }
+    if (error.type == ApiErrorType.unauthorized) {
+      await _onSessionExpired();
+      return;
+    }
+    _showMessage(
+      'Acción no permitida: esta cuenta no se puede eliminar.',
+      color: SmartBusColors.error,
+    );
   }
 
   void _showMessage(String message, {Color? color}) {
@@ -236,7 +269,7 @@ class _ProfileDetailsState extends State<ProfileDetails> {
                 : null,
           ),
           Expanded(child: _buildContent()),
-          if (widget.onDeleteAccount != null) _buildDeleteAccountButton(),
+          if (widget.canDeleteAccount) _buildDeleteAccountButton(),
           _buildLogoutButton(),
         ],
       ),

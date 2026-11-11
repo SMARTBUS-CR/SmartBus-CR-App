@@ -15,6 +15,8 @@ import '../auth/services/auth_service.dart';
 /// "Eliminar cuenta" is UI only for now: Auth has no self-service deletion
 /// endpoint yet (`DELETE /api/users/{user}` requires `users.delete` and
 /// rejects deleting yourself), so confirming only shows a notice.
+/// Loading, 401, retry and "Eliminar cuenta" (soft delete through
+/// `DELETE /auth/user`) live in [ProfileDetails].
 class PassengerAccountScreen extends StatelessWidget {
   const PassengerAccountScreen({
     super.key,
@@ -65,6 +67,7 @@ class PassengerAccountScreen extends StatelessWidget {
       ),
       onChangePassword: () =>
           Navigator.pushNamed(context, '/passenger/account/password'),
+      canDeleteAccount: true,
       authService: authService,
       sessionStore: sessionStore,
       bottomNavigationBar: PassengerBottomNav(

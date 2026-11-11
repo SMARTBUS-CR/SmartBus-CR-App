@@ -360,6 +360,40 @@ class AuthService {
     }
   }
 
+  /// Soft-deletes the signed-in **passenger's** own account:
+  /// `DELETE {gateway}/auth/user` with `current_password` and
+  /// `confirm_deletion: true`.
+  ///
+  /// The backend marks the account as deleted (the data stays in the database
+  /// but the user can no longer log in) and revokes every token, so on success
+  /// the local session is cleared (no `POST /auth/logout`: the token is already
+  /// gone). Returns the backend message to show.
+  ///
+  /// Throws [ApiException]:
+  /// - [ApiErrorType.validation] — `fieldErrors['current_password']` (wrong
+  ///   password). The session is kept so the user can try again.
+  /// - [ApiErrorType.unauthorized] — the token expired; the local session is
+  ///   cleared.
+  /// - [ApiErrorType.forbidden] / [ApiErrorType.emailNotVerified] — the
+  ///   account cannot be deleted (not only a passenger, or email not verified).
+  /// - [ApiErrorType.tooManyRequests] — more than 5 attempts per minute.
+  /// - Network errors.
+  Future<String> deleteAccount({required String currentPassword}) async {
+    final Map<String, dynamic> body;
+    try {
+      body = await _client.delete(
+        ApiConfig.authDeleteAccount(),
+        body: {'current_password': currentPassword, 'confirm_deletion': true},
+      );
+    } on ApiException catch (e) {
+      if (e.type == ApiErrorType.unauthorized) await _session.clear();
+      rethrow;
+    }
+
+    await _session.clear();
+    return _metaMessage(body, fallback: 'Cuenta eliminada correctamente.');
+  }
+
   Future<bool> hasSession() => _session.hasSession();
 
   // --- Internals ------------------------------------------------------------
