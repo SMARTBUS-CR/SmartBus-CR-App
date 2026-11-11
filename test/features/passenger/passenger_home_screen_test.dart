@@ -31,6 +31,9 @@ class _FakeMap implements PassengerMapHandle {
   Future<void> showUserLocation(DeviceLocation location) async =>
       userLocations.add(location);
 
+  @override
+  Future<void> showBus(BusMarker? bus) async {}
+
   PassengerMapBuilder get builder => (context, options) {
     mode = options.mode;
     return _FakeMapWidget(onReady: () => options.onReady(this));
@@ -102,6 +105,8 @@ Future<void> _pump(
       ),
       routes: {
         '/passenger/search': (_) => const Scaffold(body: Text('search-screen')),
+        '/passenger/tracking': (_) =>
+            const Scaffold(body: Text('tracking-screen')),
       },
     ),
   );
@@ -332,6 +337,29 @@ void main() {
     await tester.pump();
 
     expect(find.text('Favoritos: próximamente.'), findsOneWidget);
+  });
+
+  testWidgets('"Mis viajes" chip opens the live bus tracking (demo trip)', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      location: _FakeLocationService(
+        access: LocationAccess.granted,
+        location: _user,
+      ),
+      map: _FakeMap(),
+    );
+
+    await tester.tap(
+      find.descendant(
+        of: find.byType(MapQuickChips),
+        matching: find.text('Mis viajes'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('tracking-screen'), findsOneWidget);
   });
 
   testWidgets('AC6 · dark mode keeps the light streets map (with places)', (
