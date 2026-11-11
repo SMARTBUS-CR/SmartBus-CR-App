@@ -189,6 +189,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   }
 
   void _onChipTap(MapQuickChip chip) {
+    // TODO: open the trip the passenger picks once the trip search exists.
+    // Meanwhile "Mis viajes" follows the demo trip (DEMO_TRIP_ID).
+    if (chip.label == 'Mis viajes') {
+      Navigator.pushNamed(context, '/passenger/tracking');
+      return;
+    }
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
