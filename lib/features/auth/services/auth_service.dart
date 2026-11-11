@@ -5,6 +5,7 @@ import '../../../core/storage/secure_session_store.dart';
 import '../models/auth_session.dart';
 import '../models/auth_user.dart';
 import '../models/pending_verification.dart';
+import '../models/profile_update.dart';
 
 /// Authentication service for SmartBus Global.
 ///
@@ -224,6 +225,95 @@ class AuthService {
 
     await _session.saveUser(user.toJson());
     return user;
+  }
+
+  /// The passenger updates their own profile:
+  /// `PATCH {gateway}/auth/user?include=roles`.
+  ///
+  /// Only the non-null fields are sent; pass only what changed.
+  /// [currentPassword] is required by the backend when [email] is sent.
+  ///
+  /// - Name only → the updated user is stored and the session stays as is.
+  /// - Email (with or without name) → the backend marks the new address as
+  ///   **unverified**, so the stored token stops working. The local session is
+  ///   cleared and [ProfileUpdate.requiresEmailVerification] is `true`: continue
+  ///   with [resendVerificationCode] + [verifyEmail] (which signs in again).
+  ///
+  /// Throws [ApiException]:
+  /// - [ApiErrorType.validation] — see [ApiException.fieldErrors]
+  ///   (`name`, `email` — e.g. already registered —, `current_password`).
+  /// - [ApiErrorType.unauthorized] — the token expired.
+  /// - [ApiErrorType.forbidden] — the account is not a passenger.
+  /// - [ApiErrorType.tooManyRequests] — more than 5 updates per minute.
+  /// - Network errors.
+  Future<ProfileUpdate> updateProfile({
+    String? name,
+    String? email,
+    String? currentPassword,
+  }) async {
+    assert(name != null || email != null, 'Nothing to update');
+
+    final body = await _client.patch(
+      ApiConfig.authUpdateProfile(),
+      body: {
+        'name': ?name,
+        'email': ?email,
+        'current_password': ?currentPassword,
+      },
+    );
+
+    var user = AuthUser.fromJsonApi(body);
+    // Defensive: keep the stored roles if the response has none.
+    if (user.roles.isEmpty) {
+      final stored = await _session.readUser();
+      if (stored != null) {
+        user = user.copyWith(roles: AuthUser.fromStorage(stored).roles);
+      }
+    }
+
+    final requiresEmailVerification = email != null;
+    if (requiresEmailVerification) {
+      // Unverified email: every protected route rejects this token now.
+      await _session.clear();
+    } else {
+      await _session.saveUser(user.toJson());
+    }
+
+    return ProfileUpdate(
+      user: user,
+      requiresEmailVerification: requiresEmailVerification,
+    );
+  }
+
+  /// The passenger changes their own password:
+  /// `PUT {gateway}/auth/user/password`.
+  ///
+  /// The user stays signed in on this device; the backend closes the sessions
+  /// on other devices. Returns the backend message to show.
+  ///
+  /// Throws [ApiException]:
+  /// - [ApiErrorType.validation] — see [ApiException.fieldErrors]
+  ///   (`current_password` wrong, `password` weak / compromised / same as the
+  ///   current one / not confirmed).
+  /// - [ApiErrorType.unauthorized] — the token expired.
+  /// - [ApiErrorType.forbidden] — the account is not a passenger.
+  /// - [ApiErrorType.tooManyRequests] — more than 5 changes per minute.
+  /// - Network errors.
+  Future<String> changePassword({
+    required String currentPassword,
+    required String password,
+    required String passwordConfirmation,
+  }) async {
+    final body = await _client.put(
+      ApiConfig.authChangePassword(),
+      body: {
+        'current_password': currentPassword,
+        'password': password,
+        'password_confirmation': passwordConfirmation,
+      },
+    );
+
+    return _metaMessage(body, fallback: 'Tu contraseña se actualizó.');
   }
 
   /// On app start: tries to restore the stored session.
