@@ -29,20 +29,23 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal), RF-09 (búsqueda) |
 | `passenger/route_search_screen.dart` | RF-09 |
 | `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar" |
+| `passenger/buses_in_progress_screen.dart` | "Buses en curso" (ruta `/passenger/buses`): rutas del Dashboard → recorridos de la ruta con sus buses en curso ("Ver en vivo") y sus paradas ("Ver ruta"). Ver sección 9 |
 | `passenger/bus_tracking_screen.dart` | RF-10 (ubicación en vivo, **conectada**: ver sección 7). RF-11 (ETA) y RF-12 (alertas) pendientes |
-| `driver/driver_home_screen.dart` | RF-13 (ruta asignada del día) |
+| `driver/driver_home_screen.dart` | RF-13: viajes asignados **hoy** (Dashboard `driver/trips`), "Iniciar" / "Continuar recorrido". Ver sección 9 |
 | `driver/driver_account_screen.dart` | Perfil del conductor ("Mi Cuenta"), solo lectura: aviso "contacta al administrador"; misma carga/401/"Reintentar" que el pasajero |
 | `widgets/profile_details.dart` | Vista de perfil compartida (pasajero y conductor): datos guardados + `fetchCurrentUser()`, 401 → login, "Reintentar" |
 | `widgets/smartbus_header.dart` | Header de todas las pantallas internas: degradado del tema por rol (`SmartBusUserType`), ola, ruta, pin y bus dibujados en código; variante `compact` para pantallas con mapa |
-| `driver/trip_screen.dart` | RF-15 (envío GPS). El inicio/fin del viaje (RF-14) lo hace el Dashboard: esta pantalla solo empieza y deja de enviar la ubicación (ver sección 8) |
+| `driver/trip_screen.dart` | RF-14 + RF-15: inicia el viaje en el Dashboard, envía el GPS y al finalizar lo completa (secciones 8 y 9). Desde la pestaña, sin viaje, busca el que está en curso |
 
 ## 3. Qué es placeholder vs. qué ya está "conectable"
 - **Placeholder puro** (solo UI, sin lógica): listas de rutas, ETA.
 - **Mapa del pasajero (real):** inicio del pasajero con MapLibre + OpenFreeMap
   (ver la sección 6).
 - **Seguimiento del bus en vivo (real):** "Rastreando tu bus" con la posición
-  del bus en tiempo real (ver la sección 7). Mientras no exista la búsqueda de
-  viajes, se abre desde el chip **"Mis viajes"** del inicio con `DEMO_TRIP_ID`.
+  del bus en tiempo real (ver la sección 7). Se abre desde el chip
+  **"Buses en curso"** del inicio, eligiendo ruta y bus (sección 9).
+- **Viajes reales del Dashboard (real):** el conductor ve e inicia sus viajes
+  del día; el pasajero elige un bus en curso (sección 9). Sin `DEMO_TRIP_ID`.
 - **Autenticación real (ya conectada al API Gateway):**
   - `core/config/api_config.dart` — URL única del Gateway (`--dart-define`).
   - `core/network/api_client.dart` — cliente HTTP reutilizable; adjunta el
@@ -60,9 +63,9 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
   Al reabrir la app, `SplashScreen` llama `restoreSession()`.
 
 ## 4. Siguientes pasos sugeridos
-1. Dibujar rutas y paradas sobre el mapa del pasajero (sección 6).
-2. Elegir el viaje a seguir (búsqueda de viajes / salidas por parada del
-   Dashboard) en vez de `DEMO_TRIP_ID`, y conectar el ETA (RF-16).
+1. Dibujar el trazo de la ruta y sus paradas sobre el mapa: los datos ya
+   llegan en `RoutePattern.geometry` y `RoutePattern.stops` (sección 9).
+2. Conectar el ETA (RF-16).
 3. Definir manejo de estado (Provider, Riverpod o Bloc) antes de que crezcan
    las pantallas — con `setState` alcanza solo para esta etapa.
 4. Agregar los nuevos microservicios en `ApiConfig` (`trips`, `gps`, `eta`, …)
@@ -204,7 +207,8 @@ verifica a mano en un dispositivo.
 ## 7. Seguimiento del bus en vivo (pasajero)
 
 "Rastreando tu bus" (`passenger/bus_tracking_screen.dart`, ruta
-`/passenger/tracking`, argumento opcional: el UUID del viaje) muestra el bus de
+`/passenger/tracking`, argumento obligatorio: el UUID del viaje, que llega desde
+"Buses en curso") muestra el bus de
 un viaje moviéndose en el mapa, sin recargar.
 
 ### Piezas
@@ -321,8 +325,8 @@ demora) sin tocar el Dashboard ni el GPS.
 
 ### Configuración
 
-`REVERB_APP_KEY`, `REVERB_HOST`, `REVERB_PORT`, `REVERB_SCHEME` y
-`DEMO_TRIP_ID` (ver la tabla de `--dart-define` y la sección 5.7 del
+`REVERB_APP_KEY`, `REVERB_HOST`, `REVERB_PORT` y `REVERB_SCHEME` (ver la
+tabla de `--dart-define` y la sección 5.7 del
 [README raíz](../README.md)). En Render solo hace falta `REVERB_APP_KEY`.
 
 ### Tests
@@ -352,12 +356,62 @@ teléfono, si la reporta) y `recorded_at`.
 
 En los casos que **dejan de enviar**, reintentar cada 5 s no sirve de nada: la
 pantalla muestra el motivo (`TripTrackingState.rejected`) y un botón
-**Reintentar** para cuando se corrija (por ejemplo, después de que el Dashboard
-inicie el viaje).
+**Reintentar** para cuando se corrija.
 
-**El viaje lo inicia y lo termina el Dashboard** (`trips/{id}/start` y
-`/complete`). "Iniciar / Finalizar recorrido" en esta app solo empieza o deja
-de enviar la ubicación; cuando el Dashboard publique esos endpoints por el
-Gateway, esos botones también los llamarán.
+"Iniciar recorrido" primero inicia el viaje en el Dashboard y "Finalizar
+recorrido" lo completa (sección 9), así el GPS ya no responde `409` por un
+viaje sin iniciar.
 
 Tests: `test/features/trip_tracking/trip_location_sender_test.dart`.
+
+## 9. Viajes reales del Dashboard (`ops`)
+
+La app llega al Dashboard por el Gateway con el prefijo **`ops`**
+(`ApiConfig.opsBaseUrl`, `--dart-define=OPS_GATEWAY_URL=...`; por defecto el
+mismo Gateway). Todo pasa por `OperationsService`
+(`features/operations/services/operations_service.dart`); los modelos están en
+`features/operations/models/operations_models.dart`.
+
+| Método | Endpoint (Gateway) | Token | Quién |
+|---|---|---|---|
+| `driverTrips({serviceDate, status})` | `GET ops/driver/trips` | Sí | Conductor |
+| `startTrip(id)` | `POST ops/trips/{id}/start` | Sí | Conductor asignado |
+| `completeTrip(id)` | `POST ops/trips/{id}/complete` | Sí | Conductor asignado |
+| `routes()` | `GET ops/routes` | No | Pasajero |
+| `routePatterns(routeId)` | `GET ops/routes/{id}/patterns` (trazo + paradas) | No | Pasajero |
+| `ongoingTrips(patternId)` | `GET ops/route-patterns/{id}/trips` (solo `in_progress`, sin datos del conductor) | No | Pasajero |
+
+### Conductor
+
+1. **Inicio** muestra los viajes de hoy (ruta, destino, horas, estado) y,
+   arriba, cualquier viaje de otro día que siga **en curso** (cruzó la
+   medianoche o nadie lo finalizó). Los viajes son **diarios**: el Dashboard
+   crea uno por fecha a partir de los horarios fijos.
+2. **Iniciar recorrido** (viaje `scheduled`): `startTrip` → el viaje queda
+   `in_progress` → empieza el envío de GPS. Si el Dashboard lo rechaza (409:
+   aún no es hora, otro viaje en curso…), se muestra el mensaje y no se envía nada.
+3. **Continuar recorrido** (viaje ya `in_progress`, p. ej. se cerró la app):
+   solo reanuda el GPS. La pestaña **Recorrido** sin viaje busca el que está en
+   curso.
+4. **Finalizar recorrido**: detiene el GPS y llama `completeTrip`. Si falla,
+   ofrece **Reintentar** (el GPS ya está detenido).
+
+### Pasajero
+
+Chip **"Buses en curso"** → lista de rutas → la ruta muestra cada recorrido
+(sentido) con:
+- sus **buses en curso** (unidad, placa, hora de salida) → **Ver en vivo** abre
+  "Rastreando tu bus" con ese viaje;
+- **Ver ruta**: las paradas en orden con los minutos desde el inicio, aunque no
+  haya buses en camino.
+
+Un viaje terminado desaparece de la lista (el Dashboard solo devuelve los
+`in_progress`).
+
+### Tests
+
+| Qué | Archivo |
+|---|---|
+| URLs, filtros y lectura JSON:API (trazo `[lng, lat]`, paradas ordenadas, snapshot) | `test/features/operations/operations_service_test.dart` |
+| Inicio del conductor y Recorrido: iniciar, continuar, rechazo, finalizar, reintentar | `test/features/driver/trip_screen_test.dart` |
+| Buses en curso: ruta → buses → en vivo, sin buses, ver ruta, reintentar | `test/features/passenger/buses_in_progress_screen_test.dart` |
