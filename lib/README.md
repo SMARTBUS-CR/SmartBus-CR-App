@@ -211,8 +211,8 @@ un viaje moviéndose en el mapa, sin recargar.
 
 | Pieza | Archivo |
 |---|---|
-| Pantalla: mapa, marcador del bus, panel de estado | `features/passenger/bus_tracking_screen.dart` |
-| Marcador del bus en el mapa (`showBus`, `BusMarker`) | `features/passenger/map/passenger_map.dart` |
+| Pantalla: mapa, bus, ubicación del pasajero, panel de estado | `features/passenger/bus_tracking_screen.dart` |
+| Pin del bus en el mapa (`showBus`, `BusMarker`; ícono dibujado en la app, sin assets) | `features/passenger/map/passenger_map.dart` |
 | Lógica: GET + eventos + frescura + reconexión | `features/trip_tracking/services/live_trip_tracker.dart` |
 | Canal del viaje (`private-trip.{id}`, evento `BusLocationUpdated`) | `features/trip_tracking/services/trip_live_feed.dart` |
 | Cliente WebSocket (protocolo Pusher de Reverb) | `core/realtime/pusher_connection.dart` |
@@ -267,6 +267,13 @@ tener la hora desfasada. `recorded_at` solo se usa para ordenar.
 | Posición de hace más de 5 min | "Sin señal del bus" | gris |
 | Terminado / cancelado | "Viaje finalizado" / "Viaje cancelado" | — |
 | No existe (404) | "No encontramos este viaje" | — |
+
+**En el mapa:** el bus es un **pin con ícono de bus** (verde en vivo, gris con
+señal débil o sin señal) cuya **punta** marca su posición. El pasajero se ve
+como su **punto verde con halo de precisión**, igual que en el inicio. Si están
+en el mismo lugar, el punto queda justo en la punta del pin: se distinguen los
+dos. La ubicación del pasajero solo se muestra si ya dio el permiso (lo pide el
+inicio); esta pantalla no lo vuelve a pedir y sin él muestra solo el bus.
 | Falla la primera carga | "No se pudo cargar el viaje" + **Reintentar** | — |
 | Sin tiempo real | aviso "Conectando en tiempo real…" | (se actualiza cada 15 s) |
 
