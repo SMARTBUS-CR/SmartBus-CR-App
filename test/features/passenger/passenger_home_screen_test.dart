@@ -12,11 +12,13 @@ import 'package:smartbus_drivers/features/operations/models/operations_models.da
 import 'package:smartbus_drivers/features/passenger/map/map_overlay.dart';
 import 'package:smartbus_drivers/features/passenger/map/passenger_map.dart';
 import 'package:smartbus_drivers/features/passenger/passenger_home_screen.dart';
+import 'package:smartbus_drivers/features/passenger/services/favorites_controller.dart';
 import 'package:smartbus_drivers/features/trip_tracking/models/trip_tracking.dart';
 import 'package:smartbus_drivers/features/trip_tracking/services/route_live_buses.dart';
 
 import '../operations/operations_fixtures.dart';
 import '../trip_tracking/trip_tracking_fakes.dart';
+import 'favorites_fakes.dart';
 
 // ---------------------------------------------------------------------------
 // Test doubles: the native MapLibre map cannot run in widget tests.
@@ -167,6 +169,8 @@ Future<void> _pump(
                 const Scaffold(body: Text('search-screen')),
             '/passenger/buses': (_) =>
                 const Scaffold(body: Text('buses-screen')),
+            '/passenger/favorites': (_) =>
+                const Scaffold(body: Text('favorites-screen')),
           },
     ),
   );
@@ -175,6 +179,10 @@ Future<void> _pump(
 
 void main() {
   setUp(() {
+    // The star of the route panel: no network.
+    FavoritesController.shared = FavoritesController(
+      service: FakeFavoritesService(),
+    );
     FlutterSecureStorage.setMockInitialValues({
       'sb_user': jsonEncode({
         'id': '01a0c691-579f-731c-a034-03cc8fe8136f',
@@ -394,10 +402,28 @@ void main() {
       map: _FakeMap(),
     );
 
-    await tester.tap(find.text('Favoritos'));
+    await tester.tap(find.text('Paradas cercanas'));
     await tester.pump();
 
-    expect(find.text('Favoritos: próximamente.'), findsOneWidget);
+    expect(find.text('Paradas cercanas: próximamente.'), findsOneWidget);
+  });
+
+  testWidgets('Favorites AC1 · "Favoritos" chip opens "Mis favoritos"', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      location: _FakeLocationService(
+        access: LocationAccess.granted,
+        location: _user,
+      ),
+      map: _FakeMap(),
+    );
+
+    await tester.tap(find.text('Favoritos'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('favorites-screen'), findsOneWidget);
   });
 
   testWidgets('"Buses en curso" chip opens the list of routes with buses', (
