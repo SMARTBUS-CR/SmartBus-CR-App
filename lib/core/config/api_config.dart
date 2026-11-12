@@ -220,6 +220,9 @@ class ApiConfig {
   static Uri opsTripComplete(String tripId) =>
       _opsUri('trips/$tripId/complete');
 
+  /// GET — one trip of the driver, with its current status (token).
+  static Uri opsTrip(String tripId) => _opsUri('trips/$tripId');
+
   /// GET — public route catalogue.
   static Uri opsRoutes([Map<String, dynamic>? query]) =>
       _opsUri('routes', query);
