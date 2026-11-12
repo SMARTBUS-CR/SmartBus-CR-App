@@ -85,7 +85,19 @@ class ApiConfig {
   /// `REVERB_APP_KEY` of the GPS service. It is **not** a secret (the secret
   /// never leaves the backend). Empty = no real time: the map falls back to
   /// asking the position every few seconds.
-  static const String reverbAppKey = String.fromEnvironment('REVERB_APP_KEY');
+  ///
+  /// The default is the key of the **-dev** GPS service on Render (Render →
+  /// GPS service -dev → Environment → `REVERB_APP_KEY`), so a plain
+  /// `flutter run` has real time against -dev. Override it per environment:
+  ///   `--dart-define=REVERB_APP_KEY=...`
+  /// (with a local Reverb, pass the key of the local `.env`).
+  static const String reverbAppKey = String.fromEnvironment(
+    'REVERB_APP_KEY',
+    defaultValue: _devReverbAppKey,
+  );
+
+  /// TODO: paste here the `REVERB_APP_KEY` of the -dev GPS service on Render.
+  static const String _devReverbAppKey = 'd193ac195d39ea68330c';
 
   /// Empty = the host of [gpsBaseUrl].
   static const String reverbHost = String.fromEnvironment('REVERB_HOST');
@@ -167,6 +179,7 @@ class ApiConfig {
   /// PUT — the passenger changes their own password (current one required).
   /// Auth service `PUT /user/password`.
   static Uri authChangePassword() => _uri('$authService/user/password');
+
   /// DELETE — soft-deletes the signed-in passenger's own account and revokes
   /// all of their tokens. Auth service `DELETE /user` (body:
   /// `current_password`, `confirm_deletion`).
