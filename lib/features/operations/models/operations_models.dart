@@ -17,14 +17,28 @@ class DriverTrip {
     this.routeCode,
     this.routeName,
     this.headsign,
+    this.busPlate,
+    this.busUnit,
+    this.plannedPattern,
   });
 
-  /// [resource] is one item of `data` (`{id, type, attributes}`).
-  factory DriverTrip.fromJsonApi(Map<String, dynamic> resource) {
+  /// [resource] is one item of `data` (`{id, type, attributes}`). [included]
+  /// is the document's `included` array (`include=pattern,bus`): the bus
+  /// plate, and the pattern headsign when the trip has no route snapshot.
+  factory DriverTrip.fromJsonApi(
+    Map<String, dynamic> resource, {
+    JsonApiIncluded included = const JsonApiIncluded.empty(),
+  }) {
     final attributes = _attributes(resource);
     // The Dashboard copies the route into the trip when it is planned.
     final snapshot = attributes['planned_route_snapshot'];
     final route = snapshot is Map ? snapshot : const {};
+    final links = resource['relationships'];
+    final relationships = links is Map ? links : const {};
+    final bus = included.single(relationships['bus']);
+    final busAttributes = bus == null ? const {} : _attributes(bus);
+    final pattern = included.single(relationships['pattern']);
+    final patternAttributes = pattern == null ? const {} : _attributes(pattern);
     return DriverTrip(
       id: resource['id'].toString(),
       status: TripStatus.fromApi(attributes['status']),
@@ -34,7 +48,46 @@ class DriverTrip {
       actualDepartureAt: _date(attributes['actual_departure_at']),
       routeCode: _string(route['route_code']),
       routeName: _string(route['route_name']),
-      headsign: _string(route['headsign']),
+      headsign:
+          _string(route['headsign']) ?? _string(patternAttributes['headsign']),
+      busPlate: _string(busAttributes['plate_number']),
+      busUnit: _string(busAttributes['unit_number']),
+      plannedPattern: _snapshotPattern(
+        route,
+        fallbackId: _string(attributes['route_pattern_id']),
+      ),
+    );
+  }
+
+  /// The route frozen in `planned_route_snapshot` when the trip was planned:
+  /// line (`route_geometry`) and stops (`occurrences`, `lat` / `lng` may be
+  /// strings). `null` when the snapshot has neither.
+  static RoutePattern? _snapshotPattern(Map snapshot, {String? fallbackId}) {
+    final occurrences = snapshot['occurrences'];
+    final stops = <PatternStop>[
+      if (occurrences is List)
+        for (final item in occurrences.whereType<Map>())
+          PatternStop(
+            stopId: item['stop_id']?.toString() ?? '',
+            name: _string(item['name']) ?? 'Parada',
+            sequence: _number(item['stop_sequence'])?.toInt() ?? 0,
+            minutesFromStart: _number(item['minutes_from_start'])?.toInt(),
+            latitude: _number(item['lat']),
+            longitude: _number(item['lng']),
+          ),
+    ]..sort((a, b) => a.sequence.compareTo(b.sequence));
+    final geometry = _lineString(snapshot['route_geometry']);
+    if (stops.isEmpty && geometry.isEmpty) return null;
+    return RoutePattern(
+      id: _string(snapshot['pattern_id']) ?? fallbackId ?? '',
+      name: _string(snapshot['pattern_name']) ?? '',
+      code: _string(snapshot['pattern_code']),
+      headsign: _string(snapshot['headsign']),
+      routeId: _string(snapshot['route_id']),
+      stops: stops,
+      geometry: geometry,
+      distanceMeters: _number(snapshot['distance_meters']),
+      drivingDurationSeconds: _number(snapshot['driving_duration_seconds']),
     );
   }
 
@@ -47,6 +100,43 @@ class DriverTrip {
   final String? routeCode;
   final String? routeName;
   final String? headsign;
+
+  /// Plate and unit number of the assigned bus (`include=bus`).
+  final String? busPlate;
+  final String? busUnit;
+
+  /// The route the driver must follow (line + stops), as planned for this
+  /// trip. `null` when the snapshot has no route data.
+  final RoutePattern? plannedPattern;
+
+  /// When the trip left: the backend's actual departure, else the scheduled.
+  DateTime? get departureAt => actualDepartureAt ?? scheduledDepartureAt;
+
+  /// The same trip with [pattern] as its planned route, or — when
+  /// [pattern] is null — keeping this one's ([plannedPattern]).
+  DriverTrip withPlannedPattern(RoutePattern? pattern) => DriverTrip(
+    id: id,
+    status: status,
+    routePatternId: routePatternId,
+    scheduledDepartureAt: scheduledDepartureAt,
+    scheduledArrivalAt: scheduledArrivalAt,
+    actualDepartureAt: actualDepartureAt,
+    routeCode: routeCode,
+    routeName: routeName,
+    headsign: headsign,
+    busPlate: busPlate,
+    busUnit: busUnit,
+    plannedPattern: pattern ?? plannedPattern,
+  );
+
+  /// "Bus ABC-123 · Unidad 12", or whatever part is known; `null` if none.
+  String? get busLabel {
+    final parts = [
+      if (busPlate != null) 'Bus $busPlate',
+      if (busUnit != null) 'Unidad $busUnit',
+    ];
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
 
   /// "PV-RF · Puerto Viejo", or whatever part is known.
   String get title {
