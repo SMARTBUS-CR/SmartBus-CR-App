@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -509,56 +511,6 @@ void main() {
       expect(find.text('El viaje aún no ha iniciado'), findsOneWidget);
     });
 
-    testWidgets('"Finalizar recorrido": stops the GPS and completes the trip', (
-      tester,
-    ) async {
-      final operations = FakeOperations();
-      final sender = _FakeSender();
-      await _pumpTrip(
-        tester,
-        operations: operations,
-        sender: sender,
-        status: 'in_progress',
-        autoStart: true,
-      );
-
-      await tester.tap(find.text('Finalizar recorrido'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Finalizar'));
-      await tester.pumpAndSettle();
-
-      expect(sender.stops, 1);
-      expect(operations.calls.last, 'complete $tripId');
-      expect(find.text('Recorrido finalizado'), findsOneWidget);
-    });
-
-    testWidgets('complete fails: offers to retry', (tester) async {
-      final operations = FakeOperations(
-        completeError: ApiException.noConnection,
-      );
-      final sender = _FakeSender();
-      await _pumpTrip(
-        tester,
-        operations: operations,
-        sender: sender,
-        status: 'in_progress',
-        autoStart: true,
-      );
-
-      await tester.tap(find.text('Finalizar recorrido'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Finalizar'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('No se pudo finalizar el viaje'), findsOneWidget);
-
-      operations.completeError = null;
-      await tester.tap(find.text('Reintentar'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Recorrido finalizado'), findsOneWidget);
-    });
-
     testWidgets('from the tab: picks up the trip in progress', (tester) async {
       final operations = FakeOperations(
         trips: [driverTrip(status: 'in_progress')],
@@ -586,6 +538,216 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('home'), findsOneWidget);
     });
+  });
+
+  group('Trip completion', () {
+    /// A trip in progress with the GPS sending.
+    Future<(FakeOperations, _FakeSender)> pumpRunning(
+      WidgetTester tester,
+    ) async {
+      final operations = FakeOperations();
+      final sender = _FakeSender();
+      await _pumpTrip(
+        tester,
+        operations: operations,
+        sender: sender,
+        status: 'in_progress',
+        autoStart: true,
+      );
+      return (operations, sender);
+    }
+
+    /// "Finalizar recorrido" → "Finalizar" in the dialog.
+    Future<void> finish(WidgetTester tester, {bool settle = true}) async {
+      await tester.tap(find.byKey(const Key('finish-trip')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('finish-trip-confirm')));
+      if (settle) {
+        await tester.pumpAndSettle();
+      } else {
+        // The dialog closes; the spinner keeps animating (no settle).
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pump();
+      }
+    }
+
+    int completes(FakeOperations operations) =>
+        operations.calls.where((c) => c.startsWith('complete')).length;
+
+    testWidgets('AC1 · shown while the trip is in progress', (tester) async {
+      await pumpRunning(tester);
+      expect(find.text('Finalizar recorrido'), findsOneWidget);
+    });
+
+    testWidgets('AC1 · also when the GPS is paused (trip still in progress)', (
+      tester,
+    ) async {
+      await _pumpTrip(
+        tester,
+        operations: FakeOperations(trips: [driverTrip(status: 'in_progress')]),
+        sender: _FakeSender(),
+      );
+      expect(find.text('Continuar recorrido'), findsOneWidget);
+      expect(find.text('Finalizar recorrido'), findsOneWidget);
+    });
+
+    testWidgets('AC1 · not shown for a trip that is not in progress', (
+      tester,
+    ) async {
+      await _pumpTrip(
+        tester,
+        operations: FakeOperations(),
+        sender: _FakeSender(),
+        status: 'scheduled',
+      );
+      expect(find.text('Finalizar recorrido'), findsNothing);
+    });
+
+    testWidgets('AC2 · asks first; "Cancelar" or a tap outside sends nothing '
+        'and keeps the GPS', (tester) async {
+      final (operations, sender) = await pumpRunning(tester);
+
+      await tester.tap(find.byKey(const Key('finish-trip')));
+      await tester.pumpAndSettle();
+      expect(find.text('¿Finalizar el recorrido?'), findsOneWidget);
+      await tester.tap(find.text('Cancelar'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('finish-trip')));
+      await tester.pumpAndSettle();
+      await tester.tapAt(const Offset(10, 10)); // outside the dialog
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('finish-trip-dialog')), findsNothing);
+      expect(completes(operations), 0);
+      expect(sender.stops, 0);
+      expect(_sending, findsOneWidget);
+    });
+
+    testWidgets('AC3 + AC4 + AC6 · 200: completed, the GPS stops, and the '
+        "arrival is the backend's actual_arrival_at in local time", (
+      tester,
+    ) async {
+      final (operations, sender) = await pumpRunning(tester);
+
+      await finish(tester);
+
+      expect(operations.calls.last, 'complete $tripId');
+      expect(sender.stops, 1);
+      expect(find.text('Recorrido finalizado'), findsOneWidget);
+      final arrival = DateTime.parse(completedArrivalAt);
+      expect(find.text('Llegada: ${formatHour(arrival)}'), findsOneWidget);
+      expect(find.byKey(const Key('trip-map')), findsNothing);
+    });
+
+    testWidgets('AC5 · while waiting: spinner, disabled, GPS still sending; '
+        'it stops only when the backend confirms', (tester) async {
+      final (operations, sender) = await pumpRunning(tester);
+      operations.completeGate = Completer<void>();
+
+      await finish(tester, settle: false);
+
+      expect(
+        find.byKey(const Key('finish-trip-dialog')),
+        findsNothing,
+        reason: 'first dialog still open',
+      );
+      expect(find.text('Finalizando…'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('finish-trip')),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('finish-trip')));
+      await tester.pump();
+      expect(find.byKey(const Key('finish-trip-dialog')), findsNothing);
+      expect(sender.stops, 0);
+      expect(_sending, findsOneWidget);
+
+      operations.completeGate!.complete();
+      await tester.pumpAndSettle();
+      expect(completes(operations), 1);
+      expect(sender.stops, 1);
+      expect(find.text('Recorrido finalizado'), findsOneWidget);
+    });
+
+    testWidgets('AC7 · 409 and the trip was cancelled: backend message, the '
+        'GPS stops, "Viaje cancelado"', (tester) async {
+      final (operations, sender) = await pumpRunning(tester);
+      operations
+        ..completeError = ApiException.fromStatus(
+          409,
+          serverMessage: 'Solo se pueden completar viajes en curso.',
+        )
+        ..tripStatus = 'cancelled';
+
+      await finish(tester);
+
+      expect(
+        find.text('Solo se pueden completar viajes en curso.'),
+        findsOneWidget,
+      );
+      expect(operations.calls.last, 'trip $tripId');
+      expect(sender.stops, 1);
+      expect(find.text('Viaje cancelado'), findsOneWidget);
+    });
+
+    testWidgets('AC7 · 409 but the trip is still in progress: the GPS keeps '
+        'sending', (tester) async {
+      final (operations, sender) = await pumpRunning(tester);
+      operations.completeError = ApiException.fromStatus(
+        409,
+        serverMessage: 'Solo se pueden completar viajes en curso.',
+      );
+
+      await finish(tester);
+
+      expect(sender.stops, 0);
+      expect(find.byKey(const Key('trip-map')), findsOneWidget);
+    });
+
+    for (final status in [403, 404]) {
+      testWidgets('AC8 · $status: "No puedes finalizar este viaje." and the '
+          'GPS stops', (tester) async {
+        final (operations, sender) = await pumpRunning(tester);
+        operations.completeError = ApiException.fromStatus(status);
+
+        await finish(tester);
+
+        expect(find.text(cannotCompleteMessage), findsWidgets);
+        expect(sender.stops, 1);
+        expect(find.text('Ir a Inicio'), findsOneWidget);
+      });
+    }
+
+    for (final error in [
+      ApiException.noConnection,
+      ApiException.timeout,
+      ApiException.fromStatus(429),
+      ApiException.fromStatus(503),
+    ]) {
+      testWidgets('AC9 · ${error.type.name}: SnackBar with "Reintentar"; the '
+          'trip stays in progress and the GPS keeps sending', (tester) async {
+        final (operations, sender) = await pumpRunning(tester);
+        operations.completeError = error;
+
+        await finish(tester);
+
+        expect(find.text(error.message), findsOneWidget);
+        expect(sender.stops, 0);
+        expect(_sending, findsOneWidget);
+        expect(find.byKey(const Key('finish-trip')), findsOneWidget);
+
+        operations.completeError = null;
+        await tester.tap(find.text('Reintentar'));
+        await tester.pumpAndSettle();
+        expect(completes(operations), 2);
+        expect(find.text('Recorrido finalizado'), findsOneWidget);
+      });
+    }
   });
 }
 
