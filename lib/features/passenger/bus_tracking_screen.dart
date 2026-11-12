@@ -418,6 +418,16 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
                   bottom: 6,
                   child: MapAttribution(mode: MapMode.streets),
                 ),
+                if (_route case final route? when !route.hasGeometry)
+                  const Positioned(
+                    left: 12,
+                    top: 12,
+                    right: 12,
+                    child: Align(
+                      alignment: Alignment.topLeft,
+                      child: ApproximateRouteNote(),
+                    ),
+                  ),
                 Positioned(
                   right: 16,
                   bottom: 24,
