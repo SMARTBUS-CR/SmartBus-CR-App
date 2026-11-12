@@ -67,6 +67,11 @@ class SmartBusApp extends StatelessWidget {
           final args = settings.arguments;
           if (args is! String) return null;
           builder = (_) => BusTrackingScreen(tripId: args);
+        } else if (settings.name == '/passenger/route') {
+          // Route detail (directions, stops, buses running), from the search.
+          final args = settings.arguments;
+          if (args is! TransitRoute) return null;
+          builder = (_) => RouteBusesScreen(route: args);
         } else if (settings.name == '/verify-email') {
           final args = settings.arguments;
           // Needs the email to verify; without it there is nothing to show.

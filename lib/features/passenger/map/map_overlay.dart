@@ -76,29 +76,15 @@ List<BoxShadow> _shadow(double opacity) => [
   ),
 ];
 
-/// Floating search field with the SmartBus logo ("¿A dónde vas?").
+/// Floating search bar with the SmartBus logo ("¿A dónde vas?").
 ///
-/// The user types right here (no extra screen). While searching, the logo turns
-/// into a back arrow that closes the search, and a clear button empties it.
+/// It is a button, not a field: tapping it opens the "Buscar ruta" screen
+/// ([onTap]), where the user types.
 class MapSearchBar extends StatelessWidget {
-  const MapSearchBar({
-    super.key,
-    required this.colors,
-    required this.controller,
-    required this.focusNode,
-    required this.searching,
-    required this.onClose,
-  });
+  const MapSearchBar({super.key, required this.colors, required this.onTap});
 
   final MapOverlayColors colors;
-  final TextEditingController controller;
-  final FocusNode focusNode;
-
-  /// `true` while the field is focused or has text.
-  final bool searching;
-
-  /// Closes the search: clears the text and hides the keyboard.
-  final VoidCallback onClose;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -110,128 +96,45 @@ class MapSearchBar extends StatelessWidget {
         borderRadius: BorderRadius.circular(_cardRadius),
         boxShadow: _shadow(0.18),
       ),
-      child: Row(
-        children: [
-          const SizedBox(width: 6),
-          if (searching)
-            IconButton(
-              key: const Key('map-search-close'),
-              tooltip: 'Cerrar búsqueda',
-              icon: Icon(Icons.arrow_back, color: colors.accent),
-              onPressed: onClose,
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: ClipOval(
-                child: Image.asset(
-                  'assets/icons/icon_circle.png',
-                  width: 30,
-                  height: 30,
-                  errorBuilder: (_, _, _) =>
-                      Icon(Icons.directions_bus, color: colors.accent),
-                ),
-              ),
-            ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: TextField(
-              key: const Key('map-search-field'),
-              controller: controller,
-              focusNode: focusNode,
-              textInputAction: TextInputAction.search,
-              style: TextStyle(color: colors.onSurface, fontSize: 16),
-              cursorColor: colors.accent,
-              decoration: InputDecoration(
-                hintText: '¿A dónde vas?',
-                hintStyle: TextStyle(color: colors.muted, fontSize: 16),
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                filled: false,
-                isCollapsed: true,
-              ),
-            ),
-          ),
-          ValueListenableBuilder<TextEditingValue>(
-            valueListenable: controller,
-            builder: (context, value, _) => value.text.isEmpty
-                ? Padding(
-                    padding: const EdgeInsets.only(right: 16),
-                    child: Icon(Icons.search, color: colors.accent),
-                  )
-                : IconButton(
-                    key: const Key('map-search-clear'),
-                    tooltip: 'Borrar',
-                    icon: Icon(Icons.close, color: colors.accent),
-                    onPressed: controller.clear,
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Results panel under the search field. Route search is not available yet,
-/// so it always says "próximamente" (echoing what the user typed).
-class MapSearchResults extends StatelessWidget {
-  const MapSearchResults({
-    super.key,
-    required this.colors,
-    required this.query,
-  });
-
-  final MapOverlayColors colors;
-  final String query;
-
-  @override
-  Widget build(BuildContext context) {
-    final text = query.trim();
-    final detail = text.isEmpty
-        ? 'Escribe una ruta, parada o destino.'
-        : 'Pronto verás aquí las rutas para "$text".';
-
-    return Container(
-      key: const Key('map-search-results'),
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: _shadow(0.12),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: colors.accent.withValues(alpha: 0.12),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(Icons.alt_route, color: colors.accent),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          key: const Key('map-search-field'),
+          borderRadius: BorderRadius.circular(_cardRadius),
+          onTap: onTap,
+          child: Semantics(
+            button: true,
+            label: 'Buscar ruta',
+            excludeSemantics: true,
+            child: Row(
               children: [
-                Text(
-                  'Búsqueda de rutas: próximamente',
-                  style: TextStyle(
-                    color: colors.onSurface,
-                    fontWeight: FontWeight.w600,
+                const SizedBox(width: 12),
+                ClipOval(
+                  child: Image.asset(
+                    'assets/icons/icon_circle.png',
+                    width: 30,
+                    height: 30,
+                    errorBuilder: (_, _, _) =>
+                        Icon(Icons.directions_bus, color: colors.accent),
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  detail,
-                  style: TextStyle(color: colors.muted, fontSize: 13),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '¿A dónde vas?',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: colors.muted, fontSize: 16),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 16),
+                  child: Icon(Icons.search, color: colors.accent),
                 ),
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }

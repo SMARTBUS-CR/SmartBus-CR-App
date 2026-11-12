@@ -61,20 +61,53 @@ class TransitRoute {
     required this.id,
     required this.code,
     required this.name,
+    this.companyName,
+    this.destinations = const [],
     this.patterns = const [],
   });
 
-  /// [patterns] are the route's directions when the document has them
-  /// (`include=patterns`); see [linkedPatternIds].
+  /// [included] is the document's `included` array (`include=company,patterns`):
+  /// it gives the company name and the destinations (`headsign`) of each
+  /// direction. [patterns] are the route's parsed directions when the caller
+  /// has them (see [linkedPatternIds]); their destinations count too.
+  /// Without either, only code and name are known.
   factory TransitRoute.fromJsonApi(
     Map<String, dynamic> resource, {
+    JsonApiIncluded included = const JsonApiIncluded.empty(),
     List<RoutePattern> patterns = const [],
   }) {
     final attributes = _attributes(resource);
+    final relationships = resource['relationships'];
+    final links = relationships is Map ? relationships : const {};
+
+    final company = included.single(links['company']);
+    final companyAttributes = company == null
+        ? const <String, dynamic>{}
+        : _attributes(company);
+
+    final destinations = <String>[];
+    void addDestination(String? headsign) {
+      if (headsign != null && !destinations.contains(headsign)) {
+        destinations.add(headsign);
+      }
+    }
+
+    for (final pattern in patterns) {
+      addDestination(pattern.headsign);
+    }
+    for (final pattern in included.many(links['patterns'])) {
+      addDestination(_string(_attributes(pattern)['headsign']));
+    }
+
     return TransitRoute(
       id: resource['id'].toString(),
       code: _string(attributes['code']) ?? '',
       name: _string(attributes['name']) ?? '',
+      companyName:
+          _string(companyAttributes['trade_name']) ??
+          _string(companyAttributes['legal_name']) ??
+          _string(companyAttributes['name']),
+      destinations: destinations,
       patterns: patterns,
     );
   }
@@ -82,6 +115,13 @@ class TransitRoute {
   final String id;
   final String code;
   final String name;
+
+  /// Operator of the route (trade name), when the company was included.
+  final String? companyName;
+
+  /// Distinct destinations of its directions ("Heredia", "San José"), when the
+  /// patterns were included.
+  final List<String> destinations;
 
   /// Directions / variants of the route. Empty unless they were requested
   /// (`GET ops/routes?include=patterns`) or added with [withPatterns].
@@ -108,8 +148,18 @@ class TransitRoute {
         : (pattern.name.isEmpty ? pattern.label : pattern.name);
   }
 
-  TransitRoute withPatterns(List<RoutePattern> patterns) =>
-      TransitRoute(id: id, code: code, name: name, patterns: patterns);
+  /// Same route with [patterns] (company and known destinations are kept).
+  TransitRoute withPatterns(List<RoutePattern> patterns) => TransitRoute(
+    id: id,
+    code: code,
+    name: name,
+    companyName: companyName,
+    destinations: {
+      ...destinations,
+      for (final pattern in patterns) ?pattern.headsign,
+    }.toList(),
+    patterns: patterns,
+  );
 
   /// Ids in `relationships.patterns.data` of a route resource, in order.
   /// `null` when the document does not have that relationship.
@@ -123,6 +173,46 @@ class TransitRoute {
     return [
       for (final item in data.whereType<Map>())
         if (item['id'] != null) item['id'].toString(),
+    ];
+  }
+}
+
+/// One page of route search results.
+class RoutePage {
+  const RoutePage({required this.routes, required this.hasMore});
+
+  final List<TransitRoute> routes;
+
+  /// There is a next page ("Cargar más").
+  final bool hasMore;
+}
+
+/// The `included` array of a JSON:API document, looked up by resource id.
+class JsonApiIncluded {
+  JsonApiIncluded(Object? included)
+    : _byId = {
+        if (included is List)
+          for (final item in included.whereType<Map>())
+            if (item['id'] != null)
+              item['id'].toString(): Map<String, dynamic>.from(item),
+      };
+
+  const JsonApiIncluded.empty() : _byId = const {};
+
+  final Map<String, Map<String, dynamic>> _byId;
+
+  /// Resource of a to-one relationship (`{data: {type, id}}`), if included.
+  Map<String, dynamic>? single(Object? relationship) {
+    final data = relationship is Map ? relationship['data'] : null;
+    return data is Map ? _byId[data['id']?.toString()] : null;
+  }
+
+  /// Included resources of a to-many relationship (`{data: [{type, id}]}`).
+  List<Map<String, dynamic>> many(Object? relationship) {
+    final data = relationship is Map ? relationship['data'] : null;
+    if (data is! List) return const [];
+    return [
+      for (final link in data.whereType<Map>()) ?_byId[link['id']?.toString()],
     ];
   }
 }
@@ -293,6 +383,32 @@ class LiveBusTrip {
     return parts.isEmpty ? 'Bus en camino' : parts.join(' · ');
   }
 }
+
+/// [text] in lower case and without accents ("José Peña" → "jose pena"), to
+/// compare searches with or without tildes.
+///
+/// Character by character, so the result has the **same length** as [text]:
+/// a match found in the folded text is at the same position in the original
+/// (used to highlight it).
+String foldForSearch(String text) {
+  final buffer = StringBuffer();
+  for (final char in text.split('')) {
+    final lower = char.toLowerCase();
+    // A few characters change length when lower-cased ("İ"): keep them.
+    final single = lower.length == 1 ? lower : char;
+    buffer.write(_accentless[single] ?? single);
+  }
+  return buffer.toString();
+}
+
+const _accentless = {
+  'á': 'a', 'à': 'a', 'ä': 'a', 'â': 'a', 'ã': 'a', //
+  'é': 'e', 'è': 'e', 'ë': 'e', 'ê': 'e', //
+  'í': 'i', 'ì': 'i', 'ï': 'i', 'î': 'i', //
+  'ó': 'o', 'ò': 'o', 'ö': 'o', 'ô': 'o', 'õ': 'o', //
+  'ú': 'u', 'ù': 'u', 'ü': 'u', 'û': 'u', //
+  'ñ': 'n', 'ç': 'c',
+};
 
 /// "07:05" — local time, 24 h.
 String formatHour(DateTime time) {
