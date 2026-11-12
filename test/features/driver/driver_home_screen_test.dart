@@ -151,6 +151,67 @@ void main() {
     });
   });
 
+  group('stops of the assigned trip (before starting it)', () {
+    testWidgets('"Ver paradas" lists them in order with their times', (
+      tester,
+    ) async {
+      await _Harness(
+        FakeOperations(trips: [driverTrip(snapshot: plannedSnapshot)]),
+      ).pump(tester);
+
+      // Collapsed by default: the list stays short.
+      expect(find.text('Ver paradas (3)'), findsOneWidget);
+      expect(find.text('Centro'), findsNothing);
+
+      await tester.tap(find.byKey(const Key('trip-stops-$tripId')));
+      await tester.pumpAndSettle();
+
+      // Sorted by stop_sequence, at departure + minutes_from_start.
+      String at(int minutes) => formatHour(
+        DateTime.utc(
+          2026,
+          11,
+          11,
+          13,
+        ).toLocal().add(Duration(minutes: minutes)),
+      );
+      for (final (i, name, minutes) in [
+        (0, 'Terminal', 0),
+        (1, 'Centro', 10),
+        (2, 'Muelle', 20),
+      ]) {
+        final row = find.byKey(Key('trip-stop-$tripId-$i'));
+        expect(
+          find.descendant(of: row, matching: find.text(name)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: row, matching: find.text(at(minutes))),
+          findsOneWidget,
+        );
+      }
+      expect(
+        tester.getTopLeft(find.text('Terminal')).dy,
+        lessThan(tester.getTopLeft(find.text('Muelle')).dy),
+      );
+
+      await tester.tap(find.byKey(const Key('trip-stops-$tripId')));
+      await tester.pumpAndSettle();
+      expect(find.text('Centro'), findsNothing);
+      // Still possible to start the trip.
+      expect(_startButton(), findsOneWidget);
+    });
+
+    testWidgets('a trip without stops in its plan: no "Ver paradas"', (
+      tester,
+    ) async {
+      await _Harness(FakeOperations(trips: [driverTrip()])).pump(tester);
+
+      expect(find.byKey(const Key('trip-stops-$tripId')), findsNothing);
+      expect(_startButton(), findsOneWidget);
+    });
+  });
+
   group('AC2 · "Iniciar recorrido" button', () {
     testWidgets('only on scheduled trips', (tester) async {
       await _Harness(
