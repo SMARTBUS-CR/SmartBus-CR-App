@@ -26,7 +26,8 @@ enum ApiErrorType {
   notFound,
 
   /// 409 — the request conflicts with the current state of the resource
-  /// (e.g. GPS: the trip is not in progress).
+  /// (e.g. GPS: the trip is not in progress; Dashboard: only scheduled trips
+  /// can be started). [ApiException.message] carries the backend message.
   conflict,
 
   /// 422 — validation error on the submitted data.
@@ -98,7 +99,7 @@ class ApiException implements Exception {
   /// Builds the exception from an HTTP error status code.
   ///
   /// [serverMessage] is the backend message, used only when it is safe to show
-  /// (400, 422 and known 403 codes). [fieldErrors] are the per-field
+  /// (400, 409, 422 and known 403 codes). [fieldErrors] are the per-field
   /// validation errors (422). [errorCode] is the backend `errors[0].code`.
   factory ApiException.fromStatus(
     int status, {
@@ -139,9 +140,10 @@ class ApiException implements Exception {
           statusCode: 404,
         );
       case 409:
-        return const ApiException(
+        // e.g. "Only scheduled trips can be started." (Dashboard).
+        return ApiException(
           ApiErrorType.conflict,
-          'La acción no se puede realizar en este momento.',
+          serverMessage ?? 'La acción no se puede realizar en este momento.',
           statusCode: 409,
         );
       case 422:
