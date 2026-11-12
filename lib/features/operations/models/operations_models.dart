@@ -14,6 +14,7 @@ class DriverTrip {
     this.scheduledDepartureAt,
     this.scheduledArrivalAt,
     this.actualDepartureAt,
+    this.actualArrivalAt,
     this.routeCode,
     this.routeName,
     this.headsign,
@@ -46,6 +47,7 @@ class DriverTrip {
       scheduledDepartureAt: _date(attributes['scheduled_departure_at']),
       scheduledArrivalAt: _date(attributes['scheduled_arrival_at']),
       actualDepartureAt: _date(attributes['actual_departure_at']),
+      actualArrivalAt: _date(attributes['actual_arrival_at']),
       routeCode: _string(route['route_code']),
       routeName: _string(route['route_name']),
       headsign:
@@ -97,6 +99,9 @@ class DriverTrip {
   final DateTime? scheduledDepartureAt;
   final DateTime? scheduledArrivalAt;
   final DateTime? actualDepartureAt;
+
+  /// When the trip was completed (backend `actual_arrival_at`, UTC).
+  final DateTime? actualArrivalAt;
   final String? routeCode;
   final String? routeName;
   final String? headsign;
@@ -121,6 +126,7 @@ class DriverTrip {
     scheduledDepartureAt: scheduledDepartureAt,
     scheduledArrivalAt: scheduledArrivalAt,
     actualDepartureAt: actualDepartureAt,
+    actualArrivalAt: actualArrivalAt,
     routeCode: routeCode,
     routeName: routeName,
     headsign: headsign,
