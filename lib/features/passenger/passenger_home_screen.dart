@@ -473,11 +473,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
 
   Future<void> _onChipTap(MapQuickChip chip) async {
     // Route -> buses running now -> live tracking, or "Ver ruta" back here.
-    if (chip.label == 'Buses en curso') {
-      final result = await Navigator.pushNamed<Object?>(
-        context,
-        '/passenger/buses',
-      );
+    // Same for "Mis favoritos": favorite → route → "Ver ruta" back here.
+    final screen = switch (chip.label) {
+      'Buses en curso' => '/passenger/buses',
+      'Favoritos' => '/passenger/favorites',
+      _ => null,
+    };
+    if (screen != null) {
+      final result = await Navigator.pushNamed<Object?>(context, screen);
       if (result is RouteSelection && mounted) _showSelection(result);
       return;
     }

@@ -6,6 +6,8 @@ import '../../operations/services/nearby_routes_filter.dart';
 import '../../trip_tracking/models/trip_tracking.dart';
 import '../../trip_tracking/services/live_trip_tracker.dart';
 import '../../trip_tracking/services/route_live_buses.dart';
+import '../favorite_star.dart';
+import '../services/favorites_controller.dart';
 import 'map_overlay.dart';
 
 /// One row of the routes list: the route and, when the passenger's location is
@@ -255,7 +257,11 @@ class SelectedRoutePanel extends StatelessWidget {
     required this.onStopSelected,
     this.tappedStop,
     this.liveBuses,
+    this.favorites,
   });
+
+  /// For the favorite star; defaults to [FavoritesController.shared].
+  final FavoritesController? favorites;
 
   /// A stop of the list was tapped (center the map on it).
   final ValueChanged<PatternStop> onStopSelected;
@@ -301,6 +307,7 @@ class SelectedRoutePanel extends StatelessWidget {
                 ),
               ),
             ),
+            FavoriteStarButton(route: route, controller: favorites),
             IconButton(
               key: const Key('close-route'),
               tooltip: 'Cerrar ruta',

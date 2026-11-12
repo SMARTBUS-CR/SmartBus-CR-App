@@ -26,6 +26,9 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 | `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register`, auto-login → `/passenger/home` |
 | `auth/verify_email_screen.dart` | Verificación del correo con código de 6 dígitos: ruta `/verify-email` (`VerifyEmailArgs`), reenvío con espera de 60 s; al verificar inicia sesión → home del rol |
 | `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register` → `/verify-email` (sin sesión hasta verificar el correo) |
+| `passenger/passenger_home_screen.dart` | RF-08 (mapa principal), RF-09 (búsqueda) |
+| `passenger/route_search_screen.dart` | RF-09 |
+| `passenger/favorite_routes_screen.dart` | "Mis favoritos" (`/passenger/favorites`, chip "Favoritos" del inicio): rutas guardadas, quitar con la estrella o deslizando + "Deshacer" (sección 11) |
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal); la barra "¿A dónde vas?" abre la búsqueda |
 | `passenger/route_search_screen.dart` | RF-09: "Buscar ruta" por nombre, número o destino (sección 11) |
 | `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar". Entradas "Editar perfil" y "Cambiar contraseña". Botón "Eliminar cuenta" con confirmación (solo UI: aún no llama al backend) |
@@ -393,6 +396,7 @@ mismo Gateway). Todo pasa por `OperationsService`
 | `routesWithPatterns()` | `GET ops/routes?include=patterns` (rutas + sentidos + paradas en **una** petición; ver §10) | No | Pasajero |
 | `routePatterns(routeId)` | `GET ops/routes/{id}/patterns` (trazo + paradas) | No | Pasajero |
 | `ongoingTrips(patternId)` | `GET ops/route-patterns/{id}/trips` (solo `in_progress`, sin datos del conductor) | No | Pasajero |
+| `FavoritesService.fetchFavorites()` / `addFavorite(routeId)` / `removeFavorite(routeId)` | `GET` / `POST ops/favorites` · `DELETE ops/favorites/{route_id}` | Sí | Pasajero (sección 11) |
 
 ### Conductor
 
@@ -543,6 +547,75 @@ quedan igual.
 | Buses en vivo: un tracker por viaje, altas / bajas al refrescar, viaje terminado, error, dispose | `test/features/trip_tracking/route_live_buses_test.dart` |
 | Buses en vivo en el inicio: pines, lista, cambio de sentido, cerrar, abrir seguimiento, señal débil | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Live buses on the route*) |
 
+## 11. Rutas favoritas (pasajero)
+
+El pasajero guarda rutas con una **estrella** y las ve en **"Mis favoritos"**
+(`features/passenger/favorite_routes_screen.dart`, ruta `/passenger/favorites`),
+que se abre desde el chip **"Favoritos"** del inicio. Solo existe en el flujo
+del pasajero: el conductor no ve el chip ni la estrella.
+
+Los favoritos se guardan en el **Dashboard** (siguen a la cuenta en cualquier
+teléfono). Todas las llamadas llevan el token y **nunca** un id de usuario: el
+backend toma el usuario del token.
+
+### Endpoints (Gateway → Dashboard `api/v1/operations`)
+
+| Método | Ruta | Cuerpo | Respuesta |
+|---|---|---|---|
+| GET | `/ops/favorites` | — | 200 `favorite-routes` (más reciente primero) con `route` y su `company` en `included` |
+| POST | `/ops/favorites` | `{ "route_id": "<uuid>" }` | 201 favorito creado · **409** si ya era favorito |
+| DELETE | `/ops/favorites/{route_id}` | — | 204 · 404 si no era favorito |
+
+- 409 al guardar y 404 al quitar **no son errores** para la app: la ruta ya
+  quedó como el pasajero quería (otro teléfono, doble toque).
+- 422: la ruta no existe o su empresa no está activa. 401: sesión vencida.
+- El backend también acepta `label` (alias, máx. 50) y `PATCH
+  /ops/favorites/{route_id}` para cambiarlo. La app muestra el alias si existe,
+  pero todavía no permite editarlo.
+
+### Piezas
+
+| Pieza | Archivo |
+|---|---|
+| Modelo `FavoriteRoute` (lee `route` y `company` del `included`) | `features/passenger/models/favorite_route.dart` |
+| `FavoritesService` (list / add / remove) | `features/passenger/services/favorites_service.dart` |
+| `FavoritesController`: estado compartido por todas las estrellas y la lista | `features/passenger/services/favorites_controller.dart` |
+| Estrella `FavoriteStarButton` + mensajes / "Deshacer" / 401 | `features/passenger/favorite_star.dart` |
+
+### Dónde aparece la estrella
+
+- En la ruta elegida en el mapa del inicio (`SelectedRoutePanel`, junto a ✕).
+- En el detalle de una ruta (`RouteBusesScreen`: "Guardar en favoritos" /
+  "En tus favoritos").
+- En cada fila de "Mis favoritos" (rellena: tocarla la quita).
+
+### Comportamiento
+
+- **Optimista:** la estrella y la lista cambian al instante. Si el servidor
+  falla (sin red, timeout, 429, 5xx), vuelven a como estaban (en su mismo
+  lugar) y un SnackBar dice el error.
+- Mientras una ruta espera respuesta, más toques sobre ella **no envían nada**
+  (sin solicitudes duplicadas).
+- Al guardar: "Ruta agregada a favoritos.". Al quitar: "Ruta eliminada de
+  favoritos." con **Deshacer**, que la vuelve a guardar (`POST`).
+- "Mis favoritos" siempre pide la lista al abrirse (pudo cambiar en otro
+  teléfono) y se puede refrescar deslizando hacia abajo. Tocar un favorito abre
+  su detalle; "Ver ruta" ahí la dibuja en el mapa del inicio.
+- **Sesión:** la lista pertenece al token que la cargó. Si se inicia sesión con
+  otra cuenta, se descarta y se pide de nuevo (nunca se ven los favoritos de
+  otra persona). Un 401 borra la sesión y abre el login con "Tu sesión expiró.
+  Inicia sesión nuevamente.".
+
+| Estado | Qué se ve |
+|---|---|
+| Cargando | Indicador de carga |
+| Sin favoritos | "Aún no tienes rutas favoritas." + cómo agregar una |
+| Error (sin red, timeout, 5xx) | Mensaje + **Reintentar** |
+| Error al refrescar con lista | Se mantiene la lista + SnackBar con el error |
+
+Cada fila: código, nombre (máximo 2 líneas), alias y empresa. El backend no
+devuelve origen y destino del favorito (no incluye los recorridos), así que se
+usa el nombre de la ruta, que ya los suele traer ("Heredia – San José").
 ## 11. Búsqueda de rutas (pasajero)
 
 La barra **"¿A dónde vas?"** del inicio abre **"Buscar ruta"**
@@ -607,6 +680,9 @@ Dashboard que busque nombre, código y `headsign` **sin tildes** (PostgreSQL
 
 | Qué | Archivo |
 |---|---|
+| URLs, token sin id de usuario, lectura del `included`, orden, 409 / 404 como éxito, errores | `test/features/passenger/favorites_service_test.dart` |
+| AC2–AC10: lista, vacío, carga, 5xx + reintentar, 401, quitar con estrella / deslizar + Deshacer, fallo que revierte, sin duplicados, 320 × 568, otra sesión | `test/features/passenger/favorite_routes_screen_test.dart` |
+| AC1: el chip "Favoritos" abre "Mis favoritos" | `test/features/passenger/passenger_home_screen_test.dart` |
 | Catálogo (todas las páginas, una sola descarga, reintento si falla), con o sin tilde, por número / nombre / destino, orden, páginas de 20 | `test/features/operations/route_search_service_test.dart` |
 | AC1–AC9: teclado, espera de 400 ms, mínimo 2 caracteres, respuestas viejas, resultados, resaltado, cargar más, abrir ruta, sin resultados, borrar, errores + reintentar, pantalla 320 × 568 | `test/features/passenger/route_search_screen_test.dart` |
 | La barra del inicio abre "Buscar ruta" | `test/features/passenger/passenger_home_screen_test.dart` |

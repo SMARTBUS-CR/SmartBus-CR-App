@@ -9,7 +9,7 @@ import 'features/passenger/passenger_home_screen.dart';
 import 'features/passenger/route_search_screen.dart';
 import 'features/passenger/bus_tracking_screen.dart';
 import 'features/passenger/buses_in_progress_screen.dart';
-import 'features/operations/models/operations_models.dart';
+import 'features/passenger/favorite_routes_screen.dart';
 import 'features/passenger/passenger_trips_screen.dart';
 import 'features/passenger/passenger_account_screen.dart';
 import 'features/passenger/edit_profile_screen.dart';
@@ -34,6 +34,7 @@ class SmartBusApp extends StatelessWidget {
     '/passenger/home': (_) => const PassengerHomeScreen(),
     '/passenger/search': (_) => const RouteSearchScreen(),
     '/passenger/buses': (_) => const BusesInProgressScreen(),
+    '/passenger/favorites': (_) => const FavoriteRoutesScreen(),
     '/passenger/trips': (_) => const PassengerTripsScreen(),
     '/passenger/account': (_) => const PassengerAccountScreen(),
     '/passenger/account/password': (_) => const ChangePasswordScreen(),

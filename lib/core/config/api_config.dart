@@ -231,4 +231,11 @@ class ApiConfig {
   /// GET — buses running now on a pattern (public, no driver data).
   static Uri opsPatternTrips(String patternId, [Map<String, dynamic>? query]) =>
       _opsUri('route-patterns/$patternId/trips', query);
+
+  /// GET (list) / POST (add) — favorite routes of the logged-in passenger
+  /// (token; the backend takes the user from it).
+  static Uri opsFavorites() => _opsUri('favorites');
+
+  /// DELETE — removes [routeId] from the passenger's favorites (token).
+  static Uri opsFavorite(String routeId) => _opsUri('favorites/$routeId');
 }
