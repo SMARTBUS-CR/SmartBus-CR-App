@@ -7,6 +7,9 @@ import '../models/trip_tracking.dart';
 import 'gps_location_service.dart';
 import 'trip_live_feed.dart';
 
+/// Builds the tracker of a trip (tests plug in fakes).
+typedef LiveTripTrackerFactory = LiveTripTracker Function(String tripId);
+
 enum LiveTripPhase {
   /// Asking the backend for the trip for the first time.
   loading,
@@ -102,6 +105,17 @@ class LiveTripTracker {
     DateTime Function()? clock,
   }) : _service = service ?? GpsLocationService(),
        _clock = clock ?? DateTime.now;
+
+  /// Tracker with the app config: GPS service through the Gateway, plus the
+  /// real-time feed when `REVERB_APP_KEY` is set (otherwise it polls).
+  factory LiveTripTracker.withDefaults(String tripId) {
+    final service = GpsLocationService();
+    return LiveTripTracker(
+      tripId: tripId,
+      service: service,
+      feed: ReverbTripFeed.fromConfig(service: service),
+    );
+  }
 
   final String tripId;
 

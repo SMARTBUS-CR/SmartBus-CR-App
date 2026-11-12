@@ -27,7 +27,7 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 | `auth/verify_email_screen.dart` | Verificación del correo con código de 6 dígitos: ruta `/verify-email` (`VerifyEmailArgs`), reenvío con espera de 60 s; al verificar inicia sesión → home del rol |
 | `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register` → `/verify-email` (sin sesión hasta verificar el correo) |
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal); la barra "¿A dónde vas?" abre la búsqueda |
-| `passenger/route_search_screen.dart` | RF-09: "Buscar ruta" por nombre o número (sección 10) |
+| `passenger/route_search_screen.dart` | RF-09: "Buscar ruta" por nombre, número o destino (sección 11) |
 | `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar". Entradas "Editar perfil" y "Cambiar contraseña". Botón "Eliminar cuenta" con confirmación (solo UI: aún no llama al backend) |
 | `passenger/edit_profile_screen.dart` | Editar nombre y correo (`updateProfile`): solo envía lo que cambió; cambiar el correo pide la contraseña actual y luego verificar el nuevo correo con código |
 | `passenger/change_password_screen.dart` | Cambiar contraseña (`changePassword`): actual + nueva (requisitos en vivo) + confirmación |
@@ -188,7 +188,7 @@ distribución inspirada en Google Maps y la identidad de SmartBus.
   en adelante prohíben el uso comercial (CC BY-NC-SA) y la de 2017 no tiene
   imagen de Costa Rica a zoom alto.
 - **Búsqueda:** "¿A dónde vas?" es un botón: abre la pantalla "Buscar ruta"
-  (`/passenger/search`, sección 10) con el teclado listo.
+  (`/passenger/search`, sección 11) con el teclado listo.
 
 Se pueden cambiar sin tocar código (por ejemplo, otro estilo o un OpenFreeMap
 propio, ya que el servicio público no tiene SLA):
@@ -337,7 +337,8 @@ demora) sin tocar el Dashboard ni el GPS.
 
 `REVERB_APP_KEY`, `REVERB_HOST`, `REVERB_PORT` y `REVERB_SCHEME` (ver la
 tabla de `--dart-define` y la sección 5.7 del
-[README raíz](../README.md)). En Render solo hace falta `REVERB_APP_KEY`.
+[README raíz](../README.md)). En Render solo hace falta `REVERB_APP_KEY`, y la
+de -dev ya es el valor por defecto (`ApiConfig._devReverbAppKey`).
 
 ### Tests
 
@@ -388,7 +389,8 @@ mismo Gateway). Todo pasa por `OperationsService`
 | `startTrip(id)` | `POST ops/trips/{id}/start` | Sí | Conductor asignado |
 | `completeTrip(id)` | `POST ops/trips/{id}/complete` | Sí | Conductor asignado |
 | `routes()` | `GET ops/routes` | No | Pasajero |
-| `searchRoutes(query, {page})` | `GET ops/routes?include=company,patterns` (catálogo completo, se busca en el teléfono) | No | Pasajero (sección 10) |
+| `searchRoutes(query, {page})` | `GET ops/routes?include=company,patterns` (catálogo completo, se busca en el teléfono) | No | Pasajero (sección 11) |
+| `routesWithPatterns()` | `GET ops/routes?include=patterns` (rutas + sentidos + paradas en **una** petición; ver §10) | No | Pasajero |
 | `routePatterns(routeId)` | `GET ops/routes/{id}/patterns` (trazo + paradas) | No | Pasajero |
 | `ongoingTrips(patternId)` | `GET ops/route-patterns/{id}/trips` (solo `in_progress`, sin datos del conductor) | No | Pasajero |
 
@@ -413,8 +415,10 @@ Chip **"Buses en curso"** → lista de rutas → la ruta muestra cada recorrido
 (sentido) con:
 - sus **buses en curso** (unidad, placa, hora de salida) → **Ver en vivo** abre
   "Rastreando tu bus" con ese viaje;
-- **Ver ruta**: las paradas en orden con los minutos desde el inicio, aunque no
-  haya buses en camino.
+- **Ver ruta**: vuelve al mapa del inicio con esa ruta y ese sentido dibujados
+  (§10);
+- **Ver paradas**: las paradas en orden con los minutos desde el inicio, aunque
+  no haya buses en camino.
 
 Un viaje terminado desaparece de la lista (el Dashboard solo devuelve los
 `in_progress`).
@@ -425,9 +429,121 @@ Un viaje terminado desaparece de la lista (el Dashboard solo devuelve los
 |---|---|
 | URLs, filtros y lectura JSON:API (trazo `[lng, lat]`, paradas ordenadas, snapshot) | `test/features/operations/operations_service_test.dart` |
 | Inicio del conductor y Recorrido: iniciar, continuar, rechazo, finalizar, reintentar | `test/features/driver/trip_screen_test.dart` |
-| Buses en curso: ruta → buses → en vivo, sin buses, ver ruta, reintentar | `test/features/passenger/buses_in_progress_screen_test.dart` |
+| Buses en curso: ruta → buses → en vivo, sin buses, ver paradas, ver ruta en el mapa, reintentar | `test/features/passenger/buses_in_progress_screen_test.dart` |
 
-## 10. Búsqueda de rutas (pasajero)
+## 10. Rutas en el mapa del pasajero
+
+El panel inferior del inicio lista las **rutas cercanas** y, al elegir una,
+dibuja su recorrido y sus paradas sobre el mapa.
+
+### Piezas
+
+| Pieza | Archivo |
+|---|---|
+| Rutas + sentidos + paradas (una petición) | `OperationsService.routesWithPatterns()` |
+| Filtro de cercanía (Dart puro, haversine) | `features/operations/services/nearby_routes_filter.dart` |
+| Lista de rutas y panel de la ruta elegida | `features/passenger/map/route_sheet.dart` |
+| Dibujo en el mapa (`showRoute`, `clearRoute`, `fitBounds`, `onStopTap`) | `features/passenger/map/passenger_map.dart` |
+
+### Datos
+
+`GET ops/routes?include=patterns&page[size]=100` devuelve las rutas en `data`
+y sus sentidos (`route-patterns`) en `included`. Cada ruta los enlaza en
+`relationships.patterns.data`; si una ruta no trae esa relación, se usa el
+`route_id` del patrón. Se ignoran otros tipos de `included` (p. ej. `companies`).
+
+- `route_geometry` (GeoJSON `LineString`, `[lng, lat]`) **puede ser `null`**: hoy
+  en -dev solo DEMO-CITY tiene trazo. Sin trazo, la línea une las paradas en
+  orden (`RoutePattern.path`); se dibuja igual (línea continua) y el panel
+  avisa "Trazado aproximado".
+- Una ruta tiene **varios sentidos**. Si dos van al mismo `headsign` (SJ-PV va
+  tres veces a "San José"), la etiqueta agrega la variante del nombre:
+  "Hacia San José por Vara Blanca" (`TransitRoute.directionLabel`).
+
+### Qué ve el pasajero
+
+| Situación | Lista |
+|---|---|
+| Con ubicación | **Rutas cercanas**: rutas con al menos una parada a ≤ **1000 m** (`NearbyRoutesFilter.defaultRadiusMeters`), de la más cercana a la más lejana. Cada fila: código, nombre, "Hacia {destino}" y "{parada más cercana} · 230 m" |
+| Ninguna cerca | "No hay rutas cerca de ti" + **Ver todas las rutas** |
+| Sin permiso / GPS apagado | **Todas las rutas**, sin distancia; se pueden elegir igual |
+| Cargando / error | "Buscando rutas…" / mensaje + **Reintentar** |
+
+Al elegir una ruta:
+1. Se dibuja el sentido con la parada más cercana al pasajero (sin ubicación:
+   el primero). Línea continua con **degradado** de turquesa (salida,
+   `verdeTurquesa`) a azul (llegada, `azulPrincipal`), con halo, borde blanco
+   y **flechas** en el sentido del recorrido. Salida y llegada son círculos
+   rellenos grandes; las paradas intermedias, blancas y numeradas. La parada
+   elegida lleva un halo.
+2. La cámara encuadra todo el sentido (y al pasajero, si está a ≤ 1000 m de
+   alguna parada), dejando libre la barra de búsqueda y el panel.
+3. El panel baja (32 % de la pantalla) y muestra: nombre, **un chip por
+   sentido**, "N paradas · distancia · ~min" y, sin trazo, "Trazado
+   aproximado".
+4. **Paradas (N)**: todas las paradas del sentido como línea de tiempo
+   (Salida → … → Llegada, con "+12 min"). Tocar una en la lista o en el mapa la
+   resalta y muestra "Parada 2 de 5" y los minutos desde el inicio; desde la
+   lista, además, el mapa se centra en ella.
+5. Cambiar de sentido, cerrar (✕) o el botón atrás de Android borran el dibujo
+   anterior.
+
+### Buses en vivo sobre la ruta
+
+Con una ruta elegida, el mapa muestra también los **buses que van en ese
+sentido ahora** (el conductor tocó "Iniciar recorrido"), moviéndose en tiempo
+real, y el panel los lista en "Buses en vivo".
+
+- `RouteLiveBuses` (`features/trip_tracking/services/route_live_buses.dart`):
+  pide `GET ops/route-patterns/{id}/trips` (solo `in_progress`) y crea un
+  `LiveTripTracker` por viaje, el mismo de "Rastreando tu bus" (GET +
+  `BusLocationUpdated`). Cada **30 s** vuelve a preguntar al Dashboard: aparecen
+  los viajes nuevos y se quitan los que ya no corren. Un viaje que el GPS da por
+  terminado desaparece en el momento.
+- Mapa: un pin por bus (`PassengerMapHandle.showBuses`), verde si la posición
+  es reciente (≤ 30 s) y gris si es vieja (señal débil). Tocar el pin o
+  **Ver en vivo** abre "Rastreando tu bus".
+- Panel: "Unidad 12 · ABC-123" + "En vivo · hace 5 s" / "Señal débil · hace
+  2 min" / "Esperando ubicación". Sin buses: "No hay buses en curso en este
+  sentido."
+- Cambiar de sentido sigue a los buses del nuevo sentido; cerrar la ruta los
+  quita y corta sus conexiones.
+- **Tiempo real:** igual que "Rastreando tu bus", usa `REVERB_APP_KEY` (por
+  defecto la de -dev en Render). Sin key funciona preguntando cada 15 s. Cada
+  bus abre su propia conexión (son pocos por sentido).
+
+**Desde "Buses en curso" → Ver ruta:** las dos pantallas se cierran con un
+`RouteSelection` y el inicio dibuja esa ruta con ese sentido.
+
+### Por qué el filtro corre en el teléfono
+
+Una sola petición trae todas las rutas, sentidos y paradas, y alcanza para un
+catálogo pequeño o mediano. Si crece, el Dashboard ya filtra por distancia
+(`GET ops/stops?filter[near]=lat,lng,radius_m`, máx. 2000 m): solo cambiarían
+`OperationsService` y la entrada de `NearbyRoutesFilter`; la lista y el mapa
+quedan igual.
+
+### Detalles del mapa
+
+- Las capas de la ruta se agregan **antes** que las del usuario y el bus, así
+  el punto del pasajero queda encima de la línea.
+- Los números de parada usan las fuentes de OpenFreeMap
+  (`MapConfig.glyphsUrl`, `Noto Sans Bold`); el estilo satélite también las
+  declara, porque sin `glyphs` MapLibre no dibuja texto.
+- Al cambiar calles ↔ satélite se vuelve a dibujar la ruta elegida.
+
+### Tests
+
+| Qué | Archivo |
+|---|---|
+| Filtro: dentro, fuera, justo en el radio, orden, lista vacía, varios sentidos, paradas sin coordenadas | `test/features/operations/nearby_routes_filter_test.dart` |
+| `include=patterns`: enlace por relación y por `route_id`, con y sin trazo, `directionLabel` | `test/features/operations/operations_service_test.dart` |
+| GeoJSON dibujado: línea real / aproximada, ids, números y tipo de parada (salida, intermedia, llegada), parada resaltada | `test/features/passenger/route_features_test.dart` |
+| AC1–AC9 con mapa falso y `FakeOperations` | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Route visualization*) |
+| Buses en vivo: un tracker por viaje, altas / bajas al refrescar, viaje terminado, error, dispose | `test/features/trip_tracking/route_live_buses_test.dart` |
+| Buses en vivo en el inicio: pines, lista, cambio de sentido, cerrar, abrir seguimiento, señal débil | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Live buses on the route*) |
+
+## 11. Búsqueda de rutas (pasajero)
 
 La barra **"¿A dónde vas?"** del inicio abre **"Buscar ruta"**
 (`features/passenger/route_search_screen.dart`, ruta `/passenger/search`) con
@@ -444,7 +560,7 @@ el teclado listo. Usa el catálogo público del Dashboard: **no necesita token**
   (`filter[name]`, `filter[code]`) comparan en PostgreSQL con `LIKE`, que
   distingue las tildes ("jose" no encuentra "José"), y no hay filtro por
   destino. Por eso `OperationsService.searchRoutes(texto)`:
-  1. descarga **una vez** el catálogo público (`catalogue()`:
+  1. descarga **una vez** el catálogo público (`searchCatalogue()`:
      `GET ops/routes?include=company,patterns`, todas las páginas de 100). Las
      búsquedas que llegan mientras se descarga comparten la misma petición. Si
      falla, no se guarda y la siguiente búsqueda lo intenta otra vez;

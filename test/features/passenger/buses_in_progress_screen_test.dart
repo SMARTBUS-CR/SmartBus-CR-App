@@ -73,12 +73,64 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.tap(find.text('Ver ruta'));
+    await tester.tap(find.text('Ver paradas'));
     await tester.pumpAndSettle();
 
     expect(find.text('Terminal'), findsOneWidget);
     expect(find.text('Centro'), findsOneWidget);
     expect(find.text('+12 min'), findsOneWidget);
+  });
+
+  testWidgets('"Ver ruta" closes both screens with the route and direction', (
+    tester,
+  ) async {
+    final second = RoutePattern.fromJsonApi(patternResource());
+    final operations = _withRoute()
+      ..patterns = [
+        RoutePattern.fromJsonApi(patternResource()),
+        RoutePattern(
+          id: 'p-back',
+          name: 'Regreso',
+          headsign: 'Río Frío',
+          stops: second.stops,
+        ),
+      ];
+    Object? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                result = await Navigator.push<Object?>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        BusesInProgressScreen(operations: operations),
+                  ),
+                );
+              },
+              child: const Text('home-map'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('home-map'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Puerto Viejo'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('show-route-p-back')));
+    await tester.pumpAndSettle();
+
+    // Back on the home map, with what to draw.
+    expect(find.text('home-map'), findsOneWidget);
+    final selection = result! as RouteSelection;
+    expect(selection.route.id, routeId);
+    expect(selection.pattern.id, 'p-back');
+    // Every direction comes along, so the passenger can switch.
+    expect(selection.route.patterns.map((p) => p.id), [patternId, 'p-back']);
   });
 
   testWidgets('routes fail to load: retry', (tester) async {

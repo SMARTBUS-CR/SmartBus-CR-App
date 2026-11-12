@@ -2,11 +2,13 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import '../../../core/config/map_config.dart';
 import '../../../core/location/location_service.dart';
+import '../../operations/models/operations_models.dart';
 
 /// What the passenger home screen can do with the map, without depending on
 /// MapLibre (so tests can plug in a fake map).
@@ -19,7 +21,88 @@ abstract interface class PassengerMapHandle {
 
   /// Draws (or moves) the bus marker; `null` hides it.
   Future<void> showBus(BusMarker? bus);
+
+  /// Draws every bus in [buses] (the buses running on the selected route),
+  /// replacing the ones drawn before; empty hides them. Same layer as
+  /// [showBus]. A tap on one reports its [BusMarker.id]
+  /// ([PassengerMapOptions.onBusTap]).
+  Future<void> showBuses(List<BusMarker> buses);
+
+  /// Draws the line of [pattern] and its stops as numbered markers, replacing
+  /// any route already drawn. Without `route_geometry` the stops are joined in
+  /// order (approximate path), drawn the same way.
+  Future<void> showRoute(RoutePattern pattern);
+
+  /// Removes the route line and its stops.
+  Future<void> clearRoute();
+
+  /// Highlights one stop of the drawn route (a halo around its marker);
+  /// `null` removes the highlight.
+  Future<void> highlightStop(PatternStop? stop);
+
+  /// Moves the camera so every point is visible, leaving [padding] free (the
+  /// search bar on top, the bottom sheet below).
+  Future<void> fitBounds(
+    List<GeoPoint> points, {
+    EdgeInsets padding = EdgeInsets.zero,
+  });
 }
+
+/// Line + numbered stops to draw for a pattern, as one GeoJSON
+/// FeatureCollection. Kept apart from MapLibre so it can be unit-tested.
+///
+/// - Line: `properties.approximate` is `true` when the pattern has no geometry
+///   (stops joined in order). Not drawn with fewer than 2 points.
+/// - Stops: `id` = `stop-<index in pattern.stops>`, `properties.seq` = the
+///   number shown on the marker (1, 2, 3… in travel order),
+///   `properties.kind` = `start` (first stop), `end` (last) or `mid`, and
+///   `properties.selected` = it is [selected] (highlighted).
+Map<String, dynamic> routeFeatureCollection(
+  RoutePattern? pattern, {
+  PatternStop? selected,
+}) {
+  if (pattern == null) {
+    return {'type': 'FeatureCollection', 'features': <dynamic>[]};
+  }
+  final path = pattern.path;
+  final features = <Map<String, dynamic>>[
+    if (path.length >= 2)
+      {
+        'type': 'Feature',
+        'geometry': {
+          'type': 'LineString',
+          'coordinates': [
+            for (final point in path) [point.longitude, point.latitude],
+          ],
+        },
+        'properties': {'approximate': !pattern.hasGeometry},
+      },
+  ];
+  final last = pattern.stops.length - 1;
+  for (var i = 0; i <= last; i++) {
+    final stop = pattern.stops[i];
+    final location = stop.location;
+    if (location == null) continue;
+    features.add({
+      'type': 'Feature',
+      'id': '$routeStopIdPrefix$i',
+      'geometry': {
+        'type': 'Point',
+        'coordinates': [location.longitude, location.latitude],
+      },
+      'properties': {
+        'seq': '${i + 1}',
+        'kind': i == 0 ? 'start' : (i == last ? 'end' : 'mid'),
+        // Same object: a stop can appear twice in a loop route.
+        'selected': identical(stop, selected),
+      },
+    });
+  }
+  return {'type': 'FeatureCollection', 'features': features};
+}
+
+/// Prefix of the GeoJSON id of each stop marker (see [routeFeatureCollection]).
+const routeStopIdPrefix = 'stop-';
 
 /// The bus on the map, drawn as a pin with a bus icon whose tip is the bus
 /// position, so the passenger's own dot stays visible even at the same spot.
@@ -31,22 +114,30 @@ class BusMarker {
     required this.latitude,
     required this.longitude,
     this.live = true,
+    this.id,
   });
 
   final double latitude;
   final double longitude;
   final bool live;
 
+  /// Identifies the bus when it is tapped (the trip id); optional.
+  final String? id;
+
   @override
   bool operator ==(Object other) =>
       other is BusMarker &&
       other.latitude == latitude &&
       other.longitude == longitude &&
-      other.live == live;
+      other.live == live &&
+      other.id == id;
 
   @override
-  int get hashCode => Object.hash(latitude, longitude, live);
+  int get hashCode => Object.hash(latitude, longitude, live, id);
 }
+
+/// Prefix of the GeoJSON id of each bus pin (`bus-<BusMarker.id>`).
+const busIdPrefix = 'bus-';
 
 /// Builds the map widget. [onReady] is called once the map can be controlled.
 typedef PassengerMapBuilder = Widget Function(
@@ -59,12 +150,22 @@ class PassengerMapOptions {
     required this.mode,
     required this.onReady,
     this.compassTopMargin = 16,
+    this.onStopTap,
+    this.onBusTap,
   });
+
+  /// The passenger tapped a bus pin drawn with [PassengerMapHandle.showBuses];
+  /// receives its [BusMarker.id].
+  final ValueChanged<String>? onBusTap;
 
   /// Streets or satellite base map.
   final MapMode mode;
 
   final ValueChanged<PassengerMapHandle> onReady;
+
+  /// The passenger tapped a stop marker of the route drawn with
+  /// [PassengerMapHandle.showRoute].
+  final ValueChanged<PatternStop>? onStopTap;
 
   /// Distance from the top so the compass is not hidden by the search bar.
   final double compassTopMargin;
@@ -99,9 +200,24 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
   static const _busLayer = 'smartbus-bus-pin';
   static const _busLiveIcon = 'smartbus-bus-live';
   static const _busStaleIcon = 'smartbus-bus-stale';
+  static const _routeSource = 'smartbus-route';
+  static const _routeGlowLayer = 'smartbus-route-glow';
+  static const _routeCasingLayer = 'smartbus-route-casing';
+  static const _routeLineLayer = 'smartbus-route-line';
+  static const _routeArrowsLayer = 'smartbus-route-arrows';
+  static const _routeSelectedLayer = 'smartbus-route-selected';
+  static const _routeStopsLayer = 'smartbus-route-stops';
+  static const _routeStopLabelsLayer = 'smartbus-route-stop-labels';
+  static const _routeArrowIcon = 'smartbus-route-arrow';
 
   /// `SmartBusColors.verdePasajero`.
   static const _brandColor = '#01856D';
+
+  /// Route gradient: `SmartBusColors.verdeTurquesa` at the start →
+  /// `SmartBusColors.azulPrincipal` at the end. Stands out from the darker
+  /// green user dot and bus pin.
+  static const _routeStartColor = '#00BFA5';
+  static const _routeEndColor = '#1565C0';
 
   /// Bus with an old position (weak signal).
   static const _staleColor = Color(0xFF9CA3AF);
@@ -110,7 +226,15 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
   bool _styleReady = false;
   bool _readyNotified = false;
   DeviceLocation? _userLocation;
-  BusMarker? _bus;
+  List<BusMarker> _buses = const [];
+  RoutePattern? _route;
+  PatternStop? _selectedStop;
+
+  @override
+  void dispose() {
+    _controller?.onFeatureTapped.remove(_onFeatureTapped);
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(covariant MapLibrePassengerMap oldWidget) {
@@ -130,7 +254,10 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
         target: LatLng(MapConfig.fallbackLatitude, MapConfig.fallbackLongitude),
         zoom: MapConfig.fallbackZoom,
       ),
-      onMapCreated: (controller) => _controller = controller,
+      onMapCreated: (controller) {
+        _controller = controller;
+        controller.onFeatureTapped.add(_onFeatureTapped);
+      },
       onStyleLoadedCallback: _onStyleLoaded,
       // Native compass: hidden while facing north, tap resets the bearing.
       compassEnabled: true,
@@ -146,6 +273,10 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
     final controller = _controller;
     if (controller == null || !mounted) return;
     final ratio = MediaQuery.devicePixelRatioOf(context);
+
+    // Route first: the user dot and the bus are drawn on top of it.
+    await _addRouteLayers(controller, ratio);
+    if (!mounted) return;
 
     await controller.addGeoJsonSource(_userSource, _featureCollection(null));
     await controller.addCircleLayer(
@@ -199,7 +330,7 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
       await _busPinPng(_staleColor, ratio),
     );
     if (!mounted) return;
-    await controller.addGeoJsonSource(_busSource, _busCollection(null));
+    await controller.addGeoJsonSource(_busSource, _busCollection(const []));
     await controller.addSymbolLayer(
       _busSource,
       _busLayer,
@@ -209,13 +340,15 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
         iconAllowOverlap: true,
         iconIgnorePlacement: true,
       ),
-      enableInteraction: false,
+      // Tappable: opens "Rastreando tu bus" from the home map (onBusTap).
+      enableInteraction: true,
     );
 
     _styleReady = true;
     final location = _userLocation;
     if (location != null) await _drawUser(location);
-    if (_bus != null) await _drawBus();
+    if (_buses.isNotEmpty) await _drawBuses();
+    if (_route != null) await _drawRoute();
 
     if (!_readyNotified && mounted) {
       _readyNotified = true;
@@ -244,21 +377,300 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
       _controller!.setGeoJsonSource(_userSource, _featureCollection(location));
 
   @override
-  Future<void> showBus(BusMarker? bus) async {
-    if (bus == _bus) return;
-    _bus = bus;
-    if (_styleReady) await _drawBus();
+  Future<void> showBus(BusMarker? bus) => showBuses([?bus]);
+
+  @override
+  Future<void> showBuses(List<BusMarker> buses) async {
+    if (listEquals(buses, _buses)) return;
+    _buses = List.unmodifiable(buses);
+    if (_styleReady) await _drawBuses();
   }
 
-  Future<void> _drawBus() =>
-      _controller!.setGeoJsonSource(_busSource, _busCollection(_bus));
+  Future<void> _drawBuses() =>
+      _controller!.setGeoJsonSource(_busSource, _busCollection(_buses));
 
-  static Map<String, dynamic> _busCollection(BusMarker? bus) => {
+  // --- Route --------------------------------------------------------------------
+
+  /// One GeoJSON source (line + stops, with line metrics for the gradient) and,
+  /// bottom to top:
+  /// 1. a soft glow and a white casing under the line;
+  /// 2. the line: a solid gradient from the start color to the end color (it
+  ///    shows the direction), also when the path is approximate;
+  /// 3. white chevrons along the line, pointing the way the bus goes;
+  /// 4. a halo under the selected stop;
+  /// 5. the stops: start (teal) and end (blue) filled and bigger, the others
+  ///    white with their number.
+  Future<void> _addRouteLayers(
+    MapLibreMapController controller,
+    double ratio,
+  ) async {
+    const isLine = [
+      '==',
+      ['geometry-type'],
+      'LineString',
+    ];
+    const isPoint = [
+      '==',
+      ['geometry-type'],
+      'Point',
+    ];
+    const kind = ['get', 'kind'];
+    const isMid = ['==', kind, 'mid'];
+
+    await controller.addImage(_routeArrowIcon, await _arrowPng(ratio));
+    await controller.addSource(
+      _routeSource,
+      GeojsonSourceProperties(
+        data: routeFeatureCollection(null),
+        // Needed by `line-gradient` (['line-progress']).
+        lineMetrics: true,
+      ),
+    );
+    await controller.addLineLayer(
+      _routeSource,
+      _routeGlowLayer,
+      const LineLayerProperties(
+        lineColor: _routeEndColor,
+        lineWidth: 18,
+        lineBlur: 10,
+        lineOpacity: 0.35,
+        lineJoin: 'round',
+        lineCap: 'round',
+      ),
+      filter: isLine,
+      enableInteraction: false,
+    );
+    await controller.addLineLayer(
+      _routeSource,
+      _routeCasingLayer,
+      const LineLayerProperties(
+        lineColor: '#FFFFFF',
+        lineWidth: 10,
+        lineJoin: 'round',
+        lineCap: 'round',
+      ),
+      filter: isLine,
+      enableInteraction: false,
+    );
+    await controller.addLineLayer(
+      _routeSource,
+      _routeLineLayer,
+      const LineLayerProperties(
+        lineGradient: [
+          'interpolate',
+          ['linear'],
+          ['line-progress'],
+          0,
+          _routeStartColor,
+          1,
+          _routeEndColor,
+        ],
+        lineWidth: 6,
+        lineJoin: 'round',
+        lineCap: 'round',
+      ),
+      // Same solid gradient with or without real geometry.
+      filter: isLine,
+      enableInteraction: false,
+    );
+    await controller.addSymbolLayer(
+      _routeSource,
+      _routeArrowsLayer,
+      const SymbolLayerProperties(
+        symbolPlacement: 'line',
+        symbolSpacing: 70,
+        iconImage: _routeArrowIcon,
+        iconRotationAlignment: 'map',
+        iconAllowOverlap: true,
+        iconIgnorePlacement: true,
+      ),
+      filter: isLine,
+      enableInteraction: false,
+    );
+    await controller.addCircleLayer(
+      _routeSource,
+      _routeSelectedLayer,
+      const CircleLayerProperties(
+        circleRadius: 22,
+        circleColor: _routeEndColor,
+        circleOpacity: 0.22,
+        circleStrokeColor: _routeEndColor,
+        circleStrokeWidth: 2,
+        circleStrokeOpacity: 0.6,
+      ),
+      filter: [
+        'all',
+        isPoint,
+        [
+          '==',
+          ['get', 'selected'],
+          true,
+        ],
+      ],
+      enableInteraction: false,
+    );
+    await controller.addCircleLayer(
+      _routeSource,
+      _routeStopsLayer,
+      const CircleLayerProperties(
+        circleRadius: ['case', isMid, 9, 13],
+        circleColor: [
+          'match',
+          kind,
+          'start',
+          _routeStartColor,
+          'end',
+          _routeEndColor,
+          '#FFFFFF',
+        ],
+        circleStrokeColor: ['match', kind, 'mid', _routeEndColor, '#FFFFFF'],
+        circleStrokeWidth: 3,
+      ),
+      filter: isPoint,
+      // Tappable: shows the stop details (onStopTap).
+      enableInteraction: true,
+    );
+    await controller.addSymbolLayer(
+      _routeSource,
+      _routeStopLabelsLayer,
+      const SymbolLayerProperties(
+        textField: ['get', 'seq'],
+        textFont: [MapConfig.labelFont],
+        textSize: ['case', isMid, 10, 12],
+        textColor: ['case', isMid, _routeEndColor, '#FFFFFF'],
+        textAllowOverlap: true,
+        textIgnorePlacement: true,
+      ),
+      filter: isPoint,
+      enableInteraction: false,
+    );
+  }
+
+  @override
+  Future<void> showRoute(RoutePattern pattern) async {
+    _route = pattern;
+    _selectedStop = null;
+    if (_styleReady) await _drawRoute();
+  }
+
+  @override
+  Future<void> clearRoute() async {
+    if (_route == null) return;
+    _route = null;
+    _selectedStop = null;
+    if (_styleReady) await _drawRoute();
+  }
+
+  @override
+  Future<void> highlightStop(PatternStop? stop) async {
+    if (identical(stop, _selectedStop)) return;
+    _selectedStop = stop;
+    if (_styleReady && _route != null) await _drawRoute();
+  }
+
+  Future<void> _drawRoute() => _controller!.setGeoJsonSource(
+    _routeSource,
+    routeFeatureCollection(_route, selected: _selectedStop),
+  );
+
+  /// PNG of the direction chevron drawn along the line (white with a soft
+  /// shadow, pointing right: MapLibre rotates it with the line).
+  static Future<Uint8List> _arrowPng(double ratio) async {
+    const size = 14.0;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder)..scale(ratio);
+    final chevron = Path()
+      ..moveTo(4, 3)
+      ..lineTo(10, size / 2)
+      ..lineTo(4, size - 3);
+    canvas
+      ..drawPath(
+        chevron,
+        Paint()
+          ..color = const Color(0x55000000)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 4
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round,
+      )
+      ..drawPath(
+        chevron,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.4
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round,
+      );
+    final image = await recorder.endRecording().toImage(
+      (size * ratio).ceil(),
+      (size * ratio).ceil(),
+    );
+    final png = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    return png!.buffer.asUint8List();
+  }
+
+  void _onFeatureTapped(
+    math.Point<double> point,
+    LatLng coordinates,
+    String id,
+    String layerId,
+    Annotation? annotation,
+  ) {
+    if (id.startsWith(busIdPrefix)) {
+      widget.options.onBusTap?.call(id.substring(busIdPrefix.length));
+      return;
+    }
+    final route = _route;
+    final onStopTap = widget.options.onStopTap;
+    if (route == null || onStopTap == null) return;
+    if (!id.startsWith(routeStopIdPrefix)) return;
+    final index = int.tryParse(id.substring(routeStopIdPrefix.length));
+    if (index == null || index < 0 || index >= route.stops.length) return;
+    onStopTap(route.stops[index]);
+  }
+
+  @override
+  Future<void> fitBounds(
+    List<GeoPoint> points, {
+    EdgeInsets padding = EdgeInsets.zero,
+  }) async {
+    final controller = _controller;
+    if (controller == null || points.isEmpty) return;
+    if (points.length == 1) {
+      return moveTo(points.single.latitude, points.single.longitude);
+    }
+    var south = points.first.latitude, north = south;
+    var west = points.first.longitude, east = west;
+    for (final point in points.skip(1)) {
+      south = math.min(south, point.latitude);
+      north = math.max(north, point.latitude);
+      west = math.min(west, point.longitude);
+      east = math.max(east, point.longitude);
+    }
+    await controller.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        LatLngBounds(
+          southwest: LatLng(south, west),
+          northeast: LatLng(north, east),
+        ),
+        left: padding.left,
+        top: padding.top,
+        right: padding.right,
+        bottom: padding.bottom,
+      ),
+      duration: const Duration(milliseconds: 600),
+    );
+  }
+
+  static Map<String, dynamic> _busCollection(List<BusMarker> buses) => {
     'type': 'FeatureCollection',
     'features': [
-      if (bus != null)
+      for (final bus in buses)
         {
           'type': 'Feature',
+          if (bus.id != null) 'id': '$busIdPrefix${bus.id}',
           'geometry': {
             'type': 'Point',
             'coordinates': [bus.longitude, bus.latitude],

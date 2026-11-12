@@ -151,6 +151,25 @@ void main() {
       expect(route.companyName, 'TUASA');
       expect(route.destinations, ['Heredia', 'San José']);
     });
+
+    test(
+      'each result also carries its directions (to draw it on the map)',
+      () async {
+        final route = (await h.service.searchRoutes('san jose')).routes.single;
+        expect([for (final p in route.patterns) p.id], ['p-1', 'p-2']);
+        expect(route.directionLabel(route.patterns.first), 'Hacia Heredia');
+      },
+    );
+  });
+
+  test('withPatterns keeps the company and the destinations', () {
+    final route = TransitRoute.fromJsonApi(
+      _heredia,
+      included: JsonApiIncluded(searchIncluded()),
+    ).withPatterns([pattern('p-9', headsign: 'Alajuela')]);
+    expect(route.companyName, 'TUASA');
+    expect(route.destinations, ['Heredia', 'San José', 'Alajuela']);
+    expect(route.patterns.single.id, 'p-9');
   });
 
   test(

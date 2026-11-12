@@ -63,15 +63,19 @@ class TransitRoute {
     required this.name,
     this.companyName,
     this.destinations = const [],
+    this.patterns = const [],
   });
 
   /// [included] is the document's `included` array (`include=company,patterns`):
   /// it gives the company name and the destinations (`headsign`) of each
-  /// direction. Without it only code and name are known.
+  /// direction. [patterns] are the route's parsed directions when the caller
+  /// has them (see [linkedPatternIds]); their destinations count too.
+  /// Without either, only code and name are known.
   factory TransitRoute.fromJsonApi(
-    Map<String, dynamic> resource, [
+    Map<String, dynamic> resource, {
     JsonApiIncluded included = const JsonApiIncluded.empty(),
-  ]) {
+    List<RoutePattern> patterns = const [],
+  }) {
     final attributes = _attributes(resource);
     final relationships = resource['relationships'];
     final links = relationships is Map ? relationships : const {};
@@ -82,11 +86,17 @@ class TransitRoute {
         : _attributes(company);
 
     final destinations = <String>[];
-    for (final pattern in included.many(links['patterns'])) {
-      final headsign = _string(_attributes(pattern)['headsign']);
+    void addDestination(String? headsign) {
       if (headsign != null && !destinations.contains(headsign)) {
         destinations.add(headsign);
       }
+    }
+
+    for (final pattern in patterns) {
+      addDestination(pattern.headsign);
+    }
+    for (final pattern in included.many(links['patterns'])) {
+      addDestination(_string(_attributes(pattern)['headsign']));
     }
 
     return TransitRoute(
@@ -98,6 +108,7 @@ class TransitRoute {
           _string(companyAttributes['legal_name']) ??
           _string(companyAttributes['name']),
       destinations: destinations,
+      patterns: patterns,
     );
   }
 
@@ -111,6 +122,59 @@ class TransitRoute {
   /// Distinct destinations of its directions ("Heredia", "San José"), when the
   /// patterns were included.
   final List<String> destinations;
+
+  /// Directions / variants of the route. Empty unless they were requested
+  /// (`GET ops/routes?include=patterns`) or added with [withPatterns].
+  final List<RoutePattern> patterns;
+
+  /// "PV-RF · Puerto Viejo", or whatever part is known.
+  String get title => [code, name].where((part) => part.isNotEmpty).join(' · ');
+
+  /// How the passenger tells [pattern] apart from the route's other
+  /// directions: "Hacia {headsign}", plus the variant ("por Vara Blanca", from
+  /// the pattern name) when another pattern goes to the same place. Falls
+  /// back to the pattern name.
+  String directionLabel(RoutePattern pattern) {
+    final headsign = pattern.headsign;
+    final shared =
+        headsign != null &&
+        patterns
+            .where((p) => p.id != pattern.id && p.headsign == headsign)
+            .isNotEmpty;
+    if (!shared) return pattern.label;
+    final via = pattern.name.indexOf(' por ');
+    return via >= 0
+        ? '${pattern.label}${pattern.name.substring(via)}'
+        : (pattern.name.isEmpty ? pattern.label : pattern.name);
+  }
+
+  /// Same route with [patterns] (company and known destinations are kept).
+  TransitRoute withPatterns(List<RoutePattern> patterns) => TransitRoute(
+    id: id,
+    code: code,
+    name: name,
+    companyName: companyName,
+    destinations: {
+      ...destinations,
+      for (final pattern in patterns) ?pattern.headsign,
+    }.toList(),
+    patterns: patterns,
+  );
+
+  /// Ids in `relationships.patterns.data` of a route resource, in order.
+  /// `null` when the document does not have that relationship.
+  static List<String>? linkedPatternIds(Map<String, dynamic> resource) {
+    final relationships = resource['relationships'];
+    if (relationships is! Map) return null;
+    final patterns = relationships['patterns'];
+    if (patterns is! Map) return null;
+    final data = patterns['data'];
+    if (data is! List) return null;
+    return [
+      for (final item in data.whereType<Map>())
+        if (item['id'] != null) item['id'].toString(),
+    ];
+  }
 }
 
 /// One page of route search results.
@@ -187,6 +251,12 @@ class PatternStop {
   final int? minutesFromStart;
   final double? latitude;
   final double? longitude;
+
+  /// `null` when the Dashboard has no coordinates for the stop.
+  GeoPoint? get location => switch ((latitude, longitude)) {
+    (final double lat, final double lng) => GeoPoint(lat, lng),
+    _ => null,
+  };
 }
 
 /// A direction / variant of a route, with its line and stops
@@ -200,6 +270,7 @@ class RoutePattern {
     this.routeId,
     this.stops = const [],
     this.geometry = const [],
+    this.distanceMeters,
     this.drivingDurationSeconds,
   });
 
@@ -218,9 +289,13 @@ class RoutePattern {
             PatternStop.fromJson(Map<String, dynamic>.from(stop)),
       ]..sort((a, b) => a.sequence.compareTo(b.sequence)),
       geometry: _lineString(attributes['route_geometry']),
+      distanceMeters: _number(attributes['distance_meters']),
       drivingDurationSeconds: _number(attributes['driving_duration_seconds']),
     );
   }
+
+  /// JSON:API `type` of a pattern resource.
+  static const jsonApiType = 'route-patterns';
 
   final String id;
   final String name;
@@ -232,10 +307,35 @@ class RoutePattern {
   /// Line of the route. Empty when the Dashboard has none (`route_geometry`
   /// is nullable).
   final List<GeoPoint> geometry;
+  final double? distanceMeters;
   final double? drivingDurationSeconds;
 
   /// What the passenger reads: "Hacia {headsign}", or the pattern name.
   String get label => headsign != null ? 'Hacia $headsign' : name;
+
+  /// `true` when the Dashboard has the real line of the pattern.
+  bool get hasGeometry => geometry.length >= 2;
+
+  /// Stops that can be drawn (with coordinates), in travel order.
+  List<PatternStop> get locatedStops =>
+      stops.where((stop) => stop.location != null).toList();
+
+  /// The line to draw: [geometry], or — when the Dashboard has none — the
+  /// stops joined in order (an approximation).
+  List<GeoPoint> get path => hasGeometry
+      ? geometry
+      : [for (final stop in locatedStops) stop.location!];
+}
+
+/// A route and one of its directions, picked by the passenger to see on the
+/// map (e.g. from "Buses en curso" → **Ver ruta**).
+class RouteSelection {
+  const RouteSelection({required this.route, required this.pattern});
+
+  /// The route with **all** its [TransitRoute.patterns], so the passenger can
+  /// switch direction.
+  final TransitRoute route;
+  final RoutePattern pattern;
 }
 
 /// A bus running right now on a pattern, without driver data

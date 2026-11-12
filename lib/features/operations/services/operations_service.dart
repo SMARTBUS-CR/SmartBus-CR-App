@@ -71,14 +71,14 @@ class OperationsService {
   ///
   /// The Dashboard filters (`filter[name]`, `filter[code]`) compare accents
   /// as they are (PostgreSQL `LIKE`) and there is no destination filter, so
-  /// the public catalogue is downloaded once ([catalogue]) and searched here.
+  /// the public catalogue is downloaded once ([searchCatalogue]) and searched here.
   ///
   /// Order: exact number first, then routes whose number or name contains the
   /// text, then the ones that only match by destination; by number inside each
   /// group. [page] slices the results ([searchPageSize] per page).
   Future<RoutePage> searchRoutes(String query, {int page = 1}) async {
     final needle = foldForSearch(query.trim());
-    final routes = await catalogue();
+    final routes = await searchCatalogue();
 
     final ranked = <(int, TransitRoute)>[];
     for (final route in routes) {
@@ -116,7 +116,7 @@ class OperationsService {
   /// `GET ops/routes?include=company,patterns` — every route of the public
   /// catalogue with its company and destinations, all pages. Downloaded once
   /// per service; a failure is not kept, so the next search tries again.
-  Future<List<TransitRoute>> catalogue() {
+  Future<List<TransitRoute>> searchCatalogue() {
     final cached = _catalogue;
     if (cached != null) return cached;
     // Searches made while it downloads share the same request.
@@ -143,12 +143,62 @@ class OperationsService {
         }),
       );
       final included = JsonApiIncluded(body['included']);
-      routes.addAll(
-        _resources(body).map((r) => TransitRoute.fromJsonApi(r, included)),
-      );
+      final patterns = _patternsById(body);
+      routes.addAll([
+        for (final resource in _resources(body))
+          _withPatterns(resource, patterns, included: included),
+      ]);
       if (!_hasNextPage(body)) break;
     }
     return routes;
+  }
+
+  /// `GET ops/routes?include=patterns` — active routes, each with its
+  /// directions (line + ordered stops). **One request** for the whole map.
+  ///
+  /// The patterns arrive in the JSON:API `included` array. They are linked to
+  /// their route by `relationships.patterns.data`, or by the pattern's
+  /// `route_id` when the route has no such relationship.
+  Future<List<TransitRoute>> routesWithPatterns() async {
+    final body = await _client.get(
+      ApiConfig.opsRoutes({
+        'include': 'patterns',
+        'sort': 'code',
+        'page[size]': '100',
+      }),
+    );
+
+    final patterns = _patternsById(body);
+    return [
+      for (final resource in _resources(body))
+        _withPatterns(resource, patterns),
+    ];
+  }
+
+  /// The `route-patterns` of the document's `included` array, by id.
+  static Map<String, RoutePattern> _patternsById(Map<String, dynamic> body) => {
+    for (final resource in _included(body, RoutePattern.jsonApiType))
+      resource['id'].toString(): RoutePattern.fromJsonApi(resource),
+  };
+
+  /// [resource] with its own patterns: linked by `relationships.patterns.data`,
+  /// or by the pattern's `route_id` when the route has no such relationship.
+  static TransitRoute _withPatterns(
+    Map<String, dynamic> resource,
+    Map<String, RoutePattern> patterns, {
+    JsonApiIncluded included = const JsonApiIncluded.empty(),
+  }) {
+    final routeId = resource['id'].toString();
+    final linked = TransitRoute.linkedPatternIds(resource);
+    final own = linked != null
+        ? [for (final id in linked) ?patterns[id]]
+        : (patterns.values.where((p) => p.routeId == routeId).toList()
+            ..sort((a, b) => (a.code ?? '').compareTo(b.code ?? '')));
+    return TransitRoute.fromJsonApi(
+      resource,
+      included: included,
+      patterns: own,
+    );
   }
 
   /// `GET ops/routes/{id}/patterns` — directions of a route with their stops.
@@ -192,6 +242,19 @@ class OperationsService {
     }
     final links = body['links'];
     return links is Map && links['next'] is String;
+  }
+
+  /// Items of the JSON:API `included` array with the given [type].
+  static Iterable<Map<String, dynamic>> _included(
+    Map<String, dynamic> body,
+    String type,
+  ) {
+    final included = body['included'];
+    if (included is! List) return const [];
+    return included
+        .whereType<Map>()
+        .where((item) => item['type'] == type && item['id'] != null)
+        .map(Map<String, dynamic>.from);
   }
 
   static Map<String, dynamic> _resource(Map<String, dynamic> body) {
