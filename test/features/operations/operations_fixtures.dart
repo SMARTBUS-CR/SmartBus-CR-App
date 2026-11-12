@@ -93,6 +93,46 @@ Map<String, dynamic> liveTripResource({String id = tripId}) => {
 DriverTrip driverTrip({String id = tripId, String status = 'scheduled'}) =>
     DriverTrip.fromJsonApi(tripResource(id: id, status: status));
 
+/// A stop at [lat], [lng] (order = [seq]).
+PatternStop stopAt(
+  String name,
+  double lat,
+  double lng, {
+  required int seq,
+  int? minutes,
+}) => PatternStop(
+  stopId: 'stop-$name',
+  name: name,
+  sequence: seq,
+  minutesFromStart: minutes,
+  latitude: lat,
+  longitude: lng,
+);
+
+/// A pattern with [stops]; [geometry] empty = no `route_geometry`.
+RoutePattern pattern(
+  String id, {
+  String? headsign,
+  List<PatternStop> stops = const [],
+  List<GeoPoint> geometry = const [],
+  String? routeId,
+}) => RoutePattern(
+  id: id,
+  name: 'Patrón $id',
+  code: id,
+  headsign: headsign,
+  routeId: routeId,
+  stops: stops,
+  geometry: geometry,
+);
+
+TransitRoute route(
+  String id, {
+  required String code,
+  required String name,
+  List<RoutePattern> patterns = const [],
+}) => TransitRoute(id: id, code: code, name: name, patterns: patterns);
+
 /// OperationsService with canned answers; records what the screens call.
 class FakeOperations extends OperationsService {
   FakeOperations({
@@ -101,6 +141,8 @@ class FakeOperations extends OperationsService {
     this.routeList = const [],
     this.patterns = const [],
     this.buses = const {},
+    this.catalogue = const [],
+    this.catalogueError,
     this.startError,
     this.completeError,
   });
@@ -113,6 +155,12 @@ class FakeOperations extends OperationsService {
   List<TransitRoute> routeList;
   List<RoutePattern> patterns;
   Map<String, List<LiveBusTrip>> buses;
+
+  /// Routes with their patterns (`routesWithPatterns`, the home map).
+  List<TransitRoute> catalogue;
+
+  /// Thrown by `routesWithPatterns` while not null.
+  Exception? catalogueError;
   Exception? startError;
   Exception? completeError;
 
@@ -151,6 +199,13 @@ class FakeOperations extends OperationsService {
   Future<List<TransitRoute>> routes() async {
     calls.add('routes');
     return routeList;
+  }
+
+  @override
+  Future<List<TransitRoute>> routesWithPatterns() async {
+    calls.add('routesWithPatterns');
+    if (catalogueError != null) throw catalogueError!;
+    return catalogue;
   }
 
   @override
