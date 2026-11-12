@@ -7,14 +7,12 @@ import '../../core/location/location_service.dart';
 import '../../core/theme.dart';
 import '../../widgets/smartbus_header.dart';
 import '../trip_tracking/models/trip_tracking.dart';
-import '../trip_tracking/services/gps_location_service.dart';
 import '../trip_tracking/services/live_trip_tracker.dart';
-import '../trip_tracking/services/trip_live_feed.dart';
 import 'map/map_overlay.dart';
 import 'map/passenger_map.dart';
 
-/// Builds the tracker of a trip (tests plug in fakes).
-typedef LiveTripTrackerFactory = LiveTripTracker Function(String tripId);
+export '../trip_tracking/services/live_trip_tracker.dart'
+    show LiveTripTrackerFactory;
 
 /// Passenger: follows the bus of a trip in real time on the map (HU3).
 ///
@@ -46,15 +44,6 @@ class BusTrackingScreen extends StatefulWidget {
   /// the same clock as the tracker's.
   final DateTime Function() clock;
 
-  static LiveTripTracker _defaultTracker(String tripId) {
-    final service = GpsLocationService();
-    return LiveTripTracker(
-      tripId: tripId,
-      service: service,
-      feed: ReverbTripFeed.fromConfig(service: service),
-    );
-  }
-
   @override
   State<BusTrackingScreen> createState() => _BusTrackingScreenState();
 }
@@ -72,9 +61,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
   @override
   void initState() {
     super.initState();
-    _tracker = (widget.trackerFactory ?? BusTrackingScreen._defaultTracker)(
-      _tripId,
-    );
+    _tracker = (widget.trackerFactory ?? LiveTripTracker.withDefaults)(_tripId);
     _tracker.state.addListener(_onState);
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _onState());
     unawaited(_tracker.start());

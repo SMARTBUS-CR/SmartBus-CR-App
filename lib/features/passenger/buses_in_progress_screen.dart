@@ -41,13 +41,16 @@ class _BusesInProgressScreenState extends State<BusesInProgressScreen> {
     }
   }
 
-  void _open(TransitRoute route) {
-    Navigator.push(
+  /// "Ver ruta" in [RouteBusesScreen] closes both screens and hands the
+  /// [RouteSelection] to the passenger home, which draws it on the map.
+  Future<void> _open(TransitRoute route) async {
+    final selection = await Navigator.push<RouteSelection>(
       context,
-      MaterialPageRoute<void>(
+      MaterialPageRoute<RouteSelection>(
         builder: (_) => RouteBusesScreen(route: route, operations: _operations),
       ),
     );
+    if (selection != null && mounted) Navigator.pop(context, selection);
   }
 
   @override
@@ -137,7 +140,8 @@ class _RouteTile extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 /// One route: each direction with the buses running now ("Ver en vivo" opens
-/// the live tracking) and its stops ("Ver ruta").
+/// the live tracking), its stops ("Ver paradas") and "Ver ruta", which pops
+/// with a [RouteSelection] so the home map draws that direction.
 class RouteBusesScreen extends StatefulWidget {
   const RouteBusesScreen({super.key, required this.route, this.operations});
 
@@ -182,6 +186,19 @@ class _RouteBusesScreenState extends State<RouteBusesScreen> {
   void _follow(LiveBusTrip trip) =>
       Navigator.pushNamed(context, '/passenger/tracking', arguments: trip.id);
 
+  void _showOnMap(RoutePattern pattern) {
+    final patterns = <RoutePattern>[
+      for (final (p, _) in _patterns ?? const <(RoutePattern, Object)>[]) p,
+    ];
+    Navigator.pop(
+      context,
+      RouteSelection(
+        route: widget.route.withPatterns(patterns),
+        pattern: pattern,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final patterns = _patterns;
@@ -224,6 +241,7 @@ class _RouteBusesScreenState extends State<RouteBusesScreen> {
                     pattern: list[i].$1,
                     buses: list[i].$2,
                     onFollow: _follow,
+                    onShowRoute: () => _showOnMap(list[i].$1),
                   ),
                 ),
               ),
@@ -240,11 +258,13 @@ class _PatternCard extends StatelessWidget {
     required this.pattern,
     required this.buses,
     required this.onFollow,
+    required this.onShowRoute,
   });
 
   final RoutePattern pattern;
   final List<LiveBusTrip> buses;
   final void Function(LiveBusTrip) onFollow;
+  final VoidCallback onShowRoute;
 
   @override
   Widget build(BuildContext context) {
@@ -277,6 +297,18 @@ class _PatternCard extends StatelessWidget {
             else
               for (final bus in buses)
                 _BusTile(bus: bus, onTap: () => onFollow(bus)),
+            ListTile(
+              key: Key('show-route-${pattern.id}'),
+              contentPadding: EdgeInsets.zero,
+              onTap: onShowRoute,
+              leading: const Icon(
+                Icons.map_outlined,
+                color: SmartBusColors.verdePasajero,
+              ),
+              title: const Text('Ver ruta'),
+              subtitle: const Text('Recorrido y paradas en el mapa'),
+              trailing: const Icon(Icons.chevron_right),
+            ),
             Theme(
               // No divider lines around the expansion tile.
               data: Theme.of(context)
@@ -284,10 +316,10 @@ class _PatternCard extends StatelessWidget {
               child: ExpansionTile(
                 tilePadding: EdgeInsets.zero,
                 leading: const Icon(
-                  Icons.route,
+                  Icons.format_list_numbered,
                   color: SmartBusColors.verdePasajero,
                 ),
-                title: const Text('Ver ruta'),
+                title: const Text('Ver paradas'),
                 children: [
                   for (final stop in pattern.stops) _StopTile(stop: stop),
                 ],

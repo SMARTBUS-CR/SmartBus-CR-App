@@ -63,6 +63,14 @@ class MapConfig {
     defaultValue: 'Fuente: Esri, Vantor, Earthstar Geographics y la comunidad de usuarios de GIS',
   );
 
+  /// Fonts (glyphs) for the map labels we draw (stop numbers). Same server as
+  /// the streets style, so both base maps can draw text.
+  static const String glyphsUrl =
+      'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
+
+  /// Font of the stop numbers; it exists in [glyphsUrl].
+  static const String labelFont = 'Noto Sans Bold';
+
   /// Initial camera when the user's location is unknown: San José, Costa Rica.
   static const double fallbackLatitude = 9.9281;
   static const double fallbackLongitude = -84.0907;
@@ -82,6 +90,8 @@ class MapConfig {
   static String get satelliteStyleJson => jsonEncode({
     'version': 8,
     'name': 'SmartBus satellite',
+    // Raster imagery has no text, but the stop numbers need fonts.
+    'glyphs': glyphsUrl,
     'sources': {
       'satellite': {
         'type': 'raster',

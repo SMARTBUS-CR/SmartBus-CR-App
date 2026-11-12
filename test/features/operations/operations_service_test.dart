@@ -7,6 +7,7 @@ import 'package:http/testing.dart';
 import 'package:smartbus_drivers/core/network/api_client.dart';
 import 'package:smartbus_drivers/core/network/api_exception.dart';
 import 'package:smartbus_drivers/core/storage/secure_session_store.dart';
+import 'package:smartbus_drivers/features/operations/models/operations_models.dart';
 import 'package:smartbus_drivers/features/operations/services/operations_service.dart';
 import 'package:smartbus_drivers/features/trip_tracking/models/trip_tracking.dart';
 
@@ -166,6 +167,167 @@ void main() {
       final pattern = (await h.service.routePatterns(routeId)).single;
 
       expect(pattern.geometry, isEmpty);
+    });
+
+    group('routesWithPatterns (include=patterns)', () {
+      // Shape checked against -dev: patterns in `included`, linked from
+      // `relationships.patterns.data`; other included types are ignored.
+      Map<String, dynamic> routeWith(
+        String id,
+        String code,
+        List<String> ids,
+      ) => {
+        'id': id,
+        'type': 'routes',
+        'attributes': {'code': code, 'name': 'Ruta $code'},
+        'relationships': {
+          'company': {
+            'data': {'id': 'c1', 'type': 'companies'},
+          },
+          'patterns': {
+            'data': [
+              for (final p in ids) {'id': p, 'type': 'route-patterns'},
+            ],
+          },
+        },
+      };
+
+      Map<String, dynamic> patternWith(
+        String id,
+        String routeId, {
+        Object? geometry,
+        Object? distance,
+      }) => {
+        'id': id,
+        'type': 'route-patterns',
+        'attributes': {
+          'code': id.toUpperCase(),
+          'name': 'Patrón $id',
+          'headsign': 'Destino $id',
+          'route_id': routeId,
+          'route_geometry': geometry,
+          'distance_meters': distance,
+          'driving_duration_seconds': null,
+          'stops': [
+            {
+              'stop_id': 's-$id',
+              'stop_name': 'Parada $id',
+              'stop_sequence': 1,
+              'minutes_from_start': 0,
+              'latitude': 9.9281,
+              'longitude': -84.0907,
+            },
+          ],
+        },
+        'relationships': <String, dynamic>{},
+      };
+
+      test('one request; patterns linked to their route, in order', () async {
+        final h = _Harness({
+          'data': [
+            routeWith('r1', 'DEMO-CITY', ['p1']),
+            routeWith('r2', 'PV-RF', ['p3', 'p2']),
+          ],
+          'included': [
+            {
+              'id': 'c1',
+              'type': 'companies',
+              'attributes': {'name': 'SmartBus'},
+            },
+            patternWith(
+              'p1',
+              'r1',
+              geometry: {
+                'type': 'LineString',
+                'coordinates': [
+                  [-84.0907, 9.9281],
+                  [-84.0800, 9.9350],
+                ],
+              },
+              distance: 1800,
+            ),
+            patternWith('p2', 'r2'),
+            patternWith('p3', 'r2'),
+          ],
+        });
+
+        final routes = await h.service.routesWithPatterns();
+
+        final request = h.requests.single;
+        expect(request.url.path, endsWith('/ops/routes'));
+        expect(request.url.queryParameters['include'], 'patterns');
+        expect(request.url.queryParameters['page[size]'], '100');
+
+        expect(routes.map((r) => r.code), ['DEMO-CITY', 'PV-RF']);
+        // The relationship order wins.
+        expect(routes[1].patterns.map((p) => p.id), ['p3', 'p2']);
+
+        final withGeometry = routes[0].patterns.single;
+        expect(withGeometry.hasGeometry, isTrue);
+        expect(withGeometry.geometry.last.latitude, 9.935);
+        expect(withGeometry.distanceMeters, 1800);
+        expect(withGeometry.stops.single.name, 'Parada p1');
+
+        final withoutGeometry = routes[1].patterns.first;
+        expect(withoutGeometry.hasGeometry, isFalse);
+        expect(withoutGeometry.distanceMeters, isNull);
+        // Without geometry, the path joins the stops.
+        expect(withoutGeometry.path.single.latitude, 9.9281);
+      });
+
+      test('no relationships: patterns linked by their route_id', () async {
+        final h = _Harness({
+          'data': [
+            {
+              'id': 'r1',
+              'type': 'routes',
+              'attributes': {'code': 'A', 'name': 'A'},
+            },
+          ],
+          'included': [
+            patternWith('p2', 'r1'),
+            patternWith('p1', 'r1'),
+            patternWith('px', 'other'),
+          ],
+        });
+
+        final route = (await h.service.routesWithPatterns()).single;
+
+        expect(route.patterns.map((p) => p.id), ['p1', 'p2']);
+      });
+
+      test('no included: routes without patterns', () async {
+        final h = _Harness({
+          'data': [
+            routeWith('r1', 'A', ['p1']),
+          ],
+        });
+
+        final route = (await h.service.routesWithPatterns()).single;
+
+        expect(route.patterns, isEmpty);
+      });
+    });
+
+    test('directionLabel tells apart patterns with the same headsign', () {
+      RoutePattern p(String id, String name, String headsign) =>
+          RoutePattern(id: id, name: name, headsign: headsign);
+      final route = TransitRoute(
+        id: 'r',
+        code: 'SJ-PV',
+        name: 'San José - Puerto Viejo',
+        patterns: [
+          p('a', 'Puerto Viejo - San José por Vara Blanca', 'San José'),
+          p('b', 'Puerto Viejo - San José por Zurquí', 'San José'),
+          p('c', 'San José - Puerto Viejo', 'Puerto Viejo'),
+        ],
+      );
+
+      expect(route.patterns.map(route.directionLabel), [
+        'Hacia San José por Vara Blanca',
+        'Hacia San José por Zurquí',
+        'Hacia Puerto Viejo',
+      ]);
     });
 
     test('ongoingTrips: buses running on a pattern', () async {

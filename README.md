@@ -136,7 +136,7 @@ Por defecto la app apunta a `https://smartbus-api-gateway-dev.onrender.com/api`
 | `GPS_INTERVAL_SECONDS` | `5` | Cada cuántos segundos se envía la posición |
 | `API_LANGUAGE` | `es` | Header `Accept-Language` (`en` \| `es`) |
 | `OPS_GATEWAY_URL` | = `API_GATEWAY_URL` | Base **solo** para los endpoints del Dashboard (`ops/*`: viajes del conductor, rutas, buses en curso) |
-| `REVERB_APP_KEY` | vacío | Key de Reverb del servicio GPS (está en su `.env`; **no es secreta**). Vacío = sin tiempo real: el pasajero ve el bus consultando cada 15 s |
+| `REVERB_APP_KEY` | la de **-dev en Render** (`ApiConfig._devReverbAppKey`) | Key de Reverb del servicio GPS (**no es secreta**). Con Reverb local, pasa la del `.env` local. Vacío = sin tiempo real: el pasajero ve el bus consultando cada 15 s |
 | `REVERB_HOST` | host de `GPS_GATEWAY_URL` | Host del WebSocket. En Render no hace falta: el nginx del Gateway reenvía `/app/*` a Reverb |
 | `REVERB_PORT` | puerto de `GPS_GATEWAY_URL` (443 / 80) | Puerto del WebSocket (`8080` con Reverb local) |
 | `REVERB_SCHEME` | `wss` si la URL es https, si no `ws` | `ws` con Reverb local |
@@ -283,7 +283,8 @@ de pasajero (**Inicio → chip "Buses en curso"** → ruta → **Ver en vivo**).
    ```
 
 Sin `REVERB_APP_KEY` también funciona, pero sin tiempo real: el bus se
-actualiza cada 15 s. En Render bastará con `--dart-define=REVERB_APP_KEY=...`.
+actualiza cada 15 s. Contra Render no hace falta pasarla: la key de -dev ya es
+el valor por defecto en `ApiConfig`.
 
 ---
 
