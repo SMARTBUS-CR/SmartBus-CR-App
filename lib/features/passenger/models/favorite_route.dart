@@ -47,8 +47,13 @@ class FavoriteRoute {
 
   /// Favorite with only the route known: what the app shows right after the
   /// star is tapped, before the server answers.
-  factory FavoriteRoute.pending(TransitRoute route) =>
-      FavoriteRoute(id: '', route: route, savedAt: DateTime.now());
+  factory FavoriteRoute.pending(TransitRoute route, {String? label}) =>
+      FavoriteRoute(
+        id: '',
+        route: route,
+        label: label,
+        savedAt: DateTime.now(),
+      );
 
   /// Id of the favorite itself (not of the route).
   final String id;
