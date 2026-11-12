@@ -28,9 +28,9 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 | `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register` → `/verify-email` (sin sesión hasta verificar el correo) |
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal), RF-09 (búsqueda) |
 | `passenger/route_search_screen.dart` | RF-09 |
-| `passenger/favorite_routes_screen.dart` | "Mis favoritos" (`/passenger/favorites`, chip "Favoritos" del inicio): rutas guardadas, quitar con la estrella o deslizando + "Deshacer" (sección 11) |
+| `passenger/favorite_routes_screen.dart` | "Mis favoritos" (`/passenger/favorites`, chip "Favoritos" del inicio): rutas guardadas; quitar una (estrella o deslizar), varias ("Editar" → "Eliminar (N)") o todas, con confirmación y "Deshacer" (sección 11) |
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal); la barra "¿A dónde vas?" abre la búsqueda |
-| `passenger/route_search_screen.dart` | RF-09: "Buscar ruta" por nombre, número o destino (sección 11) |
+| `passenger/route_search_screen.dart` | RF-09: "Buscar ruta" por nombre, número o destino (sección 12) |
 | `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar". Entradas "Editar perfil" y "Cambiar contraseña". Botón "Eliminar cuenta" con confirmación (solo UI: aún no llama al backend) |
 | `passenger/edit_profile_screen.dart` | Editar nombre y correo (`updateProfile`): solo envía lo que cambió; cambiar el correo pide la contraseña actual y luego verificar el nuevo correo con código |
 | `passenger/change_password_screen.dart` | Cambiar contraseña (`changePassword`): actual + nueva (requisitos en vivo) + confirmación |
@@ -191,7 +191,7 @@ distribución inspirada en Google Maps y la identidad de SmartBus.
   en adelante prohíben el uso comercial (CC BY-NC-SA) y la de 2017 no tiene
   imagen de Costa Rica a zoom alto.
 - **Búsqueda:** "¿A dónde vas?" es un botón: abre la pantalla "Buscar ruta"
-  (`/passenger/search`, sección 11) con el teclado listo.
+  (`/passenger/search`, sección 12) con el teclado listo.
 
 Se pueden cambiar sin tocar código (por ejemplo, otro estilo o un OpenFreeMap
 propio, ya que el servicio público no tiene SLA):
@@ -392,7 +392,7 @@ mismo Gateway). Todo pasa por `OperationsService`
 | `startTrip(id)` | `POST ops/trips/{id}/start` | Sí | Conductor asignado |
 | `completeTrip(id)` | `POST ops/trips/{id}/complete` | Sí | Conductor asignado |
 | `routes()` | `GET ops/routes` | No | Pasajero |
-| `searchRoutes(query, {page})` | `GET ops/routes?include=company,patterns` (catálogo completo, se busca en el teléfono) | No | Pasajero (sección 11) |
+| `searchRoutes(query, {page})` | `GET ops/routes?include=company,patterns` (catálogo completo, se busca en el teléfono) | No | Pasajero (sección 12) |
 | `routesWithPatterns()` | `GET ops/routes?include=patterns` (rutas + sentidos + paradas en **una** petición; ver §10) | No | Pasajero |
 | `routePatterns(routeId)` | `GET ops/routes/{id}/patterns` (trazo + paradas) | No | Pasajero |
 | `ongoingTrips(patternId)` | `GET ops/route-patterns/{id}/trips` (solo `in_progress`, sin datos del conductor) | No | Pasajero |
@@ -616,7 +616,53 @@ backend toma el usuario del token.
 Cada fila: código, nombre (máximo 2 líneas), alias y empresa. El backend no
 devuelve origen y destino del favorito (no incluye los recorridos), así que se
 usa el nombre de la ruta, que ya los suele traer ("Heredia – San José").
-## 11. Búsqueda de rutas (pasajero)
+
+### Eliminar varias o todas
+
+En "Mis favoritos", encima de la lista: "N rutas", **Editar** y el menú **⋮**.
+
+- **Editar** → cada ruta muestra una casilla en lugar de la estrella y no se
+  puede deslizar. Tocar la fila o la casilla la selecciona. **Seleccionar
+  todo** marca / desmarca todas. **Listo** (o el botón atrás de Android) sale
+  sin borrar nada.
+- **Eliminar (N)** (abajo; desactivado con 0) → diálogo "¿Eliminar N rutas de
+  tus favoritos?" con **Cancelar** (no borra y mantiene la selección) y
+  **Eliminar**.
+- **⋮ → Eliminar todos** → diálogo "¿Eliminar todas tus rutas favoritas?". Sin
+  favoritos no aparece.
+- Al confirmar, las rutas salen de la lista al instante, el modo edición se
+  cierra y un SnackBar dice "N rutas eliminadas de favoritos." con
+  **Deshacer**.
+- **No hay endpoint para borrar varias:** `FavoritesController.removeMany`
+  envía un `DELETE ops/favorites/{route_id}` por ruta, **máximo 4 a la vez**
+  (`maxParallelRequests`). Un 404 (ya se había borrado en otro teléfono) cuenta
+  como borrada.
+- **Fallo parcial:** las rutas que fallaron vuelven a su lugar y las demás
+  quedan borradas. SnackBar "No se pudieron eliminar N rutas." + **Reintentar**,
+  que reenvía solo las que fallaron.
+- **Deshacer** (`FavoritesController.restore`): un `POST` por ruta **con su
+  alias** (`label`), y vuelven al instante en el orden que tenían. Si alguna
+  falla, sale otra vez de la lista y se avisa. Un 409 (ya estaba) cuenta como
+  guardada. Al recargar, el servidor las ordena por la nueva fecha de guardado.
+- Mientras se borra, **Editar** y **⋮** están desactivados y cada ruta se envía
+  una sola vez.
+- Un 401 en cualquier solicitud borra la sesión y abre el login.
+- Accesibilidad: el lector de pantalla lee cada fila junto con su casilla, y el
+  botón como "Eliminar N rutas seleccionadas".
+
+Si el Dashboard agrega un borrado múltiple (p. ej. `DELETE ops/favorites` con
+`{ "route_ids": [...] }`), solo cambia `removeMany`.
+
+### Tests
+
+| Qué | Archivo |
+|---|---|
+| URLs, token sin id de usuario, lectura del `included`, orden, 409 / 404 como éxito, errores | `test/features/passenger/favorites_service_test.dart` |
+| Lista, vacío, carga, 5xx + reintentar, 401, quitar con estrella / deslizar + Deshacer, fallo que revierte, sin duplicados, 320 × 568, otra sesión | `test/features/passenger/favorite_routes_screen_test.dart` |
+| El chip "Favoritos" abre "Mis favoritos" | `test/features/passenger/passenger_home_screen_test.dart` |
+| Eliminar varias / todas (AC1–AC9): modo edición, selección, confirmación, máx. 4 a la vez, fallo parcial + reintentar, deshacer en orden y con alias, sin duplicados, 401, 320 × 568 | `test/features/passenger/delete_favorite_routes_test.dart` |
+
+## 12. Búsqueda de rutas (pasajero)
 
 La barra **"¿A dónde vas?"** del inicio abre **"Buscar ruta"**
 (`features/passenger/route_search_screen.dart`, ruta `/passenger/search`) con
@@ -680,9 +726,6 @@ Dashboard que busque nombre, código y `headsign` **sin tildes** (PostgreSQL
 
 | Qué | Archivo |
 |---|---|
-| URLs, token sin id de usuario, lectura del `included`, orden, 409 / 404 como éxito, errores | `test/features/passenger/favorites_service_test.dart` |
-| AC2–AC10: lista, vacío, carga, 5xx + reintentar, 401, quitar con estrella / deslizar + Deshacer, fallo que revierte, sin duplicados, 320 × 568, otra sesión | `test/features/passenger/favorite_routes_screen_test.dart` |
-| AC1: el chip "Favoritos" abre "Mis favoritos" | `test/features/passenger/passenger_home_screen_test.dart` |
 | Catálogo (todas las páginas, una sola descarga, reintento si falla), con o sin tilde, por número / nombre / destino, orden, páginas de 20 | `test/features/operations/route_search_service_test.dart` |
 | AC1–AC9: teclado, espera de 400 ms, mínimo 2 caracteres, respuestas viejas, resultados, resaltado, cargar más, abrir ruta, sin resultados, borrar, errores + reintentar, pantalla 320 × 568 | `test/features/passenger/route_search_screen_test.dart` |
 | La barra del inicio abre "Buscar ruta" | `test/features/passenger/passenger_home_screen_test.dart` |
