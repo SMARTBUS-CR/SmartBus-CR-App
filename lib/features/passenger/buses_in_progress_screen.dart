@@ -5,6 +5,8 @@ import '../../core/theme.dart';
 import '../../widgets/smartbus_header.dart';
 import '../operations/models/operations_models.dart';
 import '../operations/services/operations_service.dart';
+import 'favorite_star.dart';
+import 'services/favorites_controller.dart';
 
 /// Passenger "Buses en curso": first pick a route (Dashboard catalogue), then
 /// [RouteBusesScreen] shows its directions with the buses running now — tap
@@ -143,10 +145,18 @@ class _RouteTile extends StatelessWidget {
 /// the live tracking), its stops ("Ver paradas") and "Ver ruta", which pops
 /// with a [RouteSelection] so the home map draws that direction.
 class RouteBusesScreen extends StatefulWidget {
-  const RouteBusesScreen({super.key, required this.route, this.operations});
+  const RouteBusesScreen({
+    super.key,
+    required this.route,
+    this.operations,
+    this.favorites,
+  });
 
   final TransitRoute route;
   final OperationsService? operations;
+
+  /// For the favorite star; defaults to [FavoritesController.shared].
+  final FavoritesController? favorites;
 
   @override
   State<RouteBusesScreen> createState() => _RouteBusesScreenState();
@@ -213,6 +223,17 @@ class _RouteBusesScreenState extends State<RouteBusesScreen> {
             type: SmartBusUserType.passenger,
             compact: true,
             onBack: () => Navigator.pop(context),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: FavoriteStarButton(
+                route: route,
+                controller: widget.favorites,
+                showLabel: true,
+              ),
+            ),
           ),
           Expanded(
             child: switch ((patterns, _error)) {
