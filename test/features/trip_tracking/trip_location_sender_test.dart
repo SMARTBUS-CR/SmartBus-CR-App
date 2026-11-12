@@ -127,6 +127,27 @@ void main() {
     });
   });
 
+  test('a new start begins with fresh counters (shared sender)', () {
+    fakeAsync((async) {
+      final sender = build();
+      sender.start(tripId: 'first-trip');
+      async.flushMicrotasks();
+      async.elapse(interval * 2);
+      async.flushMicrotasks();
+      expect(sender.snapshot.value.sentCount, greaterThan(0));
+
+      sender.stop();
+      sender.start(tripId: _tripId);
+      async.flushMicrotasks();
+
+      final snap = sender.snapshot.value;
+      expect(snap.tripId, _tripId);
+      expect(snap.sentCount, 1); // only the first fix of the new trip
+      expect(service.sent.last.tripId, _tripId);
+      sender.dispose();
+    });
+  });
+
   test('does not send when device location services are off', () {
     fakeAsync((async) {
       geo.serviceEnabled = false;
@@ -275,6 +296,8 @@ void main() {
         expect(sender.snapshot.value.state, TripTrackingState.rejected);
         expect(sender.snapshot.value.lastError, message);
         expect(sender.snapshot.value.pendingCount, 0);
+        // Only 401 means "go to login" (retrying would get 401 again).
+        expect(sender.snapshot.value.sessionExpired, status == 401);
 
         // It does not keep failing every interval.
         final calls = service.calls;
