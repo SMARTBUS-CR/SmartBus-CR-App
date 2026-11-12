@@ -16,12 +16,22 @@ import '../trip_tracking/models/trip_tracking.dart';
 import '../trip_tracking/services/active_trip_tracking.dart';
 import '../trip_tracking/services/trip_location_sender.dart';
 import '../operations/services/next_stop_tracker.dart';
+import 'widgets/trip_status_badge.dart';
 
 /// Shown when the Gateway answers 401.
 const sessionExpiredMessage = 'Tu sesión expiró. Inicia sesión nuevamente.';
 
 /// Completing answered 403 (not the driver's trip) or 404 (no such trip).
 const cannotCompleteMessage = 'No puedes finalizar este viaje.';
+
+/// Refreshing the status answered 403 / 404.
+const tripUnavailableMessage = 'Este viaje ya no está disponible';
+
+/// Refreshing the status failed (no connection, timeout, 429, 5xx).
+const statusRefreshFailedMessage = 'No se pudo actualizar el estado.';
+
+/// How often the status is asked again while the screen is open.
+const statusRefreshInterval = Duration(seconds: 60);
 
 /// Arguments of the `/driver/trip` route.
 class TripScreenArgs {
@@ -51,8 +61,15 @@ class TripScreenArgs {
 /// Opened from the "Recorrido" tab without a trip, it looks for the driver's
 /// trip that is already in progress (e.g. the app was closed mid-trip).
 ///
-/// A 401 (loading, completing, or the GPS itself) clears the session and goes
-/// to Login.
+/// **Status:** under the header, a badge with the Dashboard status combined
+/// with the GPS of this phone (En curso, En curso · ubicación detenida /
+/// rechazada, Programado, Finalizado, Cancelado). It is asked again
+/// (`GET ops/trips/{id}`) when the screen opens, on pull-to-refresh and every
+/// [statusRefreshInterval] while the app is in the foreground: a trip the
+/// admin completes or cancels stops the GPS.
+///
+/// A 401 (loading, completing, refreshing or the GPS itself) clears the
+/// session and goes to Login.
 class TripScreen extends StatefulWidget {
   const TripScreen({
     super.key,
@@ -87,7 +104,7 @@ class TripScreen extends StatefulWidget {
   State<TripScreen> createState() => _TripScreenState();
 }
 
-class _TripScreenState extends State<TripScreen> {
+class _TripScreenState extends State<TripScreen> with WidgetsBindingObserver {
   late final TripLocationSender _sender =
       widget.sender ?? ActiveTripTracking.sender;
   late final OperationsService _operations =
@@ -112,6 +129,24 @@ class _TripScreenState extends State<TripScreen> {
   /// longer exists). The GPS is stopped.
   bool _cannotComplete = false;
 
+  // --- Status refresh ------------------------------------------------------------
+
+  Timer? _statusTimer;
+
+  /// `GET ops/trips/{id}` is running.
+  bool _refreshing = false;
+
+  /// The last refresh failed (network, 429, 5xx): the status shown is the
+  /// last known one.
+  bool _refreshFailed = false;
+
+  /// Refreshing answered 403 / 404: the trip is not this driver's anymore.
+  bool _unavailable = false;
+
+  /// Bumped by every refresh and by "Finalizar": an older answer that arrives
+  /// late is ignored.
+  int _statusSeq = 0;
+
   // --- Map ---------------------------------------------------------------------
 
   PassengerMapHandle? _map;
@@ -135,17 +170,24 @@ class _TripScreenState extends State<TripScreen> {
     // Back on the tab while the GPS kept sending: keep "hace Ns" fresh.
     _onSnapshot();
     _setTrip(widget.trip);
+    WidgetsBinding.instance.addObserver(this);
     if (_trip == null) {
       _loadActiveTrip();
-    } else if (widget.autoStart) {
+    } else {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _start();
+        if (!mounted) return;
+        if (widget.autoStart) _start();
+        // The trip may have changed since Inicio loaded it.
+        _refreshStatus();
       });
     }
+    _scheduleStatusRefresh();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _statusTimer?.cancel();
     _ticker?.cancel();
     // Only stop listening: the GPS keeps sending while the driver is on
     // another tab (ActiveTripTracking).
@@ -230,6 +272,108 @@ class _TripScreenState extends State<TripScreen> {
     } finally {
       if (mounted) setState(() => _loadingTrip = false);
     }
+  }
+
+  // --- Status refresh ------------------------------------------------------------
+
+  /// Asks the status again every [statusRefreshInterval] (only while the app
+  /// is in the foreground, see [didChangeAppLifecycleState]).
+  void _scheduleStatusRefresh() {
+    _statusTimer?.cancel();
+    _statusTimer = Timer.periodic(statusRefreshInterval, (_) {
+      if (mounted && !(_trip?.status.isFinished ?? false)) _refreshStatus();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _refreshStatus();
+        _scheduleStatusRefresh();
+      case AppLifecycleState.paused || AppLifecycleState.hidden:
+        _statusTimer?.cancel();
+        _statusTimer = null;
+      default:
+        break;
+    }
+  }
+
+  /// Pull-to-refresh and the "Actualizar" button.
+  Future<void> _pullToRefresh() =>
+      _trip == null ? _loadActiveTrip() : _refreshStatus();
+
+  /// `GET ops/trips/{id}`: the trip's current status in the Dashboard. If it
+  /// is no longer in progress (the admin completed or cancelled it) the GPS
+  /// stops. On a failure the last known status stays, with a notice.
+  Future<void> _refreshStatus() async {
+    final trip = _trip;
+    if (trip == null ||
+        _busy ||
+        _refreshing ||
+        _signingOut ||
+        _unavailable ||
+        _cannotComplete) {
+      return;
+    }
+    final seq = ++_statusSeq;
+    setState(() => _refreshing = true);
+    try {
+      final fresh = await _operations.trip(trip.id);
+      // "Finalizar" (or a newer refresh) ran meanwhile: its answer wins.
+      if (!mounted || seq != _statusSeq || _busy) return;
+      _applyStatus(_trip!.refreshedWith(fresh));
+      setState(() => _refreshFailed = false);
+    } on ApiException catch (e) {
+      if (!mounted || seq != _statusSeq) return;
+      switch (e.type) {
+        case ApiErrorType.unauthorized:
+          await _onSessionExpired();
+        case ApiErrorType.forbidden || ApiErrorType.notFound:
+          _stopSending(trip.id);
+          setState(() => _unavailable = true);
+        default:
+          setState(() => _refreshFailed = true);
+      }
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  /// Shows [updated] (a refreshed trip). A trip that left `in_progress`
+  /// stops the GPS; one completed / cancelled from the admin panel says so.
+  void _applyStatus(DriverTrip updated) {
+    final before = _trip?.status;
+    final stopped =
+        updated.status != TripStatus.inProgress && _stopSending(updated.id);
+    setState(() {
+      if (_route == null) {
+        _setTrip(updated);
+      } else {
+        _trip = updated; // keep the drawn route and the camera
+      }
+    });
+    if (before == TripStatus.inProgress && updated.status.isFinished) {
+      final what = updated.status == TripStatus.cancelled
+          ? 'El viaje fue cancelado desde el panel de administración.'
+          : 'El viaje se finalizó desde el panel de administración.';
+      _showNotice(
+        stopped ? '$what Se dejó de enviar tu ubicación.' : what,
+        color: updated.status == TripStatus.cancelled
+            ? SmartBusColors.error
+            : SmartBusColors.grisOscuro,
+      );
+    }
+  }
+
+  /// Stops the GPS if it is sending [tripId]. Returns whether it was.
+  bool _stopSending(String tripId) {
+    final snap = _sender.snapshot.value;
+    final sending =
+        snap.tripId == tripId &&
+        (snap.isTracking || snap.state == TripTrackingState.starting);
+    if (sending) _sender.stop();
+    return sending;
   }
 
   // --- Map ---------------------------------------------------------------------
@@ -379,6 +523,7 @@ class _TripScreenState extends State<TripScreen> {
   Future<void> _complete() async {
     final trip = _trip;
     if (trip == null || _busy || !mounted) return;
+    _statusSeq++; // a refresh still running must not overwrite the answer
     setState(() {
       _busy = true;
       _tripError = null;
@@ -388,7 +533,10 @@ class _TripScreenState extends State<TripScreen> {
       final done = await _operations.completeTrip(trip.id);
       if (!mounted) return;
       if (done.status != TripStatus.inProgress) _sender.stop();
-      setState(() => _trip = done.withPlannedPattern(trip.plannedPattern));
+      setState(() {
+        _trip = trip.refreshedWith(done);
+        _refreshFailed = false;
+      });
     } on ApiException catch (e) {
       if (!mounted) return;
       switch (e.type) {
@@ -419,21 +567,28 @@ class _TripScreenState extends State<TripScreen> {
       final fresh = await _operations.trip(tripId);
       if (!mounted || fresh.status == TripStatus.inProgress) return;
       _sender.stop();
-      setState(() => _trip = fresh.withPlannedPattern(_trip?.plannedPattern));
+      setState(() => _trip = _trip!.refreshedWith(fresh));
     } on ApiException catch (e) {
       if (e.type == ApiErrorType.unauthorized) await _onSessionExpired();
       // Otherwise keep what is shown: the driver can try again.
     }
   }
 
-  void _showError(String message, {VoidCallback? onRetry}) {
+  void _showError(String message, {VoidCallback? onRetry}) =>
+      _showNotice(message, onRetry: onRetry);
+
+  void _showNotice(
+    String message, {
+    VoidCallback? onRetry,
+    Color color = SmartBusColors.error,
+  }) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
           content: Text(message),
           behavior: SnackBarBehavior.floating,
-          backgroundColor: SmartBusColors.error,
+          backgroundColor: color,
           action: onRetry == null
               ? null
               : SnackBarAction(
@@ -469,8 +624,13 @@ class _TripScreenState extends State<TripScreen> {
     return trip != null &&
         trip.status == TripStatus.inProgress &&
         !_loadingTrip &&
-        !_cannotComplete;
+        !_cannotComplete &&
+        !_unavailable;
   }
+
+  /// The status strip is shown: a known trip that is still this driver's.
+  bool get _showStatus =>
+      _trip != null && !_loadingTrip && !_cannotComplete && !_unavailable;
 
   @override
   Widget build(BuildContext context) {
@@ -486,15 +646,40 @@ class _TripScreenState extends State<TripScreen> {
             type: SmartBusUserType.driver,
             compact: onRoute,
           ),
+          if (_showStatus)
+            ValueListenableBuilder<TripTrackingSnapshot>(
+              valueListenable: _sender.snapshot,
+              builder: (context, snap, _) => _TripStatusStrip(
+                info: TripStatusInfo.of(_trip!, snap),
+                refreshing: _refreshing,
+                refreshFailed: _refreshFailed,
+                onRefresh: _pullToRefresh,
+              ),
+            ),
           Expanded(
-            child: onRoute
-                ? _routeView(_trip!)
-                : Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 28, 20, 20),
-                    child: _statusView(),
-                  ),
+            child: RefreshIndicator(
+              key: const Key('trip-refresh'),
+              onRefresh: _pullToRefresh,
+              child: onRoute ? _routeView(_trip!) : _scrollableStatusView(),
+            ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// [_statusView] inside a scroll view, so it can be pulled to refresh.
+  Widget _scrollableStatusView() {
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 28, 20, 20),
+            child: _statusView(),
+          ),
+        ),
       ),
     );
   }
@@ -562,16 +747,20 @@ class _TripScreenState extends State<TripScreen> {
             ],
           ),
         ),
-        ValueListenableBuilder<TripTrackingSnapshot>(
-          valueListenable: _sender.snapshot,
-          builder: (context, snap, _) => _TripPanel(
-            trip: trip,
-            snap: snap,
-            nextStop: _nextStop,
-            tripError: _tripError,
-            onResume: _start,
-            onStop: _stop,
-            completing: _busy,
+        // Scrollable (even when it fits) so pulling it down refreshes.
+        SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: ValueListenableBuilder<TripTrackingSnapshot>(
+            valueListenable: _sender.snapshot,
+            builder: (context, snap, _) => _TripPanel(
+              trip: trip,
+              snap: snap,
+              nextStop: _nextStop,
+              tripError: _tripError,
+              onResume: _start,
+              onStop: _stop,
+              completing: _busy,
+            ),
           ),
         ),
       ],
@@ -606,6 +795,18 @@ class _TripScreenState extends State<TripScreen> {
         onAction: _goHome,
       );
     }
+    if (_unavailable) {
+      return _BlockedView(
+        key: const Key('trip-unavailable'),
+        icon: Icons.block,
+        title: tripUnavailableMessage,
+        message:
+            'Ya no está asignado a tu cuenta o fue eliminado. '
+            'Ya no se envía tu ubicación.',
+        actionLabel: 'Ir a Inicio',
+        onAction: _goHome,
+      );
+    }
     if (trip.status == TripStatus.scheduled) {
       return _BlockedView(
         icon: Icons.schedule,
@@ -624,6 +825,107 @@ class _TripScreenState extends State<TripScreen> {
 }
 
 // ---------------------------------------------------------------------------
+
+/// Under the header: the status badge, what it means, and "Actualizar".
+/// When the last refresh failed, a "No se pudo actualizar" line with
+/// "Reintentar" (the status shown is the last known one).
+class _TripStatusStrip extends StatelessWidget {
+  const _TripStatusStrip({
+    required this.info,
+    required this.refreshing,
+    required this.refreshFailed,
+    required this.onRefresh,
+  });
+
+  final TripStatusInfo info;
+  final bool refreshing;
+  final bool refreshFailed;
+  final Future<void> Function() onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('trip-status'),
+      decoration: BoxDecoration(
+        color: SmartBusColors.blanco,
+        border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
+            child: Row(
+              children: [
+                // The badge keeps most of its text; the message gets the rest.
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: MediaQuery.sizeOf(context).width * 0.55,
+                  ),
+                  child: TripStatusBadge.forInfo(
+                    info,
+                    key: const Key('trip-status-badge'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    info.message,
+                    key: const Key('trip-status-message'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                  ),
+                ),
+                IconButton(
+                  key: const Key('refresh-status'),
+                  tooltip: 'Actualizar estado',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.refresh, size: 20),
+                  color: SmartBusColors.azulPrincipal,
+                  onPressed: refreshing ? null : onRefresh,
+                ),
+              ],
+            ),
+          ),
+          if (refreshFailed)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 4, 2),
+              child: Row(
+                key: const Key('status-refresh-failed'),
+                children: [
+                  const Icon(
+                    Icons.cloud_off,
+                    size: 16,
+                    color: SmartBusColors.retraso,
+                  ),
+                  const SizedBox(width: 6),
+                  const Expanded(
+                    child: Text(
+                      statusRefreshFailedMessage,
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  TextButton(
+                    key: const Key('status-retry'),
+                    onPressed: refreshing ? null : onRefresh,
+                    child: const Text('Reintentar'),
+                  ),
+                ],
+              ),
+            ),
+          SizedBox(
+            height: 2,
+            child: refreshing
+                ? const LinearProgressIndicator(key: Key('status-refreshing'))
+                : null,
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 /// Compact panel under the map. Tracking: status line, next stop, the
 /// "no cierres la app" notice and "Finalizar recorrido". Otherwise, why the
@@ -761,10 +1063,11 @@ class _TripPanel extends StatelessWidget {
         ];
       case TripTrackingState.rejected:
         return [
-          _PanelMessage(
+          // The reason is in the status strip, above.
+          const _PanelMessage(
             icon: Icons.block,
             title: 'No se puede enviar la ubicación',
-            message: snap.lastError ?? 'El servidor rechazó la ubicación.',
+            message: 'Revisa el motivo arriba y vuelve a intentarlo.',
           ),
           const SizedBox(height: 10),
           _PanelButton(
@@ -853,7 +1156,8 @@ class _TripChip extends StatelessWidget {
   }
 }
 
-/// "● Enviando ubicación · hace 3 s" + small sent / pending counters.
+/// "● Ubicaciones" + small sent / pending counters ("Enviando ubicación ·
+/// última hace 3 s" is in the status strip, above).
 class _SendingLine extends StatelessWidget {
   const _SendingLine({required this.snap});
 
@@ -874,21 +1178,11 @@ class _SendingLine extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: Text.rich(
-            TextSpan(
-              children: [
-                const TextSpan(
-                  text: 'Enviando ubicación',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                ),
-                TextSpan(
-                  text: ' · ${_lastSentLabel(snap)}',
-                  style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                ),
-              ],
-            ),
+          child: Text(
+            pending ? 'Ubicaciones pendientes de envío' : 'Ubicaciones',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
           ),
         ),
         _Counter(
@@ -907,15 +1201,6 @@ class _SendingLine extends StatelessWidget {
         ),
       ],
     );
-  }
-
-  static String _lastSentLabel(TripTrackingSnapshot snap) {
-    final at = snap.lastSentAt;
-    if (at == null) return 'sin confirmar';
-    final secs = DateTime.now().difference(at).inSeconds;
-    if (secs <= 1) return 'hace un momento';
-    if (secs < 60) return 'hace $secs s';
-    return 'hace ${secs ~/ 60} min';
   }
 }
 
@@ -1259,6 +1544,7 @@ class _FinishedView extends StatelessWidget {
 
 class _BlockedView extends StatelessWidget {
   const _BlockedView({
+    super.key,
     required this.icon,
     required this.title,
     required this.message,
