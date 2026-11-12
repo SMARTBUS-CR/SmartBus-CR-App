@@ -6,6 +6,10 @@ import '../../core/config/map_config.dart';
 import '../../core/location/location_service.dart';
 import '../../core/theme.dart';
 import '../../widgets/smartbus_header.dart';
+import '../operations/models/operations_models.dart';
+import '../operations/services/nearby_routes_filter.dart' show formatDistance;
+import '../operations/services/next_stop_tracker.dart';
+import '../operations/services/operations_service.dart';
 import '../trip_tracking/models/trip_tracking.dart';
 import '../trip_tracking/services/live_trip_tracker.dart';
 import 'map/map_overlay.dart';
@@ -20,10 +24,18 @@ export '../trip_tracking/services/live_trip_tracker.dart'
 /// events); this screen only draws its state and how fresh it is. The
 /// passenger's own position is drawn too, so they can see where the bus is
 /// relative to them.
+///
+/// **Route:** the line and stops the bus follows (`GET ops/public/trips/{id}`
+/// for its pattern, then `GET ops/route-patterns/{id}`), drawn like on the
+/// home map. The first view shows the whole route with the bus; "Ver el bus"
+/// follows the bus (the camera moves with every new position) and "Ver ruta"
+/// goes back to the whole route.
 class BusTrackingScreen extends StatefulWidget {
   const BusTrackingScreen({
     super.key,
     required this.tripId,
+    this.routePatternId,
+    this.operations,
     this.trackerFactory,
     this.mapBuilder = buildMapLibrePassengerMap,
     this.locationService = const LocationService(),
@@ -32,6 +44,13 @@ class BusTrackingScreen extends StatefulWidget {
 
   /// UUID of the trip to follow (picked in "Buses en curso").
   final String tripId;
+
+  /// Pattern of the trip when the caller knows it; otherwise it is asked
+  /// (`GET ops/public/trips/{id}`).
+  final String? routePatternId;
+
+  /// Catalogue (trip pattern and route); tests plug in a fake.
+  final OperationsService? operations;
 
   final LiveTripTrackerFactory? trackerFactory;
   final PassengerMapBuilder mapBuilder;
@@ -52,9 +71,30 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
   late final LiveTripTracker _tracker;
   PassengerMapHandle? _map;
   Timer? _ticker; // "hace Ns" and live -> stale without new events
-  bool _centeredOnBus = false;
   DeviceLocation? _userLocation;
   StreamSubscription<DeviceLocation>? _userLocationSub;
+
+  /// The route the bus follows; `null` while unknown (or not available).
+  RoutePattern? _route;
+
+  /// The camera moves with the bus ("Ver el bus"); off while the passenger
+  /// looks at the whole route.
+  bool _follow = true;
+
+  /// The first view (route + bus, or the bus alone) was already set.
+  bool _framed = false;
+
+  /// Last bus position the camera moved to (the ticker redraws every second).
+  (double, double)? _followed;
+
+  /// Which stops the bus already passed (from its position).
+  NextStopTracker? _busStops;
+
+  /// Where the passenger should go: the closest stop the bus has not passed.
+  BoardingStop? _boarding;
+
+  /// Location permission of this screen; `null` while checking.
+  LocationAccess? _locationAccess;
 
   String get _tripId => widget.tripId;
 
@@ -66,6 +106,119 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _onState());
     unawaited(_tracker.start());
     unawaited(_followUserLocation());
+    unawaited(_loadRoute());
+  }
+
+  /// The pattern of the trip, then its line and stops. Optional: without it
+  /// the map still shows the bus.
+  Future<void> _loadRoute() async {
+    final operations = widget.operations ?? OperationsService();
+    try {
+      final patternId =
+          widget.routePatternId ??
+          (await operations.publicTrip(_tripId)).routePatternId;
+      if (patternId == null) return;
+      final route = await operations.routePattern(patternId);
+      if (!mounted || route.path.isEmpty) return;
+      final busStops = NextStopTracker(route.stops);
+      // The bus usually arrives first: place it on the route right away.
+      final position = _tracker.state.value.position;
+      if (position != null) {
+        busStops.update(position.latitude, position.longitude);
+      }
+      setState(() {
+        _route = route;
+        _busStops = busStops;
+      });
+      _updateBoarding();
+      await _drawRoute();
+    } catch (_) {
+      // No route: bus only.
+    }
+  }
+
+  Future<void> _drawRoute() async {
+    final map = _map;
+    final route = _route;
+    if (map == null || route == null) return;
+    await map.showRoute(route);
+    await map.highlightStop(_boarding?.stop);
+    // The first time: the whole route with the bus inside it (even if the
+    // camera was already on the bus, which usually arrives first).
+    if (!_routeFramed) {
+      _routeFramed = true;
+      _framed = true;
+      if (mounted) setState(() => _follow = false);
+      await _fitRoute();
+    }
+  }
+
+  /// The whole route was shown once.
+  bool _routeFramed = false;
+
+  /// First view while there is no route: the bus.
+  void _frame() {
+    if (_framed || _map == null) return;
+    if (_tracker.state.value.position == null) return;
+    _framed = true;
+    _centerOnBus();
+  }
+
+  Future<void> _fitRoute() async {
+    final map = _map;
+    final route = _route;
+    if (map == null || route == null) return;
+    final position = _tracker.state.value.position;
+    final user = _userLocation;
+    await map.fitBounds([
+      ...route.path,
+      if (position != null) GeoPoint(position.latitude, position.longitude),
+      if (user != null) GeoPoint(user.latitude, user.longitude),
+    ], padding: const EdgeInsets.all(48));
+  }
+
+  /// "Cómo llegar": the passenger, their stop and the bus in one view.
+  void _showWayToStop() {
+    final map = _map;
+    final boarding = _boarding;
+    final user = _userLocation;
+    if (map == null || boarding == null || user == null) return;
+    final position = _tracker.state.value.position;
+    setState(() => _follow = false);
+    unawaited(
+      map.fitBounds([
+        GeoPoint(user.latitude, user.longitude),
+        boarding.stop.location!,
+        if (position != null) GeoPoint(position.latitude, position.longitude),
+      ], padding: const EdgeInsets.all(64)),
+    );
+  }
+
+  /// Recomputes the passenger's stop (bus moved, passenger moved, route
+  /// loaded) and highlights it on the map when it changes.
+  void _updateBoarding() {
+    final tracker = _busStops;
+    final user = _userLocation;
+    final next = tracker == null || user == null
+        ? null
+        : boardingStopFor(tracker, user.latitude, user.longitude);
+    final previous = _boarding;
+    final changed =
+        !identical(previous?.stop, next?.stop) ||
+        previous?.stopsAway != next?.stopsAway ||
+        (previous?.walkMeters.round() ?? -1) !=
+            (next?.walkMeters.round() ?? -1);
+    if (!changed) return;
+    if (mounted) setState(() => _boarding = next);
+    if (!identical(previous?.stop, next?.stop)) {
+      unawaited(_map?.highlightStop(next?.stop));
+    }
+  }
+
+  /// "Ver ruta": the whole route; the camera stops following the bus.
+  void _showRoute() {
+    setState(() => _follow = false);
+    unawaited(_fitRoute());
   }
 
   @override
@@ -87,29 +240,48 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
     _map = map;
     final user = _userLocation;
     if (user != null) map.showUserLocation(user);
+    unawaited(_drawRoute());
     _drawBus();
   }
 
   /// Draws the passenger's position (and follows it) when the permission is
-  /// already granted. Without permission the screen works the same, bus only.
-  Future<void> _followUserLocation() async {
+  /// already granted. It is not asked on opening: the panel offers
+  /// "Activar ubicación" ([_enableLocation]) to find the closest stop.
+  Future<void> _followUserLocation({bool request = false}) async {
     final service = widget.locationService;
-    if (await service.checkAccess(request: false) != LocationAccess.granted) {
-      return;
-    }
+    final access = await service.checkAccess(request: request);
+    if (!mounted) return;
+    setState(() => _locationAccess = access);
+    if (access != LocationAccess.granted) return;
     final current = await service.currentLocation();
     if (!mounted) return;
     if (current != null) _onUserLocation(current);
+    await _userLocationSub?.cancel();
     _userLocationSub = service.watch().listen(
       _onUserLocation,
       onError: (Object _) {}, // keep the last position on GPS errors
     );
   }
 
+  /// "Activar ubicación": asks for the permission, or opens the settings
+  /// when it can no longer be asked (denied forever, GPS off).
+  Future<void> _enableLocation() async {
+    final access = _locationAccess;
+    if (access == LocationAccess.deniedForever ||
+        access == LocationAccess.serviceDisabled) {
+      await widget.locationService.openSettings(access!);
+    }
+    await _followUserLocation(request: true);
+  }
+
   void _onUserLocation(DeviceLocation location) {
     if (!mounted) return;
+    final first = _userLocation == null;
     _userLocation = location;
     _map?.showUserLocation(location);
+    _updateBoarding();
+    // The first position after the route: show it with the route.
+    if (first && _routeFramed && !_follow) unawaited(_fitRoute());
   }
 
   void _drawBus() {
@@ -121,6 +293,10 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
       map.showBus(null);
       return;
     }
+    // Which stops the bus already passed → the passenger's stop.
+    if (_busStops?.update(position.latitude, position.longitude) ?? false) {
+      _updateBoarding();
+    }
     final freshness = state.freshnessAt(widget.clock());
     map.showBus(
       BusMarker(
@@ -129,15 +305,81 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
         live: freshness == TrackingFreshness.live,
       ),
     );
-    if (!_centeredOnBus) _centerOnBus();
+    if (!_framed) {
+      _frame();
+      return;
+    }
+    // Following: the camera moves with each new position (not every redraw).
+    final at = (position.latitude, position.longitude);
+    if (_follow && _followed != at) {
+      _followed = at;
+      map.moveTo(position.latitude, position.longitude);
+    }
   }
 
+  /// "Ver el bus": centers on the bus and follows it.
   void _centerOnBus() {
     final position = _tracker.state.value.position;
     final map = _map;
     if (position == null || map == null) return;
-    _centeredOnBus = true;
+    if (!_follow && mounted) setState(() => _follow = true);
+    _follow = true;
+    _followed = (position.latitude, position.longitude);
     map.moveTo(position.latitude, position.longitude, zoom: MapConfig.userZoom);
+  }
+
+  /// The "Tu parada" card: only with a route to choose a stop from.
+  Widget? _boardingCard(LiveTripState state) {
+    final tracker = _busStops;
+    if (tracker == null ||
+        tracker.stops.isEmpty ||
+        state.phase == LiveTripPhase.finished) {
+      return null;
+    }
+    final access = _locationAccess;
+    if (access == null) return null; // still checking
+    if (access != LocationAccess.granted) {
+      return _BoardingCard(
+        icon: Icons.my_location,
+        title: '¿Dónde tomo el bus?',
+        lines: const ['Activa tu ubicación para ver la parada más cercana.'],
+        actionLabel: access == LocationAccess.denied ? 'Activar' : 'Ajustes',
+        onAction: () => unawaited(_enableLocation()),
+      );
+    }
+    if (_userLocation == null) {
+      return const _BoardingCard(
+        icon: Icons.my_location,
+        title: 'Buscando tu ubicación…',
+        lines: ['Para mostrarte la parada más cercana.'],
+      );
+    }
+    final boarding = _boarding;
+    if (boarding == null) {
+      return const _BoardingCard(
+        icon: Icons.flag_outlined,
+        title: 'El bus ya pasó todas las paradas',
+        lines: ['Este bus ya no pasa por ninguna parada más.'],
+      );
+    }
+    final stopsAway = boarding.stopsAway;
+    final busLine = switch (stopsAway) {
+      null => 'Esperando la posición del bus.',
+      0 => 'Es la próxima parada del bus.',
+      1 => 'Al bus le falta 1 parada para llegar.',
+      _ => 'Al bus le faltan $stopsAway paradas para llegar.',
+    };
+    return _BoardingCard(
+      icon: Icons.directions_walk,
+      title: 'Tu parada: ${boarding.stop.name}',
+      lines: [
+        'A ${formatDistance(boarding.walkMeters)} · '
+            '~${boarding.walkMinutes} min caminando',
+        busLine,
+      ],
+      actionLabel: 'Cómo llegar',
+      onAction: _showWayToStop,
+    );
   }
 
   @override
@@ -176,25 +418,42 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
                   bottom: 6,
                   child: MapAttribution(mode: MapMode.streets),
                 ),
-                if (state.position != null &&
-                    state.phase != LiveTripPhase.finished)
-                  Positioned(
-                    right: 16,
-                    bottom: 24,
-                    child: FloatingActionButton.small(
-                      key: const Key('center-bus-button'),
-                      heroTag: null,
-                      tooltip: 'Ver el bus',
-                      backgroundColor: SmartBusColors.verdePasajero,
-                      foregroundColor: SmartBusColors.blanco,
-                      onPressed: _centerOnBus,
-                      child: const Icon(Icons.directions_bus_filled),
-                    ),
+                Positioned(
+                  right: 16,
+                  bottom: 24,
+                  child: Column(
+                    children: [
+                      if (_route != null) ...[
+                        FloatingActionButton.small(
+                          key: const Key('show-route-button'),
+                          heroTag: null,
+                          tooltip: 'Ver ruta',
+                          backgroundColor: SmartBusColors.blanco,
+                          foregroundColor: SmartBusColors.verdePasajero,
+                          onPressed: _showRoute,
+                          child: const Icon(Icons.route_outlined),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                      if (state.position != null &&
+                          state.phase != LiveTripPhase.finished)
+                        FloatingActionButton.small(
+                          key: const Key('center-bus-button'),
+                          heroTag: null,
+                          tooltip: 'Ver el bus',
+                          backgroundColor: SmartBusColors.verdePasajero,
+                          foregroundColor: SmartBusColors.blanco,
+                          onPressed: _centerOnBus,
+                          child: const Icon(Icons.directions_bus_filled),
+                        ),
+                    ],
                   ),
+                ),
               ],
             ),
           ),
           _StatusPanel(
+            boarding: _boardingCard(state),
             status: status,
             reconnecting:
                 state.phase == LiveTripPhase.tracking &&
@@ -332,12 +591,86 @@ class _TripStatusView {
   }
 }
 
+/// "Tu parada": the stop the passenger should walk to (closest one the bus
+/// has not passed), or the button to turn the location on to find it.
+class _BoardingCard extends StatelessWidget {
+  const _BoardingCard({
+    required this.icon,
+    required this.title,
+    required this.lines,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  final IconData icon;
+  final String title;
+  final List<String> lines;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('boarding-card'),
+      padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+      decoration: BoxDecoration(
+        color: SmartBusColors.verdeTurquesa.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: SmartBusColors.verdePasajero),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: SmartBusColors.grisOscuro,
+                  ),
+                ),
+                for (final line in lines)
+                  Text(
+                    line,
+                    style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                  ),
+              ],
+            ),
+          ),
+          if (actionLabel != null && onAction != null)
+            TextButton(
+              key: const Key('boarding-action'),
+              onPressed: onAction,
+              child: Text(
+                actionLabel!,
+                style: const TextStyle(
+                  color: SmartBusColors.verdePasajero,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _StatusPanel extends StatelessWidget {
   const _StatusPanel({
     required this.status,
     required this.reconnecting,
+    this.boarding,
     this.onRetry,
   });
+
+  /// "Tu parada" card, shown above the bus status.
+  final Widget? boarding;
 
   final _TripStatusView status;
   final bool reconnecting;
@@ -354,6 +687,7 @@ class _StatusPanel extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (boarding != null) ...[boarding!, const SizedBox(height: 8)],
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
