@@ -99,6 +99,13 @@ class SmartBusApp extends StatelessWidget {
           },
         );
       },
+      // A route without its arguments (e.g. `/passenger/tracking` without the
+      // trip id) or an unknown name: instead of an exception, the splash
+      // sends the user to the home of their role (or to login).
+      onUnknownRoute: (settings) => MaterialPageRoute<void>(
+        settings: settings,
+        builder: (_) => const SplashScreen(),
+      ),
     );
   }
 }

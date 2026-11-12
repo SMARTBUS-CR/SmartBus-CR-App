@@ -228,6 +228,13 @@ class ApiConfig {
   static Uri opsRoutePatterns(String routeId) =>
       _opsUri('routes/$routeId/patterns');
 
+  /// GET — one trip (public, no driver data): its pattern, status and bus.
+  static Uri opsPublicTrip(String tripId) => _opsUri('public/trips/$tripId');
+
+  /// GET — one pattern (public) with its line and ordered stops.
+  static Uri opsRoutePattern(String patternId) =>
+      _opsUri('route-patterns/$patternId');
+
   /// GET — buses running now on a pattern (public, no driver data).
   static Uri opsPatternTrips(String patternId, [Map<String, dynamic>? query]) =>
       _opsUri('route-patterns/$patternId/trips', query);

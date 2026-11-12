@@ -5,6 +5,7 @@ import '../../core/theme.dart';
 import '../../widgets/driver_bottom_nav.dart';
 import '../../widgets/profile_details.dart';
 import '../auth/services/auth_service.dart';
+import '../trip_tracking/services/active_trip_tracking.dart';
 
 /// Driver "Mi Cuenta" tab: read-only profile of the signed-in driver.
 ///
@@ -48,6 +49,8 @@ class DriverAccountScreen extends StatelessWidget {
       readOnlyNotice: readOnlyNotice,
       authService: authService,
       sessionStore: sessionStore,
+      // Logging out (or an expired session) ends the GPS of a running trip.
+      onSignOut: ActiveTripTracking.stop,
       bottomNavigationBar: DriverBottomNav(
         currentIndex: 3,
         onTap: (index) => _onTabTap(context, index),

@@ -87,11 +87,14 @@ class LiveTripState {
 /// 2. Subscribes to `private-trip.{id}`: each `BusLocationUpdated` moves the
 ///    bus (only if it is newer than the one shown: events can arrive out of
 ///    order on mobile networks).
-/// 3. Asks the position again ([pollInterval]) while it is not live: no
-///    real-time connection, the trip has not started, or the updates stopped.
-///    The driver sends every ~5 s, so [silenceThreshold] (15 s) without a
-///    position is enough to ask: that is how "trip finished" is detected
-///    (`status = completed`) in ~15–20 s, without any event from the Dashboard.
+/// 3. Asks the position again while it is not live: no real-time connection,
+///    or the updates stopped. The driver sends every ~5 s, so it asks at that
+///    same pace ([pollInterval]) — the bus keeps moving on the map even when
+///    the WebSocket is down — and [silenceThreshold] (10 s) without a
+///    position is enough to ask: that is also how "trip finished" is detected
+///    (`status = completed`) in ~10–15 s, without any event from the
+///    Dashboard. A trip that has not started is asked less often
+///    ([idlePollInterval]).
 /// 4. Asks again when the connection comes back (events sent while it was
 ///    down are lost) and when the channel is refused.
 class LiveTripTracker {
@@ -99,8 +102,9 @@ class LiveTripTracker {
     required this.tripId,
     GpsLocationService? service,
     this.feed,
-    this.pollInterval = const Duration(seconds: 15),
-    this.silenceThreshold = const Duration(seconds: 15),
+    this.pollInterval = const Duration(seconds: 5),
+    this.idlePollInterval = const Duration(seconds: 15),
+    this.silenceThreshold = const Duration(seconds: 10),
     this.checkEvery = const Duration(seconds: 5),
     DateTime Function()? clock,
   }) : _service = service ?? GpsLocationService(),
@@ -122,8 +126,12 @@ class LiveTripTracker {
   /// Real-time positions; `null` = only polling.
   final TripLiveFeed? feed;
 
-  /// Minimum time between two requests to the backend.
+  /// Minimum time between two requests while the trip is in progress (the
+  /// driver's sending pace).
   final Duration pollInterval;
+
+  /// Minimum time between two requests while the trip has not started.
+  final Duration idlePollInterval;
 
   /// Time without a new position after which the bus is "silent" and the
   /// backend is asked (did the trip finish?).
@@ -228,11 +236,15 @@ class LiveTripTracker {
   }
 
   /// Asks the backend when the positions are not arriving by themselves, at
-  /// most once every [pollInterval].
+  /// most once every [pollInterval] ([idlePollInterval] before the trip
+  /// starts).
   void _check() {
     if (!_needsPolling) return;
+    final interval = state.value.status == TripStatus.inProgress
+        ? pollInterval
+        : idlePollInterval;
     final last = _lastRequestAt;
-    if (last != null && _clock().difference(last) < pollInterval) return;
+    if (last != null && _clock().difference(last) < interval) return;
     unawaited(refresh());
   }
 

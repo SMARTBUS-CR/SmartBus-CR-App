@@ -85,7 +85,13 @@ class PusherConnection {
       Duration(seconds: 30),
     ],
     this.pongTimeout = const Duration(seconds: 30),
+    this.connectTimeout = const Duration(seconds: 10),
   }) : _connector = connector ?? connectIoWebSocket;
+
+  /// Max wait to open the socket. With a bad signal `WebSocket.connect` can
+  /// hang for minutes; after this it counts as a failed attempt and the next
+  /// reconnect is scheduled.
+  final Duration connectTimeout;
 
   final Uri uri;
   final ChannelAuthorizer authorize;
@@ -162,7 +168,15 @@ class PusherConnection {
   Future<void> _open() async {
     _setState(RealtimeConnectionState.connecting);
     try {
-      final socket = await _connector(uri);
+      final pending = _connector(uri);
+      final socket = await pending.timeout(
+        connectTimeout,
+        onTimeout: () {
+          // If it still opens later, close it: a new attempt takes over.
+          pending.then((opened) => opened.close(), onError: (Object _) {});
+          throw TimeoutException('WebSocket connect', connectTimeout);
+        },
+      );
       if (_disposed || !_wanted) {
         await socket.close();
         return;

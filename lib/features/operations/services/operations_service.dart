@@ -17,7 +17,8 @@ class OperationsService {
 
   // --- Driver ------------------------------------------------------------------
 
-  /// `GET ops/driver/trips` — trips of the logged-in driver, earliest first.
+  /// `GET ops/driver/trips` — trips of the logged-in driver, earliest first,
+  /// with their pattern and bus (`include=pattern,bus`, for the plate).
   /// Filter by [serviceDate] (local day) and/or [status].
   Future<List<DriverTrip>> driverTrips({
     DateTime? serviceDate,
@@ -28,15 +29,25 @@ class OperationsService {
       ApiConfig.opsDriverTrips({
         'filter[service_date]': ?date,
         'filter[status]': ?_statusValue(status),
+        'include': 'pattern,bus',
         'sort': 'scheduled_departure_at',
         'page[size]': '50',
       }),
     );
-    return _resources(body).map(DriverTrip.fromJsonApi).toList();
+    final included = JsonApiIncluded(body['included']);
+    return [
+      for (final resource in _resources(body))
+        DriverTrip.fromJsonApi(resource, included: included),
+    ];
   }
 
   /// `POST ops/trips/{id}/start` — the trip becomes `in_progress`, so the GPS
-  /// service starts accepting its locations. 409 if it cannot be started.
+  /// service starts accepting its locations. Starting a trip already in
+  /// progress returns it again (idempotent).
+  ///
+  /// Errors: 409 the trip is not scheduled, 422 a business rule failed (bus or
+  /// driver unavailable, departure suspended, another trip in progress), both
+  /// with the backend message; 403 not the driver's trip; 404 not found.
   Future<DriverTrip> startTrip(String tripId) async => DriverTrip.fromJsonApi(
     _resource(await _client.post(ApiConfig.opsTripStart(tripId))),
   );
@@ -206,6 +217,20 @@ class OperationsService {
     final body = await _client.get(ApiConfig.opsRoutePatterns(routeId));
     return _resources(body).map(RoutePattern.fromJsonApi).toList();
   }
+
+  /// `GET ops/route-patterns/{id}` — one pattern with its line and stops
+  /// (the driver's route when the trip has no planned snapshot).
+  Future<RoutePattern> routePattern(String patternId) async =>
+      RoutePattern.fromJsonApi(
+        _resource(await _client.get(ApiConfig.opsRoutePattern(patternId))),
+      );
+
+  /// `GET ops/public/trips/{id}` — one trip without driver data (its
+  /// `route_pattern_id`, status and bus), for the passenger's tracking map.
+  Future<LiveBusTrip> publicTrip(String tripId) async =>
+      LiveBusTrip.fromJsonApi(
+        _resource(await _client.get(ApiConfig.opsPublicTrip(tripId))),
+      );
 
   /// `GET ops/route-patterns/{id}/trips` — buses running now on a pattern.
   Future<List<LiveBusTrip>> ongoingTrips(String patternId) async {
