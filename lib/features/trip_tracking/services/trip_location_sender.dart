@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
@@ -119,10 +118,18 @@ class TripTrackingSnapshot {
 /// or another app on top. It is best-effort: if Android still decides to destroy
 /// the activity (low memory), tracking stops until the driver reopens the app —
 ///
-/// **Retry:** a failed send stays in an in-memory queue and is retried on the
-/// next tick — but only for network / 5xx / 429 errors. The queue is capped at
-/// [maxQueue] so a long outage cannot grow memory without bound (oldest fixes
-/// are dropped first).
+/// **Newest first, no backlog:** the passenger's map needs where the bus is
+/// NOW, and the GPS service ignores a reading older than the current position
+/// (and only stores the start and the end of the trip). So at most one
+/// reading is in flight and **one** waits: a newer reading replaces the
+/// waiting one. A slow request never builds a queue of old positions that
+/// would show the bus behind. [TripTrackingSnapshot.pendingCount] is 0 or 1.
+///
+/// **Retry:** a failed send (network / 5xx / 429 only) is retried on the next
+/// tick, unless a newer reading has arrived meanwhile (then that one is sent).
+///
+/// **End of the trip:** [sendFinal] sends the current position marked
+/// `final`, which the GPS service stores as the trip's end.
 ///
 /// **Rejected:** 401 (session expired), 403 (not the driver assigned to the
 /// trip), 404 (the trip does not exist) and 409 (the trip is not in progress)
@@ -136,7 +143,6 @@ class TripLocationSender {
   TripLocationSender({
     GpsLocationService? service,
     this.interval = const Duration(seconds: 5),
-    this.maxQueue = 120,
     this.accuracy = LocationAccuracy.high,
   }) : _service = service ?? GpsLocationService();
 
@@ -145,9 +151,6 @@ class TripLocationSender {
   /// How often a reading is sent.
   final Duration interval;
 
-  /// Max number of un-sent fixes kept in memory during an outage.
-  final int maxQueue;
-
   final LocationAccuracy accuracy;
 
   /// The current state — watch this from the UI.
@@ -155,7 +158,8 @@ class TripLocationSender {
     const TripTrackingSnapshot(),
   );
 
-  final Queue<GpsFix> _pending = Queue<GpsFix>();
+  /// The newest reading not sent yet (replaced by every newer one).
+  GpsFix? _waiting;
   StreamSubscription<Position>? _positionSub;
   Timer? _timer;
   Position? _latest;
@@ -171,6 +175,7 @@ class TripLocationSender {
   Future<void> start({required String tripId}) async {
     if (snapshot.value.isTracking || _disposed) return;
     _tripId = tripId;
+    _lastStamp = null;
     // Fresh counters: the sender lives for the whole session and may have
     // sent another trip before (see ActiveTripTracking).
     snapshot.value = TripTrackingSnapshot(
@@ -200,7 +205,39 @@ class TripLocationSender {
     unawaited(_tick()); // first reading now, don't wait a full interval
   }
 
-  /// Stops transmission. Queued (un-sent) fixes are discarded and the
+  /// Sends the bus's current position as the **end of the trip** (`final`:
+  /// the GPS service stores it). Call it right before completing the trip,
+  /// while it is still in progress. Best effort: a failure is ignored (the
+  /// trip is completed anyway).
+  Future<void> sendFinal() async {
+    final snap = snapshot.value;
+    final latitude = snap.latitude;
+    final longitude = snap.longitude;
+    if (!snap.isTracking || latitude == null || longitude == null) return;
+    // Stamped after any reading already sent, so it is never ignored as a
+    // duplicate or a late one.
+    final last = _lastStamp;
+    var now = DateTime.now().toUtc();
+    if (last != null && !now.isAfter(last)) {
+      now = last.add(const Duration(milliseconds: 1));
+    }
+    _lastStamp = now;
+    final fix = GpsFix(
+      tripId: _tripId,
+      latitude: latitude,
+      longitude: longitude,
+      recordedAt: now,
+      isFinal: true,
+    );
+    try {
+      await _service.send(fix);
+      _set(lastSentAt: DateTime.now(), sentCount: snapshot.value.sentCount + 1);
+    } on ApiException catch (_) {
+      // The end position is a nice-to-have; finishing must not wait on it.
+    }
+  }
+
+  /// Stops transmission. The waiting (un-sent) reading is discarded and the
   /// foreground notification disappears.
   void stop() {
     _shutdown();
@@ -216,7 +253,7 @@ class TripLocationSender {
 
   // --- internals --------------------------------------------------------
 
-  /// Cancels the timer and the location stream and empties the queue.
+  /// Cancels the timer and the location stream and drops the waiting reading.
   void _shutdown() {
     _timer?.cancel();
     _timer = null;
@@ -224,7 +261,7 @@ class TripLocationSender {
     _positionSub = null;
     if (sub != null) unawaited(sub.cancel());
     _latest = null;
-    _pending.clear();
+    _waiting = null;
   }
 
   /// Message for the driver when the backend refuses the readings for good, or
@@ -288,7 +325,7 @@ class TripLocationSender {
 
     final position = _latest ?? await Geolocator.getLastKnownPosition();
     if (position != null) {
-      _enqueue(GpsFix.fromPosition(position, tripId: _tripId));
+      _enqueue(_stamped(GpsFix.fromPosition(position, tripId: _tripId)));
       _set(
         lastFixAt: DateTime.now(),
         latitude: position.latitude,
@@ -298,33 +335,63 @@ class TripLocationSender {
     await _flush();
   }
 
-  void _enqueue(GpsFix fix) {
-    _pending.addLast(fix);
-    while (_pending.length > maxQueue) {
-      _pending.removeFirst();
+  /// Time of the last reading queued, so each new one is strictly later.
+  DateTime? _lastStamp;
+
+  /// A stopped bus gets no new position from the OS (distance filter), so the
+  /// same reading comes back every tick: it is re-stamped "now" (the bus is
+  /// still there now). Otherwise the GPS service would ignore it as a
+  /// duplicate and the passenger would see "Señal débil" at every stop.
+  GpsFix _stamped(GpsFix fix) {
+    final last = _lastStamp;
+    var stamped = fix;
+    if (last != null && !fix.recordedAt.isAfter(last)) {
+      var now = DateTime.now().toUtc();
+      if (!now.isAfter(last)) now = last.add(const Duration(milliseconds: 1));
+      stamped = GpsFix(
+        tripId: fix.tripId,
+        latitude: fix.latitude,
+        longitude: fix.longitude,
+        speedKmh: fix.speedKmh,
+        accuracyMeters: fix.accuracyMeters,
+        recordedAt: now,
+      );
     }
-    _set(pendingCount: _pending.length);
+    _lastStamp = stamped.recordedAt;
+    return stamped;
   }
 
+  /// [fix] becomes the reading to send next, replacing an older waiting one.
+  void _enqueue(GpsFix fix) {
+    _waiting = fix;
+    _set(pendingCount: 1);
+  }
+
+  int get _pendingCount => _waiting == null ? 0 : 1;
+
+  /// Sends the waiting reading; when it is done, the newest one that arrived
+  /// meanwhile (if any) right away. Only one request at a time.
   Future<void> _flush() async {
-    if (_flushing || _pending.isEmpty) return;
+    if (_flushing || _waiting == null) return;
     _flushing = true;
     try {
-      while (_pending.isNotEmpty && !_disposed) {
-        final fix = _pending.first;
+      while (!_disposed) {
+        final fix = _waiting;
+        if (fix == null) break;
+        _waiting = null;
         try {
           await _service.send(fix);
-          _pending.removeFirst();
           _set(
             lastSentAt: DateTime.now(),
             sentCount: snapshot.value.sentCount + 1,
-            pendingCount: _pending.length,
+            pendingCount: _pendingCount,
             clearError: true,
           );
         } on ApiException catch (e) {
           if (_isRetryable(e)) {
-            // Keep the queue and try again on the next tick.
-            _set(lastError: e.message, pendingCount: _pending.length);
+            // Try again on the next tick, unless a newer reading came in.
+            _waiting ??= fix;
+            _set(lastError: e.message, pendingCount: _pendingCount);
             break;
           }
           final rejection = _rejectionMessage(e);
@@ -339,9 +406,8 @@ class TripLocationSender {
             );
             break;
           }
-          // Other 4xx: retrying will not help. Drop this fix and continue.
-          _pending.removeFirst();
-          _set(lastError: e.message, pendingCount: _pending.length);
+          // Other 4xx: retrying will not help. Drop this fix and go on.
+          _set(lastError: e.message, pendingCount: _pendingCount);
         }
       }
     } finally {
