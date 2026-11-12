@@ -1,9 +1,8 @@
-
 # Pull Request Template
 
 ## Description
 
-<!-- Briefly describe the purpose of this Pull Request and the problem it solves. -->
+<!-- Describe the purpose of this PR. What problem does it solve? What is the context? -->
 
 ## Type of Change
 
@@ -17,11 +16,11 @@
 
 ## Main Changes
 
-<!-- List the main changes implemented. -->
+<!-- List the main files or components modified and what changed in each. -->
 
--
--
--
+- 
+- 
+- 
 
 ## Validation
 
@@ -32,13 +31,17 @@
 - [ ] `flutter test`
 - [ ] `flutter build apk --debug` (if applicable)
 
+New or updated tests:
+- 
+- 
+
 ### Functional Flow
 
-<!-- Describe the steps to validate the implemented functionality. -->
+<!-- Describe step by step how to manually test this feature or fix. -->
 
-1.
-2.
-3.
+1. 
+2. 
+3. 
 
 ### Test Environment
 
@@ -48,45 +51,32 @@
 
 ## Modified API Contracts
 
+<!-- If this PR changes any endpoints, request bodies, or response formats, document them here. -->
+
+No backend changes.
+
 | Method | Gateway Route | Purpose |
 |--------|---------------|---------|
-| POST | `/auth/login` | Authenticate the user |
-| GET | `/auth/user` | Get the authenticated user |
-| POST | `/auth/logout` | Log out |
+| | | |
 
-### Application Screenshots
+## Application Screenshots
 
-| Screenshot 1 | Screenshot 2 | Screenshot 3 |
-|:---:|:---:|:---:|
-| ![Screenshot 1](IMAGE_URL) | ![Screenshot 2](IMAGE_URL) | ![Screenshot 3](IMAGE_URL) |
+<!-- Replace the placeholders below with your actual image URLs. You can add or remove rows as needed. -->
 
-
+<table>
+  <tr>
+    <td align="center"><img width="400" height="800" alt="Screenshot 1" src="URL_IMAGEN_1" /></td>
+    <td align="center"><img width="400" height="800" alt="Screenshot 2" src="URL_IMAGEN_2" /></td>
+  </tr>
+  <tr>
+    <td align="center"><img width="400" height="800" alt="Screenshot 3" src="URL_IMAGEN_3" /></td>
+    <td align="center"><img width="400" height="800" alt="Screenshot 4" src="URL_IMAGEN_4" /></td>
+  </tr>
+</table>
 
 ## Request/Response
 
-<!-- Include only contract changes. Do not add tokens, passwords, or personal data. -->
-
-**POST `/auth/login`**
-
-Request:
+<!-- Include examples of the requests and responses used or modified in this PR. -->
 
 ```json
-{
-  "email": "user@example.com",
-  "password": "********"
-}
-```
-
-Response:
-
-```json
-{
-  "message": "Example response"
-}
-```
-
-## Notes and Risks
-
-<!-- Mention dependencies, known limitations, risks, or additional considerations. -->
-
--
+// Example response
