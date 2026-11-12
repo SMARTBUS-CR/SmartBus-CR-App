@@ -12,6 +12,7 @@ import '../operations/services/operations_service.dart';
 import '../trip_tracking/models/trip_tracking.dart';
 import '../trip_tracking/services/active_trip_tracking.dart';
 import 'trip_screen.dart';
+import 'widgets/trip_status_badge.dart';
 
 /// Driver home ("Inicio" tab): the trips assigned to the driver **today**
 /// (Dashboard `driver/trips`), plus any trip of another day that is still in
@@ -415,7 +416,6 @@ class _TripCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (label, color) = tripStatusBadge(trip.status);
     final departure = trip.scheduledDepartureAt;
     final arrival = trip.scheduledArrivalAt;
     final actual = trip.actualDepartureAt;
@@ -444,7 +444,7 @@ class _TripCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
-              _Badge(label: label, color: color),
+              TripStatusBadge.forStatus(trip.status),
             ],
           ),
           if (trip.headsign != null) ...[
@@ -703,41 +703,6 @@ class _StopRow extends StatelessWidget {
               ),
             ),
         ],
-      ),
-    );
-  }
-}
-
-/// Text and color of a trip status, shared by the driver screens.
-(String, Color) tripStatusBadge(TripStatus status) => switch (status) {
-  TripStatus.scheduled => ('Programado', SmartBusColors.azulPrincipal),
-  TripStatus.inProgress => ('En curso', SmartBusColors.verdeMenta),
-  TripStatus.completed => ('Finalizado', SmartBusColors.completado),
-  TripStatus.cancelled => ('Cancelado', SmartBusColors.error),
-  TripStatus.unknown => ('—', Colors.grey),
-};
-
-class _Badge extends StatelessWidget {
-  const _Badge({required this.label, required this.color});
-
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-        ),
       ),
     );
   }
