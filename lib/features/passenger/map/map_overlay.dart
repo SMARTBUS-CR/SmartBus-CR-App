@@ -461,25 +461,22 @@ class MapAttribution extends StatelessWidget {
   }
 }
 
-/// Content of the draggable bottom sheet (placeholder until routes exist).
+/// Shell of the draggable bottom sheet: white card with a drag handle and a
+/// scrollable [children] list (routes list or the selected route).
 class MapBottomSheetContent extends StatelessWidget {
   const MapBottomSheetContent({
     super.key,
     required this.colors,
     required this.scrollController,
-    this.firstName,
+    required this.children,
   });
 
   final MapOverlayColors colors;
   final ScrollController scrollController;
-  final String? firstName;
+  final List<Widget> children;
 
   @override
   Widget build(BuildContext context) {
-    final greeting = firstName == null || firstName!.isEmpty
-        ? 'Hola'
-        : 'Hola, $firstName';
-
     return Material(
       color: colors.surface,
       elevation: 8,
@@ -500,40 +497,42 @@ class MapBottomSheetContent extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          Text(
-            greeting,
-            style: TextStyle(
-              color: colors.onSurface,
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '¿Qué bus tomas hoy?',
-            style: TextStyle(color: colors.muted, fontSize: 14),
-          ),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Icon(Icons.alt_route, color: colors.accent),
-              const SizedBox(width: 10),
-              Text(
-                'Rutas cercanas',
-                style: TextStyle(
-                  color: colors.onSurface,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Aquí aparecerán las rutas y paradas cercanas a ti.',
-            style: TextStyle(color: colors.muted, fontSize: 13),
-          ),
+          ...children,
         ],
       ),
+    );
+  }
+}
+
+/// "Hola, {nombre}" + "¿Qué bus tomas hoy?" at the top of the bottom sheet.
+class SheetGreeting extends StatelessWidget {
+  const SheetGreeting({super.key, required this.colors, this.firstName});
+
+  final MapOverlayColors colors;
+  final String? firstName;
+
+  @override
+  Widget build(BuildContext context) {
+    final greeting = firstName == null || firstName!.isEmpty
+        ? 'Hola'
+        : 'Hola, $firstName';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          greeting,
+          style: TextStyle(
+            color: colors.onSurface,
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '¿Qué bus tomas hoy?',
+          style: TextStyle(color: colors.muted, fontSize: 14),
+        ),
+      ],
     );
   }
 }
