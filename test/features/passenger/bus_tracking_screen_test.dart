@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smartbus_drivers/core/location/location_service.dart';
 import 'package:smartbus_drivers/core/network/api_exception.dart';
+import 'package:smartbus_drivers/features/operations/models/operations_models.dart';
 import 'package:smartbus_drivers/features/passenger/bus_tracking_screen.dart';
 import 'package:smartbus_drivers/features/passenger/map/passenger_map.dart';
 import 'package:smartbus_drivers/features/trip_tracking/models/gps_fix.dart';
@@ -33,6 +34,24 @@ class _FakeMap implements PassengerMapHandle {
 
   @override
   Future<void> showBus(BusMarker? bus) async => buses.add(bus);
+
+  @override
+  Future<void> showBuses(List<BusMarker> buses) async {}
+
+  @override
+  Future<void> showRoute(RoutePattern pattern) async {}
+
+  @override
+  Future<void> clearRoute() async {}
+
+  @override
+  Future<void> highlightStop(PatternStop? stop) async {}
+
+  @override
+  Future<void> fitBounds(
+    List<GeoPoint> points, {
+    EdgeInsets padding = EdgeInsets.zero,
+  }) async {}
 
   PassengerMapBuilder get builder =>
       (context, options) =>
