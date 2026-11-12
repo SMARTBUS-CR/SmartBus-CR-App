@@ -14,12 +14,16 @@ import 'package:smartbus_drivers/features/trip_tracking/services/gps_location_se
 import 'package:smartbus_drivers/features/trip_tracking/services/live_trip_tracker.dart';
 import 'package:smartbus_drivers/features/trip_tracking/services/trip_live_feed.dart';
 
+import '../operations/operations_fixtures.dart';
+
 const _tripId = '01a09332-3457-7315-885e-4ebb218f7262';
 
 class _FakeMap implements PassengerMapHandle {
   final List<BusMarker?> buses = [];
   final List<({double lat, double lng})> moves = [];
   final List<DeviceLocation> users = [];
+  final List<List<GeoPoint>> fits = [];
+  RoutePattern? route;
 
   @override
   Future<void> moveTo(
@@ -39,19 +43,21 @@ class _FakeMap implements PassengerMapHandle {
   Future<void> showBuses(List<BusMarker> buses) async {}
 
   @override
-  Future<void> showRoute(RoutePattern pattern) async {}
+  Future<void> showRoute(RoutePattern pattern) async => route = pattern;
 
   @override
-  Future<void> clearRoute() async {}
+  Future<void> clearRoute() async => route = null;
+
+  PatternStop? highlighted;
 
   @override
-  Future<void> highlightStop(PatternStop? stop) async {}
+  Future<void> highlightStop(PatternStop? stop) async => highlighted = stop;
 
   @override
   Future<void> fitBounds(
     List<GeoPoint> points, {
     EdgeInsets padding = EdgeInsets.zero,
-  }) async {}
+  }) async => fits.add(points);
 
   PassengerMapBuilder get builder =>
       (context, options) =>
@@ -183,11 +189,13 @@ void main() {
     WidgetTester tester,
     _FakeGps gps, {
     _FakeLocation? location,
+    FakeOperations? operations,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
         home: BusTrackingScreen(
           tripId: _tripId,
+          operations: operations ?? FakeOperations(),
           mapBuilder: map.builder,
           locationService: location ?? _FakeLocation(),
           clock: () => now,
@@ -278,7 +286,135 @@ void main() {
     await tester.pump();
 
     expect(map.buses.last!.latitude, 9.95);
-    expect(map.moves, hasLength(1)); // the camera is not forced again
+    // Without a route the camera follows the bus.
+    expect(map.moves.last, (lat: 9.95, lng: -84.08));
+    final moves = map.moves.length;
+
+    // The once-a-second redraw does not move the camera again.
+    await wait(tester, const Duration(seconds: 2));
+    expect(map.moves, hasLength(moves));
+  });
+
+  group('route of the trip', () {
+    FakeOperations withRoute() => FakeOperations()
+      ..publicTripResult = LiveBusTrip.fromJsonApi(liveTripResource())
+      ..patternById = pattern(
+        patternId,
+        stops: [
+          stopAt('Terminal', 9.92, -84.08, seq: 1),
+          stopAt('Centro', 9.94, -84.08, seq: 2),
+        ],
+      );
+
+    testWidgets('draws the route of the trip with the bus inside it', (
+      tester,
+    ) async {
+      final operations = withRoute();
+      await pump(
+        tester,
+        _FakeGps(_tracking(TripStatus.inProgress, position: _position())),
+        operations: operations,
+      );
+      await tester.pump();
+
+      expect(operations.calls, ['publicTrip $_tripId', 'pattern $patternId']);
+      expect(map.route?.stops.map((s) => s.name), ['Terminal', 'Centro']);
+      // First view: the whole route plus the bus.
+      expect(map.fits.last, hasLength(3));
+      expect(map.fits.last.last.latitude, 9.93);
+      expect(find.byKey(const Key('show-route-button')), findsOneWidget);
+
+      // The bus moves inside the route view (no camera jump).
+      final moves = map.moves.length;
+      feed.push(_position(lat: 9.935, second: 5));
+      await tester.pump();
+      expect(map.buses.last!.latitude, 9.935);
+      expect(map.moves, hasLength(moves));
+    });
+
+    testWidgets('"Ver el bus" follows it; "Ver ruta" shows the whole route', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        _FakeGps(_tracking(TripStatus.inProgress, position: _position())),
+        operations: withRoute(),
+      );
+      await tester.pump();
+
+      await tester.tap(find.byKey(const Key('center-bus-button')));
+      await tester.pump();
+      feed.push(_position(lat: 9.936, second: 5));
+      await tester.pump();
+      expect(map.moves.last, (lat: 9.936, lng: -84.08));
+
+      final fits = map.fits.length;
+      await tester.tap(find.byKey(const Key('show-route-button')));
+      await tester.pump();
+      expect(map.fits, hasLength(fits + 1));
+      final moves = map.moves.length;
+      feed.push(_position(lat: 9.937, second: 10));
+      await tester.pump();
+      expect(map.moves, hasLength(moves)); // not following any more
+    });
+
+    testWidgets('my position: the stop to walk to, highlighted on the map', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        _FakeGps(_tracking(TripStatus.inProgress, position: _position())),
+        operations: withRoute(),
+        location: _FakeLocation(
+          location: const DeviceLocation(latitude: 9.95, longitude: -84.08),
+        ),
+      );
+      await tester.pump();
+
+      // The bus (9.93) already left the terminal (9.92): "Centro" (9.94).
+      expect(find.text('Tu parada: Centro'), findsOneWidget);
+      expect(find.text('A 1,1 km · ~14 min caminando'), findsOneWidget);
+      expect(find.text('Es la próxima parada del bus.'), findsOneWidget);
+      expect(map.highlighted?.name, 'Centro');
+      expect(map.users.last.latitude, 9.95);
+
+      // "Cómo llegar": me, my stop and the bus in one view.
+      await tester.tap(find.byKey(const Key('boarding-action')));
+      await tester.pump();
+      expect(map.fits.last.map((p) => p.latitude), [9.95, 9.94, 9.93]);
+    });
+
+    testWidgets('without location: offers to turn it on (asked on tap only)', (
+      tester,
+    ) async {
+      final location = _FakeLocation(access: LocationAccess.denied);
+      await pump(
+        tester,
+        _FakeGps(_tracking(TripStatus.inProgress, position: _position())),
+        operations: withRoute(),
+        location: location,
+      );
+      await tester.pump();
+
+      expect(find.text('¿Dónde tomo el bus?'), findsOneWidget);
+      expect(location.accessChecks, [false]); // not asked on opening
+
+      await tester.tap(find.byKey(const Key('boarding-action')));
+      await tester.pump();
+      expect(location.accessChecks, [false, true]); // asked on "Activar"
+    });
+
+    testWidgets('no route available: bus only, no "Ver ruta"', (tester) async {
+      await pump(
+        tester,
+        _FakeGps(_tracking(TripStatus.inProgress, position: _position())),
+      );
+      await tester.pump();
+
+      expect(map.route, isNull);
+      expect(find.byKey(const Key('show-route-button')), findsNothing);
+      expect(map.buses.last, isNotNull);
+    });
   });
 
   testWidgets('no new positions: weak signal, then no signal (gray bus)', (
