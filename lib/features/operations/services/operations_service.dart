@@ -57,6 +57,45 @@ class OperationsService {
     return _resources(body).map(TransitRoute.fromJsonApi).toList();
   }
 
+  /// `GET ops/routes?include=patterns` — active routes, each with its
+  /// directions (line + ordered stops). **One request** for the whole map.
+  ///
+  /// The patterns arrive in the JSON:API `included` array. They are linked to
+  /// their route by `relationships.patterns.data`, or by the pattern's
+  /// `route_id` when the route has no such relationship.
+  Future<List<TransitRoute>> routesWithPatterns() async {
+    final body = await _client.get(
+      ApiConfig.opsRoutes({
+        'include': 'patterns',
+        'sort': 'code',
+        'page[size]': '100',
+      }),
+    );
+
+    final patterns = <String, RoutePattern>{
+      for (final resource in _included(body, RoutePattern.jsonApiType))
+        resource['id'].toString(): RoutePattern.fromJsonApi(resource),
+    };
+
+    return [
+      for (final resource in _resources(body))
+        _withPatterns(resource, patterns),
+    ];
+  }
+
+  static TransitRoute _withPatterns(
+    Map<String, dynamic> resource,
+    Map<String, RoutePattern> patterns,
+  ) {
+    final routeId = resource['id'].toString();
+    final linked = TransitRoute.linkedPatternIds(resource);
+    final own = linked != null
+        ? [for (final id in linked) ?patterns[id]]
+        : (patterns.values.where((p) => p.routeId == routeId).toList()
+            ..sort((a, b) => (a.code ?? '').compareTo(b.code ?? '')));
+    return TransitRoute.fromJsonApi(resource, patterns: own);
+  }
+
   /// `GET ops/routes/{id}/patterns` — directions of a route with their stops.
   Future<List<RoutePattern>> routePatterns(String routeId) async {
     final body = await _client.get(ApiConfig.opsRoutePatterns(routeId));
@@ -85,6 +124,19 @@ class OperationsService {
     final data = body['data'];
     if (data is! List) return const [];
     return data.whereType<Map>().map(Map<String, dynamic>.from);
+  }
+
+  /// Items of the JSON:API `included` array with the given [type].
+  static Iterable<Map<String, dynamic>> _included(
+    Map<String, dynamic> body,
+    String type,
+  ) {
+    final included = body['included'];
+    if (included is! List) return const [];
+    return included
+        .whereType<Map>()
+        .where((item) => item['type'] == type && item['id'] != null)
+        .map(Map<String, dynamic>.from);
   }
 
   static Map<String, dynamic> _resource(Map<String, dynamic> body) {
