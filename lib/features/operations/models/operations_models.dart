@@ -294,6 +294,17 @@ class TransitRoute {
 }
 
 /// One page of route search results.
+/// One page of the driver's trip history (`GET ops/driver/trips`).
+class DriverTripPage {
+  const DriverTripPage({required this.trips, required this.hasMore});
+
+  /// Most recent first.
+  final List<DriverTrip> trips;
+
+  /// There is a next page ("Cargar más").
+  final bool hasMore;
+}
+
 class RoutePage {
   const RoutePage({required this.routes, required this.hasMore});
 
