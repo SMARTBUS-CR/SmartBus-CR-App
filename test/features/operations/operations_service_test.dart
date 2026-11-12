@@ -242,6 +242,62 @@ void main() {
         );
       }
     });
+
+    test('completeTrip: completed with the backend actual_arrival_at '
+        '(read as UTC, shown in local time)', () async {
+      final h = _Harness({
+        'data': tripResource(
+          status: 'completed',
+          actualDepartureAt: '2026-11-11T13:05:00.000000Z',
+          actualArrivalAt: '2026-11-11T14:07:00.000000Z',
+        ),
+      });
+
+      final done = await h.service.completeTrip(tripId);
+
+      expect(done.status, TripStatus.completed);
+      expect(done.actualArrivalAt?.toUtc(), DateTime.utc(2026, 11, 11, 14, 7));
+      expect(done.actualArrivalAt!.isUtc, isFalse);
+      expect(h.requests.single.body, isEmpty);
+    });
+
+    test(
+      'completeTrip: 409 arrives as a conflict with the backend message',
+      () {
+        final h = _Harness({
+          'errors': [
+            {
+              'status': '409',
+              'detail': 'Solo se pueden completar viajes en curso.',
+            },
+          ],
+        }, status: 409);
+
+        expect(
+          h.service.completeTrip(tripId),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.type, 'type', ApiErrorType.conflict)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  'Solo se pueden completar viajes en curso.',
+                ),
+          ),
+        );
+      },
+    );
+
+    test('trip: GET ops/trips/{id} with the token, current status', () async {
+      final h = _Harness({'data': tripResource(status: 'cancelled')});
+
+      final trip = await h.service.trip(tripId);
+
+      expect(trip.status, TripStatus.cancelled);
+      expect(h.requests.single.method, 'GET');
+      expect(h.requests.single.url.path, endsWith('/ops/trips/$tripId'));
+      expect(h.requests.single.headers['Authorization'], 'Bearer tok');
+    });
   });
 
   group('passenger catalogue', () {
