@@ -219,7 +219,7 @@ void main() {
     });
   });
 
-  test('15 s without positions -> asks right away: finished in <= 20 s', () {
+  test('10 s without positions -> asks right away: finished in <= 15 s', () {
     fakeAsync((async) {
       gps.next = _tracking(position: _at(0), age: 0);
       final tracker = build(async)..start();
@@ -227,24 +227,39 @@ void main() {
       feed.isConnected = true;
 
       gps.next = _tracking(status: TripStatus.completed, position: _at(0));
-      async.elapse(const Duration(seconds: 10));
-      expect(gps.calls, 1); // 10 s of silence is still normal
+      async.elapse(const Duration(seconds: 5));
+      expect(gps.calls, 1); // 5 s of silence is still normal
 
-      async.elapse(const Duration(seconds: 10));
+      async.elapse(const Duration(seconds: 5));
       expect(gps.calls, 2);
       expect(tracker.state.value.phase, LiveTripPhase.finished);
       tracker.dispose();
     });
   });
 
-  test('a silent bus is asked at most once every 15 s', () {
+  test('a silent bus is asked at the driver pace (every 5 s)', () {
     fakeAsync((async) {
       gps.next = _tracking(position: _at(0), age: 0);
       final tracker = build(async)..start();
       async.flushMicrotasks();
       feed.isConnected = true;
 
-      // Still in progress, no new positions (tunnel, weak signal…).
+      // Connected, but no events arrive (the socket is up, the broadcast is
+      // not): the bus must still move.
+      async.elapse(const Duration(seconds: 60));
+      // Initial GET + every 5 s from the 10 s of silence: 10, 15, …, 60.
+      expect(gps.calls, 12);
+      tracker.dispose();
+    });
+  });
+
+  test('a trip that has not started is asked every 15 s', () {
+    fakeAsync((async) {
+      gps.next = _tracking(status: TripStatus.scheduled);
+      final tracker = build(async)..start();
+      async.flushMicrotasks();
+      feed.isConnected = true;
+
       async.elapse(const Duration(seconds: 60));
       // Initial GET + at 15, 30, 45 and 60 s.
       expect(gps.calls, 5);
@@ -282,11 +297,17 @@ void main() {
       )..start();
       async.flushMicrotasks();
 
-      gps.next = _tracking(position: _at(15, lat: 9.99), age: 0);
-      async.elapse(const Duration(seconds: 15));
+      // Same pace as the driver: the bus moves every ~5 s without a socket.
+      gps.next = _tracking(position: _at(5, lat: 9.99), age: 0);
+      async.elapse(const Duration(seconds: 5));
 
       expect(gps.calls, 2);
       expect(tracker.state.value.position!.latitude, 9.99);
+
+      gps.next = _tracking(position: _at(10, lat: 9.995), age: 0);
+      async.elapse(const Duration(seconds: 5));
+      expect(gps.calls, 3);
+      expect(tracker.state.value.position!.latitude, 9.995);
       tracker.dispose();
     });
   });
