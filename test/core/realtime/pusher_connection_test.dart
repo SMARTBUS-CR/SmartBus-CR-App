@@ -227,6 +227,37 @@ void main() {
     });
   });
 
+  test('a connect that hangs times out and retries', () {
+    fakeAsync((async) {
+      final hanging = <Completer<RealtimeSocket>>[];
+      final slow = PusherConnection(
+        uri: Uri.parse('wss://gateway.test/app/key'),
+        authorize: (_, _) async => 'key:signature',
+        connector: (uri) {
+          final completer = Completer<RealtimeSocket>();
+          hanging.add(completer);
+          return completer.future;
+        },
+      );
+      slow.connect();
+      async.flushMicrotasks();
+      expect(slow.state.value, RealtimeConnectionState.connecting);
+
+      async.elapse(const Duration(seconds: 10)); // connectTimeout
+      expect(slow.state.value, RealtimeConnectionState.disconnected);
+
+      async.elapse(const Duration(seconds: 1)); // first reconnect delay
+      expect(hanging, hasLength(2));
+
+      // The first attempt finally opens: closed, the new attempt wins.
+      final late = _FakeSocket();
+      hanging.first.complete(late);
+      async.flushMicrotasks();
+      expect(late.closed, isTrue);
+      slow.dispose();
+    });
+  });
+
   test('dispose closes the socket and stops reconnecting', () {
     fakeAsync((async) {
       connection.connect();
