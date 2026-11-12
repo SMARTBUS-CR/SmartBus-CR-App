@@ -1,7 +1,9 @@
+
 # Pull Request Template
 
 ## Description
 
+<!-- Briefly describe the purpose of this Pull Request and the problem it solves. -->
 
 ## Type of Change
 
@@ -15,6 +17,11 @@
 
 ## Main Changes
 
+<!-- List the main changes implemented. -->
+
+-
+-
+-
 
 ## Validation
 
@@ -27,24 +34,33 @@
 
 ### Functional Flow
 
+<!-- Describe the steps to validate the implemented functionality. -->
+
+1.
+2.
+3.
+
 ### Test Environment
 
 - **Device/emulator:** <!-- Android/iOS model and version -->
-- **Flutter/Dart:** <!-- relevant output from `flutter --version` -->
-- **Configuration:** <!-- Render, local Gateway, `--dart-define`, etc. -->
+- **Flutter/Dart:** <!-- Relevant output from flutter --version -->
+- **Configuration:** <!-- Render, local Gateway, --dart-define, etc. -->
 
 ## Modified API Contracts
 
 | Method | Gateway Route | Purpose |
-|--------|----------------------------|-----------|
+|--------|---------------|---------|
 | POST | `/auth/login` | Authenticate the user |
 | GET | `/auth/user` | Get the authenticated user |
 | POST | `/auth/logout` | Log out |
 
+### Application Screenshots
 
-## Screenshots or Evidence
+| Screenshot 1 | Screenshot 2 | Screenshot 3 |
+|:---:|:---:|:---:|
+| ![Screenshot 1](IMAGE_URL) | ![Screenshot 2](IMAGE_URL) | ![Screenshot 3](IMAGE_URL) |
 
-<!-- Add relevant screenshots, video, logs, or links. For visual changes, include before/after evidence when useful. -->
+
 
 ## Request/Response
 
@@ -52,14 +68,25 @@
 
 **POST `/auth/login`**
 
+Request:
+
 ```json
 {
-	"email": "user@example.com",
-	"password": "********"
+  "email": "user@example.com",
+  "password": "********"
+}
+```
+
+Response:
+
+```json
+{
+  "message": "Example response"
 }
 ```
 
 ## Notes and Risks
 
+<!-- Mention dependencies, known limitations, risks, or additional considerations. -->
 
 -
