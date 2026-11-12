@@ -71,6 +71,10 @@ class ApiConfig {
     defaultValue: 5,
   );
 
+  /// Max wait for one GPS reading to be accepted. Short on purpose: a newer
+  /// reading replaces it a few seconds later (see `TripLocationSender`).
+  static const Duration gpsSendTimeout = Duration(seconds: 8);
+
   // --- Real time (GPS service, Laravel Reverb — Pusher protocol) -----------
   //
   // The passenger map receives the bus position over a WebSocket. In Render
