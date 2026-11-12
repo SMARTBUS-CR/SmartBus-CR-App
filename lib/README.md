@@ -241,8 +241,9 @@ abrir "Rastreando tu bus"
   → WebSocket a Reverb (wss://<gateway>/app/<KEY>)
   → POST /gps/broadcasting/auth               el Gateway valida el token y firma
   → suscribe private-trip.{id}
+  → GET  ops/public/trips/{id} → GET ops/route-patterns/{id}   la ruta del viaje
   → cada BusLocationUpdated: mueve el bus (solo si es más nuevo que el actual)
-  → 15 s sin posiciones: repite el GET  →  status completed / cancelled = fin
+  → 10 s sin posiciones: repite el GET cada 5 s  →  completed / cancelled = fin
   → se cae la conexión: reconecta sola y repite el GET
   → salir de la pantalla: cierra la conexión
 ```
@@ -252,18 +253,37 @@ abrir "Rastreando tu bus"
 2. **En vivo:** cada `BusLocationUpdated` mueve el marcador. Los eventos pueden
    llegar desordenados en redes móviles: se queda siempre la posición con el
    **mayor `recorded_at`** y se ignoran las viejas o repetidas.
-3. **Viaje terminado (regla de los 15 s):** el conductor envía su posición cada
-   ~5 s, así que **15 s sin posiciones** ya es raro. Entonces la app repite el
-   `GET`: si `status` es `completed` o `cancelled`, muestra "Viaje finalizado" /
-   "Viaje cancelado" y sale del canal. Así el fin del viaje se ve en
-   **~15–20 s**, sin que el Dashboard tenga que avisar nada. Si el bus solo está
-   sin señal (un túnel), se pregunta **como máximo cada 15 s**. Mientras las
-   posiciones llegan normalmente **no se hace ninguna consulta**.
+3. **Las posiciones no llegan solas (regla de los 10 s):** el conductor envía
+   cada ~5 s, así que **10 s sin posiciones** ya es raro (el WebSocket se cayó,
+   o está conectado pero los eventos no llegan). Entonces la app repite el
+   `GET` **cada 5 s**, al mismo ritmo del conductor: el bus **sigue
+   moviéndose** aunque el tiempo real falle (el GPS guarda siempre la última
+   posición aceptada, aunque no la persista). Si `status` es `completed` o
+   `cancelled`, muestra "Viaje finalizado" / "Viaje cancelado" y sale del
+   canal: el fin del viaje se ve en **~10–15 s**, sin aviso del Dashboard.
+   Mientras las posiciones llegan normalmente **no se hace ninguna consulta**.
+   Un viaje que aún no sale se consulta cada 15 s.
 4. **Reconexión:** si se cae el WebSocket, reconecta solo (espera 1, 2, 5, 10 y
    30 s entre intentos) y al volver repite el `GET`, porque **Reverb no guarda
    historial**: lo enviado mientras estaba desconectado se perdió.
 5. **Sin tiempo real** (sin `REVERB_APP_KEY` o sin conexión al WebSocket): la
-   pantalla igual funciona consultando la posición cada 15 s.
+   pantalla igual funciona consultando la posición cada 5 s.
+6. **La ruta:** con el `route_pattern_id` del viaje (`GET ops/public/trips/{id}`)
+   pide la línea y las paradas (`GET ops/route-patterns/{id}`) y las dibuja como
+   en el mapa del inicio. La primera vista muestra **la ruta completa con el
+   bus**, que se mueve dentro de ella. **Ver el bus** centra y **sigue** al bus
+   (la cámara se mueve con cada posición nueva); **Ver ruta** vuelve a la ruta
+   completa. Sin ruta disponible, la cámara sigue al bus.
+7. **Tu parada (dónde tomar el bus):** con la ubicación del pasajero, el panel
+   muestra la parada **más cercana a él de las que el bus todavía no pasó**
+   (`boardingStopFor` + `NextStopTracker`, en
+   `features/operations/services/next_stop_tracker.dart`): nombre, distancia y
+   minutos caminando (~80 m/min), y cuántas paradas le faltan al bus para
+   llegar ("Es la próxima parada del bus", "Al bus le faltan 2 paradas…"). La
+   parada se resalta en el mapa y **Cómo llegar** encuadra al pasajero, su
+   parada y el bus. Se recalcula cuando se mueve el bus o el pasajero. Si el
+   bus ya pasó todas, lo dice. La pantalla no pide el permiso al abrir: sin
+   ubicación ofrece **Activar** (o **Ajustes** si ya no se puede pedir).
 
 La frescura se calcula con el **reloj de este teléfono** (desde que se recibió
 la posición), no con el `recorded_at` del teléfono del conductor, que puede
@@ -333,6 +353,14 @@ demora) sin tocar el Dashboard ni el GPS.
   verifique en la base que el viaje terminó y emita el evento. La pantalla del
   pasajero ya sabe reaccionar a un viaje terminado.
 
+**Conexión lenta:** abrir el WebSocket espera como máximo
+`PusherConnection.connectTimeout` (10 s); después cuenta como intento fallido y
+se programa la reconexión. Si el intento viejo abre tarde, se cierra.
+
+**Ruta sin argumentos:** `/passenger/tracking` sin el id del viaje (o cualquier
+ruta desconocida) abre el splash (`onUnknownRoute` en `main.dart`), que lleva al
+inicio del rol, en vez de lanzar una excepción.
+
 ### Configuración
 
 `REVERB_APP_KEY`, `REVERB_HOST`, `REVERB_PORT` y `REVERB_SCHEME` (ver la
@@ -367,11 +395,64 @@ teléfono, si la reporta) y `recorded_at`.
 
 En los casos que **dejan de enviar**, reintentar cada 5 s no sirve de nada: la
 pantalla muestra el motivo (`TripTrackingState.rejected`) y un botón
-**Reintentar** para cuando se corrija.
+**Reintentar** para cuando se corrija. El `401` es distinto: reintentar daría
+`401` otra vez, así que (`snapshot.sessionExpired`) Recorrido borra la sesión y
+manda al **Login** con "Tu sesión expiró…".
 
-"Iniciar recorrido" primero inicia el viaje en el Dashboard y "Finalizar
-recorrido" lo completa (sección 9), así el GPS ya no responde `409` por un
-viaje sin iniciar.
+**Pantalla Recorrido (mapa).** Con el viaje en curso, el mapa ocupa la mayor
+parte de la pantalla:
+
+- **La ruta a seguir:** la del propio viaje (`planned_route_snapshot`:
+  `route_geometry` + `occurrences`, congelada al planificarlo →
+  `DriverTrip.plannedPattern`, sin otra petición). Si el viaje no la trae:
+  `GET ops/route-patterns/{id}` (`OperationsService.routePattern`). Sin ninguna
+  de las dos, solo se ve el bus con una nota. Se dibuja igual que en el mapa
+  del pasajero (línea con degradado, flechas, paradas numeradas).
+- **El bus:** la posición de cada lectura del GPS (`snapshot.latitude` /
+  `longitude`); la cámara lo sigue. Botones: **Ver ruta completa** (deja de
+  seguir) y **Centrar en el bus**. Arriba, una etiqueta con destino, hora real
+  de salida y placa.
+- **Próxima parada** (`NextStopTracker`, `features/driver/next_stop_tracker.dart`):
+  una parada cuenta como pasada a 60 m; si el bus llega a una posterior, las
+  anteriores se saltan; al retomar a mitad del viaje se calcula desde la parada
+  más cercana. Muestra nombre, "Parada N de M" y la hora programada (salida +
+  `minutes_from_start`); al final, "Llegaste a la última parada". La parada
+  siguiente se resalta en el mapa.
+
+Debajo, un panel **compacto** (~190 px en un teléfono de 360×640): estado del
+envío ("Enviando ubicación · hace 3 s") con contadores pequeños de enviadas y
+pendientes, la próxima parada, el aviso de una línea "No cierres SmartBus…"
+(al tocarlo explica por qué) y **Finalizar recorrido**. Si el GPS no está
+enviando (permiso, ubicación apagada, rechazo), el mismo panel dice por qué y
+ofrece la acción.
+
+**El GPS no depende de la pantalla.** Las pestañas del conductor se reemplazan
+(`pushReplacementNamed`), así que Recorrido se destruye al ir a Inicio, Mis
+rutas o Mi cuenta. El envío vive en `ActiveTripTracking.sender`
+(`features/trip_tracking/services/active_trip_tracking.dart`), uno para toda la
+sesión de la app: cambiar de pestaña **no** apaga el GPS (los pasajeros no ven
+"sin señal") y al volver a Recorrido se ve enviando. Solo se detiene con
+**Finalizar recorrido**, **Cerrar sesión** (`ProfileDetails.onSignOut`) o una
+sesión expirada.
+
+**Fuera de la app:** con la app en segundo plano o la pantalla bloqueada sigue
+enviando (servicio en primer plano con la notificación "SmartBus · recorrido
+activo" en Android; `UIBackgroundModes: location` en iOS). Si el conductor
+**cierra la app desde recientes**, Android detiene el envío; por eso la
+confirmación de inicio y la pantalla Recorrido muestran el aviso
+`KeepAppOpenNotice` ("No cierres SmartBus durante el recorrido"). En Huawei /
+Honor conviene además permitir "Ejecutar en segundo plano" en los ajustes de
+batería.
+
+**Notificaciones (Android 13+):** la notificación del servicio solo se ve con
+el permiso `POST_NOTIFICATIONS` (declarado en el manifest). Se pide al iniciar
+un viaje, después del permiso de ubicación (`NotificationPermission`, canal
+`smartbus/notifications` en `MainActivity.kt`, sin paquetes extra). Negarlo
+**no** bloquea el viaje: el GPS se envía igual.
+
+"Iniciar recorrido" (en Inicio) primero inicia el viaje en el Dashboard y
+"Finalizar recorrido" lo completa (sección 9), así el GPS ya no responde `409`
+por un viaje sin iniciar.
 
 Tests: `test/features/trip_tracking/trip_location_sender_test.dart`.
 
@@ -385,7 +466,7 @@ mismo Gateway). Todo pasa por `OperationsService`
 
 | Método | Endpoint (Gateway) | Token | Quién |
 |---|---|---|---|
-| `driverTrips({serviceDate, status})` | `GET ops/driver/trips` | Sí | Conductor |
+| `driverTrips({serviceDate, status})` | `GET ops/driver/trips?include=pattern,bus&sort=scheduled_departure_at` | Sí | Conductor |
 | `startTrip(id)` | `POST ops/trips/{id}/start` | Sí | Conductor asignado |
 | `completeTrip(id)` | `POST ops/trips/{id}/complete` | Sí | Conductor asignado |
 | `routes()` | `GET ops/routes` | No | Pasajero |
@@ -396,18 +477,42 @@ mismo Gateway). Todo pasa por `OperationsService`
 
 ### Conductor
 
-1. **Inicio** muestra los viajes de hoy (ruta, destino, horas, estado) y,
-   arriba, cualquier viaje de otro día que siga **en curso** (cruzó la
-   medianoche o nadie lo finalizó). Los viajes son **diarios**: el Dashboard
-   crea uno por fecha a partir de los horarios fijos.
-2. **Iniciar recorrido** (viaje `scheduled`): `startTrip` → el viaje queda
-   `in_progress` → empieza el envío de GPS. Si el Dashboard lo rechaza (409:
-   aún no es hora, otro viaje en curso…), se muestra el mensaje y no se envía nada.
+La app **no crea viajes**: se planifican en el Dashboard (conductor, bus,
+recorrido, fecha y hora). El conductor solo inicia uno ya programado.
+
+1. **Inicio** (`DriverHomeScreen`) muestra los viajes de hoy ordenados por
+   salida: ruta (código · nombre), destino, **placa y unidad del bus**
+   (`include=bus`), horas programadas y estado. Arriba va cualquier viaje de
+   otro día que siga **en curso** (cruzó la medianoche o nadie lo finalizó).
+   Sin viajes: "No tienes viajes asignados para hoy.".
+2. **Iniciar recorrido** — solo en viajes `scheduled` y solo si **no hay otro
+   en curso** (en ese caso los demás dicen "Finaliza el recorrido en curso para
+   iniciar este viaje."):
+   1. diálogo de **confirmación**;
+   2. **permiso y GPS del teléfono**: si faltan, el viaje **no se inicia** y un
+      SnackBar ofrece Permitir / Ajustes / Activar. Así nunca queda un viaje
+      "en curso" para los pasajeros sin posición del bus;
+   3. `startTrip` con **spinner** en el botón (deshabilitado: no hay doble
+      inicio);
+   4. con `200` (`in_progress` + `actual_departure_at`) abre **Recorrido**
+      (`TripScreen`) con ese viaje, que empieza a enviar el GPS con su id.
 3. **Continuar recorrido** (viaje ya `in_progress`, p. ej. se cerró la app):
-   solo reanuda el GPS. La pestaña **Recorrido** sin viaje busca el que está en
-   curso.
+   abre Recorrido y reanuda el GPS sin volver a llamar `start`. Muestra
+   "Inició a las HH:MM" con la hora **del backend** en hora local. La pestaña
+   **Recorrido** sin viaje busca el que está en curso. `TripScreen` nunca
+   inicia un viaje `scheduled` (manda a Inicio).
 4. **Finalizar recorrido**: detiene el GPS y llama `completeTrip`. Si falla,
    ofrece **Reintentar** (el GPS ya está detenido).
+
+Errores al iniciar (SnackBar en Inicio; el GPS no se enciende):
+
+| Respuesta | Qué ve el conductor |
+|---|---|
+| `409` no está programado | Mensaje del backend ("Only scheduled trips can be started.") + se recarga la lista |
+| `422` regla de negocio (bus/conductor no disponible, salida suspendida, otro viaje en curso) | Mensaje del backend + se recarga la lista |
+| `403` / `404` | "No puedes iniciar este viaje." + se recarga la lista |
+| `401` | Se borra la sesión → Login con "Tu sesión expiró. Inicia sesión nuevamente." (también al cargar la lista) |
+| Sin red, timeout, `429`, `5xx` | Mensaje + **Reintentar**; el viaje sigue programado |
 
 ### Pasajero
 
@@ -427,8 +532,10 @@ Un viaje terminado desaparece de la lista (el Dashboard solo devuelve los
 
 | Qué | Archivo |
 |---|---|
-| URLs, filtros y lectura JSON:API (trazo `[lng, lat]`, paradas ordenadas, snapshot) | `test/features/operations/operations_service_test.dart` |
-| Inicio del conductor y Recorrido: iniciar, continuar, rechazo, finalizar, reintentar | `test/features/driver/trip_screen_test.dart` |
+| URLs, filtros y lectura JSON:API (trazo `[lng, lat]`, paradas ordenadas, snapshot, placa del bus, 409/422 con mensaje) | `test/features/operations/operations_service_test.dart` |
+| Inicio del conductor (AC1–AC9): lista, confirmación, permiso de ubicación, un solo viaje activo, 409/422/403/404/401, red y reintentar, spinner | `test/features/driver/driver_home_screen_test.dart` |
+| Recorrido: mapa con la ruta del viaje (o del Dashboard), bus y cámara, próxima parada, panel compacto en teléfono chico, GPS entre pestañas, 401, finalizar, reintentar | `test/features/driver/trip_screen_test.dart` |
+| Próxima parada: inicio, avance, retomar a mitad, saltar paradas, fin | `test/features/driver/next_stop_tracker_test.dart` |
 | Buses en curso: ruta → buses → en vivo, sin buses, ver paradas, ver ruta en el mapa, reintentar | `test/features/passenger/buses_in_progress_screen_test.dart` |
 
 ## 10. Rutas en el mapa del pasajero
