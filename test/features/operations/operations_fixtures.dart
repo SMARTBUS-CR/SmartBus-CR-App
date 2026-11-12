@@ -369,15 +369,37 @@ class FakeOperations extends OperationsService {
     );
   }
 
-  /// Status that [trip] answers (`GET ops/trips/{id}`).
-  String tripStatus = 'in_progress';
+  /// Status that [trip] answers (`GET ops/trips/{id}`). While `null` it
+  /// answers [knownTrip] (or the trip of [trips] with that id) unchanged, so
+  /// opening a screen does not change the trip it shows.
+  String? tripStatus;
+
+  /// The trip the screen was opened with (set by the test helpers).
+  DriverTrip? knownTrip;
   Exception? tripError;
+
+  /// While not null, [trip] waits for it (to see the refresh indicator).
+  Completer<void>? tripGate;
 
   @override
   Future<DriverTrip> trip(String tripId) async {
     calls.add('trip $tripId');
+    await tripGate?.future;
     if (tripError != null) throw tripError!;
-    return driverTrip(id: tripId, status: tripStatus);
+    final status = tripStatus;
+    if (status != null) {
+      return driverTrip(
+        id: tripId,
+        status: status,
+        actualArrivalAt: status == 'completed' ? completedArrivalAt : null,
+      );
+    }
+    final known = [
+      ?knownTrip,
+      ...trips,
+      ...otherDayTrips,
+    ].where((t) => t.id == tripId).firstOrNull;
+    return known ?? driverTrip(id: tripId, status: 'in_progress');
   }
 
   @override
