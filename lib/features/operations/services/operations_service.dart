@@ -52,11 +52,22 @@ class OperationsService {
     _resource(await _client.post(ApiConfig.opsTripStart(tripId))),
   );
 
-  /// `POST ops/trips/{id}/complete` — the trip becomes `completed`.
+  /// `POST ops/trips/{id}/complete` — the trip becomes `completed`, with
+  /// `actual_arrival_at`. Completing a trip already completed returns it
+  /// again (idempotent).
+  ///
+  /// Errors: 409 the trip is not in progress (backend message, e.g. "Solo se
+  /// pueden completar viajes en curso."); 403 not the driver's trip; 404 not
+  /// found.
   Future<DriverTrip> completeTrip(String tripId) async =>
       DriverTrip.fromJsonApi(
         _resource(await _client.post(ApiConfig.opsTripComplete(tripId))),
       );
+
+  /// `GET ops/trips/{id}` — the driver's trip with its current status.
+  Future<DriverTrip> trip(String tripId) async => DriverTrip.fromJsonApi(
+    _resource(await _client.get(ApiConfig.opsTrip(tripId))),
+  );
 
   // --- Passenger (public catalogue) -------------------------------------------
 
