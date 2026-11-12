@@ -11,9 +11,13 @@ import 'models/favorite_route.dart';
 import 'services/favorites_controller.dart';
 
 /// "Mis favoritos" (`/passenger/favorites`): the routes the passenger saved,
-/// most recent first. Swipe or tap the star to remove one ("Deshacer" brings
-/// it back); tap a route to open it. "Ver ruta" there closes this screen with
-/// a [RouteSelection], so the home map draws it.
+/// most recent first. Tap a route to open it ("Ver ruta" there closes this
+/// screen with a [RouteSelection], so the home map draws it).
+///
+/// Removing:
+/// - one route: its star, or swipe it ("Deshacer" brings it back);
+/// - several: "Editar" → select → "Eliminar (N)" (with confirmation);
+/// - all: menu ⋮ → "Eliminar todos" (with confirmation).
 class FavoriteRoutesScreen extends StatefulWidget {
   const FavoriteRoutesScreen({super.key, this.favorites, this.operations});
 
@@ -31,6 +35,15 @@ class _FavoriteRoutesScreenState extends State<FavoriteRoutesScreen> {
   FavoritesController get _favorites =>
       widget.favorites ?? FavoritesController.shared;
 
+  /// Edit mode: checkboxes instead of stars, no swipe.
+  bool _editing = false;
+  final Set<String> _selected = {};
+
+  /// A bulk removal is waiting for the server.
+  bool _deleting = false;
+
+  bool _leaving = false;
+
   @override
   void initState() {
     super.initState();
@@ -45,16 +58,18 @@ class _FavoriteRoutesScreenState extends State<FavoriteRoutesScreen> {
     super.dispose();
   }
 
-  bool _leaving = false;
-
   void _onChange() {
     final error = _favorites.error;
-    if (_leaving || error?.type != ApiErrorType.unauthorized) return;
+    if (error?.type == ApiErrorType.unauthorized) _sessionExpired(error!);
+  }
+
+  void _sessionExpired(ApiException error) {
+    if (_leaving || !mounted) return;
     _leaving = true;
     sessionExpired(
       ScaffoldMessenger.of(context),
       Navigator.of(context),
-      error!.message,
+      error.message,
     );
   }
 
@@ -64,15 +79,11 @@ class _FavoriteRoutesScreenState extends State<FavoriteRoutesScreen> {
     // With a list already shown, a failed refresh keeps it and just says so.
     if (!mounted || error == null || _favorites.favorites == null) return;
     if (error.type == ApiErrorType.unauthorized) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(error.message),
-          backgroundColor: SmartBusColors.error,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    showFavoritesMessage(
+      ScaffoldMessenger.of(context),
+      error.message,
+      color: SmartBusColors.error,
+    );
   }
 
   Future<void> _open(TransitRoute route) async {
@@ -89,28 +100,180 @@ class _FavoriteRoutesScreenState extends State<FavoriteRoutesScreen> {
     if (selection != null && mounted) Navigator.pop(context, selection);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: SmartBusColors.blanco,
-      body: Column(
-        children: [
-          SmartBusHeader(
-            title: 'Mis favoritos',
-            subtitle: 'Tus rutas guardadas',
-            type: SmartBusUserType.passenger,
-            compact: true,
-            onBack: Navigator.canPop(context)
-                ? () => Navigator.pop(context)
-                : null,
+  // --- Edit mode ------------------------------------------------------------
+
+  void _startEditing() => setState(() {
+    _editing = true;
+    _selected.clear();
+  });
+
+  void _stopEditing() => setState(() {
+    _editing = false;
+    _selected.clear();
+  });
+
+  void _toggle(String routeId) => setState(() {
+    if (!_selected.remove(routeId)) _selected.add(routeId);
+  });
+
+  void _toggleAll(List<FavoriteRoute> favorites) => setState(() {
+    final all = favorites.every((f) => _selected.contains(f.routeId));
+    _selected.clear();
+    if (!all) _selected.addAll(favorites.map((f) => f.routeId));
+  });
+
+  // --- Removing several -----------------------------------------------------
+
+  Future<void> _deleteSelected() async {
+    final ids = _selected.toList();
+    final confirmed = await _confirm(
+      title: '¿Eliminar ${_routes(ids.length)} de tus favoritos?',
+      message: 'Podrás deshacerlo justo después.',
+    );
+    if (confirmed) await _delete(ids);
+  }
+
+  Future<void> _deleteAll() async {
+    final favorites = _favorites.favorites ?? const <FavoriteRoute>[];
+    if (favorites.isEmpty) return;
+    final confirmed = await _confirm(
+      title: '¿Eliminar todas tus rutas favoritas?',
+      message:
+          'Se quitarán ${_routes(favorites.length)}. Podrás deshacerlo '
+          'justo después.',
+    );
+    if (confirmed) await _delete([for (final f in favorites) f.routeId]);
+  }
+
+  Future<bool> _confirm({
+    required String title,
+    required String message,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const Key('delete-favorites-dialog'),
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            key: const Key('delete-favorites-cancel'),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
           ),
-          Expanded(
-            child: ListenableBuilder(
-              listenable: _favorites,
-              builder: (context, _) => _body(),
+          FilledButton(
+            key: const Key('delete-favorites-confirm'),
+            style: FilledButton.styleFrom(
+              backgroundColor: SmartBusColors.error,
             ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Eliminar'),
           ),
         ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  /// Removes [routeIds]; edit mode closes at once.
+  Future<void> _delete(List<String> routeIds) async {
+    if (_deleting || routeIds.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _deleting = true;
+      _editing = false;
+      _selected.clear();
+    });
+
+    final result = await _favorites.removeMany(routeIds);
+    if (mounted) setState(() => _deleting = false);
+    if (!mounted || result.nothingSent) return;
+
+    final error = result.error;
+    if (error?.type == ApiErrorType.unauthorized) {
+      _sessionExpired(error!);
+      return;
+    }
+
+    if (result.failed.isNotEmpty) {
+      final failed = [for (final f in result.failed) f.routeId];
+      showFavoritesMessage(
+        messenger,
+        '${_couldNot(failed.length, 'eliminar')}.'
+        '${error == null ? '' : ' ${error.message}'}',
+        color: SmartBusColors.error,
+        action: SnackBarAction(
+          label: 'Reintentar',
+          textColor: SmartBusColors.blanco,
+          onPressed: () => _delete(failed),
+        ),
+      );
+      return;
+    }
+
+    final count = result.removed.length;
+    showFavoritesMessage(
+      messenger,
+      count == 1
+          ? 'Ruta eliminada de favoritos.'
+          : '$count rutas eliminadas de favoritos.',
+      action: SnackBarAction(
+        label: 'Deshacer',
+        onPressed: () => _undo(result, messenger),
+      ),
+    );
+  }
+
+  Future<void> _undo(
+    BulkRemoval removal,
+    ScaffoldMessengerState messenger,
+  ) async {
+    final result = await _favorites.restore(removal);
+    final error = result.error;
+    if (error == null || !mounted) return;
+    if (error.type == ApiErrorType.unauthorized) {
+      _sessionExpired(error);
+      return;
+    }
+    showFavoritesMessage(
+      messenger,
+      '${_couldNot(result.failed.length, 'recuperar')}. '
+      '${error.message}',
+      color: SmartBusColors.error,
+    );
+  }
+
+  // --- UI -------------------------------------------------------------------
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      // Android "back" leaves edit mode first.
+      canPop: !_editing,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _editing) _stopEditing();
+      },
+      child: Scaffold(
+        backgroundColor: SmartBusColors.blanco,
+        body: Column(
+          children: [
+            SmartBusHeader(
+              title: 'Mis favoritos',
+              subtitle: 'Tus rutas guardadas',
+              type: SmartBusUserType.passenger,
+              compact: true,
+              onBack: Navigator.canPop(context)
+                  ? () => Navigator.maybePop(context)
+                  : null,
+            ),
+            Expanded(
+              child: ListenableBuilder(
+                listenable: _favorites,
+                builder: (context, _) => _body(),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -136,6 +299,10 @@ class _FavoriteRoutesScreenState extends State<FavoriteRoutesScreen> {
       );
     }
 
+    // Routes removed meanwhile (another screen, a refresh) leave the selection.
+    _selected.removeWhere((id) => !favorites.any((f) => f.routeId == id));
+    final editing = _editing && favorites.isNotEmpty;
+
     if (favorites.isEmpty) {
       return PassengerMessage(
         key: const Key('favorites-empty'),
@@ -149,60 +316,230 @@ class _FavoriteRoutesScreenState extends State<FavoriteRoutesScreen> {
       );
     }
 
-    return RefreshIndicator(
-      onRefresh: _refresh,
-      child: ListView.separated(
-        key: const Key('favorites-list'),
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: favorites.length,
-        separatorBuilder: (_, _) => const Divider(height: 1),
-        itemBuilder: (context, i) {
-          final favorite = favorites[i];
-          return Dismissible(
-            key: Key('favorite-${favorite.routeId}'),
-            direction: DismissDirection.endToStart,
-            background: const _RemoveBackground(),
-            // The controller removes it (and puts it back if that fails).
-            confirmDismiss: (_) async {
-              removeFavorite(context, _favorites, favorite.routeId);
-              return false;
-            },
-            child: FavoriteRouteTile(
-              favorite: favorite,
-              favorites: _favorites,
-              onTap: () => _open(favorite.route),
+    return Column(
+      children: [
+        _Toolbar(
+          count: favorites.length,
+          editing: editing,
+          deleting: _deleting,
+          allSelected: favorites.every((f) => _selected.contains(f.routeId)),
+          noneSelected: _selected.isEmpty,
+          onEdit: _startEditing,
+          onDone: _stopEditing,
+          onToggleAll: () => _toggleAll(favorites),
+          onDeleteAll: _deleteAll,
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _refresh,
+            child: ListView.separated(
+              key: const Key('favorites-list'),
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemCount: favorites.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, i) => _item(favorites[i], editing),
             ),
-          );
-        },
+          ),
+        ),
+        if (editing) _deleteBar(),
+      ],
+    );
+  }
+
+  Widget _item(FavoriteRoute favorite, bool editing) {
+    final tile = FavoriteRouteTile(
+      favorite: favorite,
+      favorites: _favorites,
+      selected: editing ? _selected.contains(favorite.routeId) : null,
+      onTap: editing
+          ? () => _toggle(favorite.routeId)
+          : () => _open(favorite.route),
+    );
+    if (editing) {
+      return KeyedSubtree(
+        key: Key('favorite-${favorite.routeId}'),
+        child: tile,
+      );
+    }
+    return Dismissible(
+      key: Key('favorite-${favorite.routeId}'),
+      direction: DismissDirection.endToStart,
+      background: const _RemoveBackground(),
+      // The controller removes it (and puts it back if that fails).
+      confirmDismiss: (_) async {
+        removeFavorite(context, _favorites, favorite.routeId);
+        return false;
+      },
+      child: tile,
+    );
+  }
+
+  Widget _deleteBar() {
+    final count = _selected.length;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        child: SizedBox(
+          width: double.infinity,
+          child: Semantics(
+            label: count == 0
+                ? 'Eliminar: selecciona al menos una ruta'
+                : 'Eliminar ${_routes(count)} seleccionadas',
+            excludeSemantics: true,
+            button: true,
+            enabled: count > 0 && !_deleting,
+            child: FilledButton.icon(
+              key: const Key('delete-selected'),
+              style: FilledButton.styleFrom(
+                backgroundColor: SmartBusColors.error,
+              ),
+              onPressed: count == 0 || _deleting ? null : _deleteSelected,
+              icon: const Icon(Icons.delete_outline),
+              label: Text('Eliminar ($count)'),
+            ),
+          ),
+        ),
       ),
     );
   }
 }
 
-/// One favorite: code, name (2 lines max), alias / company, and its star.
+/// "1 ruta" / "3 rutas".
+String _routes(int n) => n == 1 ? '1 ruta' : '$n rutas';
+
+/// "No se pudo eliminar 1 ruta" / "No se pudieron eliminar 3 rutas".
+String _couldNot(int n, String verb) =>
+    '${n == 1 ? 'No se pudo' : 'No se pudieron'} $verb ${_routes(n)}';
+
+/// Above the list: how many routes (or "Seleccionar todo" while editing),
+/// "Editar" / "Listo" and the ⋮ menu with "Eliminar todos".
+class _Toolbar extends StatelessWidget {
+  const _Toolbar({
+    required this.count,
+    required this.editing,
+    required this.deleting,
+    required this.allSelected,
+    required this.noneSelected,
+    required this.onEdit,
+    required this.onDone,
+    required this.onToggleAll,
+    required this.onDeleteAll,
+  });
+
+  final int count;
+  final bool editing;
+  final bool deleting;
+  final bool allSelected;
+  final bool noneSelected;
+  final VoidCallback onEdit;
+  final VoidCallback onDone;
+  final VoidCallback onToggleAll;
+  final VoidCallback onDeleteAll;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 4, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: editing
+                ? InkWell(
+                    key: const Key('select-all'),
+                    onTap: onToggleAll,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Row(
+                      children: [
+                        Checkbox(
+                          value: allSelected
+                              ? true
+                              : (noneSelected ? false : null),
+                          tristate: true,
+                          onChanged: (_) => onToggleAll(),
+                        ),
+                        const Flexible(
+                          child: Text(
+                            'Seleccionar todo',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : Padding(
+                    padding: const EdgeInsets.only(left: 12),
+                    child: Text(
+                      _routes(count),
+                      style: TextStyle(color: Colors.grey.shade700),
+                    ),
+                  ),
+          ),
+          TextButton(
+            key: Key(editing ? 'favorites-done' : 'favorites-edit'),
+            onPressed: deleting ? null : (editing ? onDone : onEdit),
+            child: Text(editing ? 'Listo' : 'Editar'),
+          ),
+          PopupMenuButton<void>(
+            key: const Key('favorites-menu'),
+            tooltip: 'Más opciones',
+            enabled: !deleting,
+            itemBuilder: (_) => [
+              PopupMenuItem<void>(
+                key: const Key('delete-all'),
+                onTap: onDeleteAll,
+                child: const Row(
+                  children: [
+                    Icon(
+                      Icons.delete_sweep_outlined,
+                      color: SmartBusColors.error,
+                    ),
+                    SizedBox(width: 12),
+                    Text('Eliminar todos'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One favorite: code, name (2 lines max), alias / company, and its star —
+/// or, in edit mode ([selected] not `null`), a checkbox.
 class FavoriteRouteTile extends StatelessWidget {
   const FavoriteRouteTile({
     super.key,
     required this.favorite,
     required this.favorites,
     required this.onTap,
+    this.selected,
   });
 
   final FavoriteRoute favorite;
   final FavoritesController favorites;
   final VoidCallback onTap;
 
+  /// `null` outside edit mode.
+  final bool? selected;
+
   @override
   Widget build(BuildContext context) {
     final route = favorite.route;
+    final selected = this.selected;
     final details = [
       if (favorite.label != null) favorite.label!,
       if (favorite.companyName != null) favorite.companyName!,
     ].join(' · ');
 
-    return ListTile(
+    final tile = ListTile(
       onTap: onTap,
+      selected: selected ?? false,
+      selectedTileColor: SmartBusColors.verdePasajero.withValues(alpha: 0.08),
       contentPadding: const EdgeInsets.fromLTRB(20, 4, 8, 4),
       leading: Container(
         constraints: const BoxConstraints(minWidth: 48, maxWidth: 72),
@@ -226,12 +563,21 @@ class FavoriteRouteTile extends StatelessWidget {
         route.name.isEmpty ? 'Ruta' : route.name,
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
+        style: const TextStyle(color: SmartBusColors.grisOscuro),
       ),
       subtitle: details.isEmpty
           ? null
           : Text(details, maxLines: 2, overflow: TextOverflow.ellipsis),
-      trailing: FavoriteStarButton(route: route, controller: favorites),
+      trailing: selected == null
+          ? FavoriteStarButton(route: route, controller: favorites)
+          : Checkbox(
+              key: Key('favorite-check-${route.id}'),
+              value: selected,
+              onChanged: (_) => onTap(),
+            ),
     );
+    // The screen reader says the route and whether it is selected together.
+    return selected == null ? tile : MergeSemantics(child: tile);
   }
 }
 
