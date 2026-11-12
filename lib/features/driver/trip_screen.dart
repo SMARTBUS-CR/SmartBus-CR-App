@@ -20,6 +20,9 @@ import '../operations/services/next_stop_tracker.dart';
 /// Shown when the Gateway answers 401.
 const sessionExpiredMessage = 'Tu sesión expiró. Inicia sesión nuevamente.';
 
+/// Completing answered 403 (not the driver's trip) or 404 (no such trip).
+const cannotCompleteMessage = 'No puedes finalizar este viaje.';
+
 /// Arguments of the `/driver/trip` route.
 class TripScreenArgs {
   const TripScreenArgs({required this.trip, this.autoStart = false});
@@ -105,8 +108,9 @@ class _TripScreenState extends State<TripScreen> {
   /// Last Dashboard error (complete or loading the trip).
   String? _tripError;
 
-  /// The GPS stopped but the Dashboard did not complete the trip.
-  bool _completeFailed = false;
+  /// Completing answered 403 / 404: the trip is not this driver's (or no
+  /// longer exists). The GPS is stopped.
+  bool _cannotComplete = false;
 
   // --- Map ---------------------------------------------------------------------
 
@@ -336,59 +340,109 @@ class _TripScreenState extends State<TripScreen> {
     await _sender.start(tripId: trip.id);
   }
 
+  /// "Finalizar recorrido": asks first. "Cancelar" or a tap outside → nothing
+  /// is sent and the GPS keeps sending.
   Future<void> _stop() async {
+    if (_busy) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Finalizar recorrido'),
+        key: const Key('finish-trip-dialog'),
+        title: const Text('¿Finalizar el recorrido?'),
         content: const Text(
-          '¿Seguro que quieres finalizar el recorrido? Se dejará de enviar la '
-          'ubicación del autobús y el viaje quedará finalizado.',
+          'Se dejará de enviar la ubicación del autobús y el viaje quedará '
+          'como finalizado.',
         ),
         actions: [
           TextButton(
+            key: const Key('finish-trip-cancel'),
             onPressed: () => Navigator.pop(context, false),
             child: const Text('Cancelar'),
           ),
           FilledButton(
+            key: const Key('finish-trip-confirm'),
+            style: FilledButton.styleFrom(
+              backgroundColor: SmartBusColors.error,
+            ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Finalizar'),
           ),
         ],
       ),
     );
-    if (confirmed == true) {
-      _sender.stop();
-      await _complete();
-    }
+    if (confirmed == true) await _complete();
   }
 
-  /// Completes the trip in the Dashboard (the GPS is already stopped).
+  /// `POST ops/trips/{id}/complete`. The GPS keeps sending until the
+  /// Dashboard answers: it only stops once the trip is no longer running
+  /// (completed, or it turns out it was cancelled / is not the driver's).
   Future<void> _complete() async {
     final trip = _trip;
-    if (trip == null || !mounted) return;
+    if (trip == null || _busy || !mounted) return;
     setState(() {
       _busy = true;
       _tripError = null;
-      _completeFailed = false;
     });
     try {
+      // 200 also when it was already completed (e.g. from another device).
       final done = await _operations.completeTrip(trip.id);
       if (!mounted) return;
-      setState(() => _trip = done);
+      if (done.status != TripStatus.inProgress) _sender.stop();
+      setState(() => _trip = done.withPlannedPattern(trip.plannedPattern));
     } on ApiException catch (e) {
       if (!mounted) return;
-      if (e.type == ApiErrorType.unauthorized) {
-        await _onSessionExpired();
-        return;
+      switch (e.type) {
+        case ApiErrorType.unauthorized:
+          await _onSessionExpired();
+        case ApiErrorType.conflict:
+          // Not in progress (scheduled / cancelled): backend message.
+          _showError(e.message);
+          await _refreshTrip(trip.id);
+        case ApiErrorType.forbidden || ApiErrorType.notFound:
+          _sender.stop();
+          setState(() => _cannotComplete = true);
+          _showError(cannotCompleteMessage);
+        default:
+          // No connection, timeout, 429, 5xx…: still in progress, the GPS
+          // keeps sending (pending locations stay queued). Try again.
+          _showError(e.message, onRetry: _complete);
       }
-      setState(() {
-        _tripError = e.message;
-        _completeFailed = true;
-      });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// After a 409: the trip's real status. If it is no longer running
+  /// (cancelled, completed, scheduled), the GPS stops and the screen says so.
+  Future<void> _refreshTrip(String tripId) async {
+    try {
+      final fresh = await _operations.trip(tripId);
+      if (!mounted || fresh.status == TripStatus.inProgress) return;
+      _sender.stop();
+      setState(() => _trip = fresh.withPlannedPattern(_trip?.plannedPattern));
+    } on ApiException catch (e) {
+      if (e.type == ApiErrorType.unauthorized) await _onSessionExpired();
+      // Otherwise keep what is shown: the driver can try again.
+    }
+  }
+
+  void _showError(String message, {VoidCallback? onRetry}) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: SmartBusColors.error,
+          action: onRetry == null
+              ? null
+              : SnackBarAction(
+                  label: 'Reintentar',
+                  textColor: SmartBusColors.blanco,
+                  onPressed: onRetry,
+                ),
+        ),
+      );
   }
 
   void _goHome() => Navigator.pushReplacementNamed(context, '/driver/home');
@@ -411,11 +465,11 @@ class _TripScreenState extends State<TripScreen> {
   /// The trip is running (or can be resumed): map + panel.
   bool get _onRoute {
     final trip = _trip;
+    // While completing, the map and the GPS stay (the button shows a spinner).
     return trip != null &&
         trip.status == TripStatus.inProgress &&
         !_loadingTrip &&
-        !_busy &&
-        !_completeFailed;
+        !_cannotComplete;
   }
 
   @override
@@ -517,6 +571,7 @@ class _TripScreenState extends State<TripScreen> {
             tripError: _tripError,
             onResume: _start,
             onStop: _stop,
+            completing: _busy,
           ),
         ),
       ],
@@ -540,18 +595,15 @@ class _TripScreenState extends State<TripScreen> {
         onAction: _goHome,
       );
     }
-    if (_busy) {
-      return const _BusyView(label: 'Finalizando el viaje…');
-    }
-    if (_completeFailed) {
+    if (_cannotComplete) {
       return _BlockedView(
-        icon: Icons.sync_problem,
-        title: 'No se pudo finalizar el viaje',
+        icon: Icons.block,
+        title: cannotCompleteMessage,
         message:
-            '${_tripError ?? ''}\nYa no se envía la ubicación; '
-            'reintenta para cerrar el viaje.',
-        actionLabel: 'Reintentar',
-        onAction: _complete,
+            'Este viaje no está asignado a tu cuenta o ya no existe. '
+            'Ya no se envía la ubicación.',
+        actionLabel: 'Ir a Inicio',
+        onAction: _goHome,
       );
     }
     if (trip.status == TripStatus.scheduled) {
@@ -584,6 +636,7 @@ class _TripPanel extends StatelessWidget {
     required this.tripError,
     required this.onResume,
     required this.onStop,
+    required this.completing,
   });
 
   final DriverTrip trip;
@@ -592,6 +645,39 @@ class _TripPanel extends StatelessWidget {
   final String? tripError;
   final VoidCallback onResume;
   final VoidCallback onStop;
+
+  /// `POST .../complete` is waiting for the Dashboard.
+  final bool completing;
+
+  /// "Finalizar recorrido" (red, spinner while completing).
+  Widget get _finishButton => _PanelButton(
+    key: const Key('finish-trip'),
+    label: completing ? 'Finalizando…' : 'Finalizar recorrido',
+    icon: Icons.stop_rounded,
+    color: SmartBusColors.error,
+    loading: completing,
+    onPressed: onStop,
+  );
+
+  /// The trip is still in progress while the GPS is paused: it can be ended
+  /// too (e.g. the driver reached the end after reopening the app).
+  Widget get _finishLink => Center(
+    child: TextButton.icon(
+      key: const Key('finish-trip'),
+      onPressed: completing ? null : onStop,
+      icon: completing
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.stop_rounded, color: SmartBusColors.error),
+      label: Text(
+        completing ? 'Finalizando…' : 'Finalizar recorrido',
+        style: const TextStyle(color: SmartBusColors.error),
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -632,12 +718,7 @@ class _TripPanel extends StatelessWidget {
           const SizedBox(height: 8),
           const KeepAppOpenNotice(compact: true),
           const SizedBox(height: 8),
-          _PanelButton(
-            label: 'Finalizar recorrido',
-            icon: Icons.stop_rounded,
-            color: SmartBusColors.error,
-            onPressed: onStop,
-          ),
+          _finishButton,
         ];
       case TripTrackingState.starting:
         return [
@@ -691,6 +772,7 @@ class _TripPanel extends StatelessWidget {
             icon: Icons.refresh,
             onPressed: onResume,
           ),
+          _finishLink,
         ];
       case TripTrackingState.idle || TripTrackingState.stopped:
         final error = snap.lastError ?? tripError;
@@ -709,6 +791,7 @@ class _TripPanel extends StatelessWidget {
             icon: Icons.play_arrow_rounded,
             onPressed: onResume,
           ),
+          _finishLink,
         ];
     }
   }
@@ -1020,10 +1103,12 @@ class _PanelMessage extends StatelessWidget {
 /// Full-width, 42 px high button of the panel.
 class _PanelButton extends StatelessWidget {
   const _PanelButton({
+    super.key,
     required this.label,
     required this.icon,
     required this.onPressed,
     this.color = SmartBusColors.azulPrincipal,
+    this.loading = false,
   });
 
   final String label;
@@ -1031,17 +1116,31 @@ class _PanelButton extends StatelessWidget {
   final FutureOr<void> Function() onPressed;
   final Color color;
 
+  /// Shows a spinner instead of the icon and ignores taps.
+  final bool loading;
+
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       height: 42,
       child: FilledButton.icon(
-        onPressed: () => onPressed(),
-        icon: Icon(icon, size: 20),
+        onPressed: loading ? null : () => onPressed(),
+        icon: loading
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: SmartBusColors.blanco,
+                ),
+              )
+            : Icon(icon, size: 20),
         label: Text(label),
         style: FilledButton.styleFrom(
           backgroundColor: color,
           foregroundColor: SmartBusColors.blanco,
+          disabledBackgroundColor: color.withValues(alpha: 0.7),
+          disabledForegroundColor: SmartBusColors.blanco,
           textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
@@ -1103,24 +1202,7 @@ class _MapNote extends StatelessWidget {
 
 // ---------------------------------------------------------------------------
 
-class _BusyView extends StatelessWidget {
-  const _BusyView({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const CircularProgressIndicator(),
-        const SizedBox(height: 16),
-        Text(label, style: Theme.of(context).textTheme.titleMedium),
-      ],
-    );
-  }
-}
-
+/// Completed (with the backend's arrival time, in local time) or cancelled.
 class _FinishedView extends StatelessWidget {
   const _FinishedView({
     required this.trip,
@@ -1135,7 +1217,10 @@ class _FinishedView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cancelled = trip.status == TripStatus.cancelled;
+    // The Dashboard's actual_arrival_at, never the phone clock.
+    final arrival = cancelled ? null : trip.actualArrivalAt;
     return Column(
+      key: const Key('trip-finished'),
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Icon(
@@ -1148,6 +1233,15 @@ class _FinishedView extends StatelessWidget {
           cancelled ? 'Viaje cancelado' : 'Recorrido finalizado',
           style: Theme.of(context).textTheme.titleLarge,
         ),
+        if (arrival != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Llegada: ${formatHour(arrival)}',
+            key: const Key('trip-arrival'),
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.w600),
+          ),
+        ],
         const SizedBox(height: 6),
         Text(
           sentCount > 0
