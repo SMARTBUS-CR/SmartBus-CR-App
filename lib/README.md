@@ -389,7 +389,7 @@ teléfono, si la reporta) y `recorded_at`.
 | Respuesta del GPS | Qué hace la app |
 |---|---|
 | `201` guardada / `202` (`broadcast_only`, `duplicate`, `stale`) | Cuenta como enviada |
-| Sin red, timeout, 5xx, 429 | La deja en cola y reintenta en el siguiente envío |
+| Sin red, timeout (8 s), 5xx, 429 | La reintenta en el siguiente envío, salvo que ya haya una más nueva (se envía esa) |
 | `409` el viaje no está en curso | **Deja de enviar**: "El viaje no está en curso: todavía no se ha iniciado o ya terminó." |
 | `403` no es el conductor asignado | **Deja de enviar**: "No eres el conductor asignado a este viaje." |
 | `404` el viaje no existe | **Deja de enviar**: "No se encontró el viaje." |
@@ -402,6 +402,26 @@ pantalla muestra el motivo (`TripTrackingState.rejected`) y un botón
 `401` otra vez, así que (`snapshot.sessionExpired`) Recorrido borra la sesión y
 manda al **Login** con "Tu sesión expiró…".
 
+**Siempre la más nueva, sin cola.** El pasajero necesita dónde está el bus
+**ahora**, y el GPS ignora una lectura más vieja que la posición actual. Por
+eso hay como mucho **una** petición en curso y **una** lectura esperando: cada
+lectura nueva reemplaza a la que espera. Si el servidor tarda, no se acumulan
+posiciones viejas que muestren al bus atrasado (antes había una cola de hasta
+120 en orden). "Pendientes" es 0 o 1. Cada envío espera como mucho 8 s
+(`ApiConfig.gpsSendTimeout`); el resto de la app sigue con 60 s.
+
+**Bus detenido.** Con el bus quieto el teléfono no da posiciones nuevas
+(filtro de 10 m) y llegaba la misma lectura cada 5 s; el GPS la ignoraba como
+duplicada y el pasajero veía "Señal débil" en cada parada. Ahora la lectura
+repetida sale con la hora actual: el bus "sigue aquí ahora".
+
+**Qué guarda el GPS.** Se **transmite** cada lectura, pero en `gps_locations`
+solo quedan el **inicio** (la primera lectura del viaje) y el **fin**: al tocar
+**Finalizar recorrido**, antes de completar el viaje, la app envía la posición
+actual con `final: true` (`TripLocationSender.sendFinal`, una vez por viaje,
+sin bloquear si falla). Requiere la rama `feature/gps-live-broadcast-trip-edges`
+del servicio GPS.
+
 **Pantalla Recorrido (mapa).** Con el viaje en curso, el mapa ocupa la mayor
 parte de la pantalla:
 
@@ -411,6 +431,17 @@ parte de la pantalla:
   `GET ops/route-patterns/{id}` (`OperationsService.routePattern`). Sin ninguna
   de las dos, solo se ve el bus con una nota. Se dibuja igual que en el mapa
   del pasajero (línea con degradado, flechas, paradas numeradas).
+- **La línea es la del Dashboard, tal como viene** (`route_geometry`, la que
+  calcula "Calculate Route" con OSRM en el panel admin). Si el viaje se
+  planificó **antes** de calcularla, su copia trae paradas pero no línea: se
+  pide el recorrido actual y se usa **su línea con las paradas y horas del
+  viaje** (`RoutePattern.withGeometry`).
+- **Sin línea en el Dashboard** (`route_geometry: null`, como hoy en -dev
+  para PV-RF, PV-GUA y SJ-PV): se unen las paradas en orden con rectas y se
+  muestra la nota **"Ruta aproximada: une las paradas en orden."**
+  (`ApproximateRouteNote`), igual en "Rastreando tu bus" y en la ficha de la
+  ruta del inicio. Para que se vea por calles hay que calcular la ruta en el
+  Dashboard; la app no la inventa.
 - **El bus:** la posición de cada lectura del GPS (`snapshot.latitude` /
   `longitude`); la cámara lo sigue. Botones: **Ver ruta completa** (deja de
   seguir) y **Centrar en el bus**. Arriba, una etiqueta con destino, hora real
@@ -548,7 +579,11 @@ Errores al iniciar (SnackBar en Inicio; el GPS no se enciende):
 Chip **"Buses en curso"** → lista de rutas → la ruta muestra cada recorrido
 (sentido) con:
 - sus **buses en curso** (unidad, placa, hora de salida) → **Ver en vivo** abre
-  "Rastreando tu bus" con ese viaje;
+  "Rastreando tu bus" con ese viaje. Cada bus muestra además su **estado**
+  ("En vivo · hace 5 s", "Señal débil", "Esperando ubicación") y **dónde va**
+  ("Próxima parada: Centro", calculada con `NextStopTracker` desde su
+  posición). Usa `RouteLiveBuses` por sentido, igual que "Buses en vivo" del
+  inicio: la lista se renueva cada 30 s y un viaje terminado desaparece;
 - **Ver ruta**: vuelve al mapa del inicio con esa ruta y ese sentido dibujados
   (§10);
 - **Ver paradas**: las paradas en orden con los minutos desde el inicio, aunque
@@ -566,7 +601,7 @@ Un viaje terminado desaparece de la lista (el Dashboard solo devuelve los
 | Recorrido: mapa con la ruta del viaje (o del Dashboard), bus y cámara, próxima parada, panel compacto en teléfono chico, GPS entre pestañas, 401 | `test/features/driver/trip_screen_test.dart` |
 | Finalizar recorrido (AC1–AC9, grupo *Trip completion*): botón también con GPS pausado, confirmación (cancelar / tocar afuera), 200 con hora de llegada del backend, spinner sin doble envío y GPS hasta confirmar, 409 (cancelado / sigue en curso), 403/404, red / timeout / 429 / 5xx + reintentar | `test/features/driver/trip_screen_test.dart` |
 | Próxima parada: inicio, avance, retomar a mitad, saltar paradas, fin | `test/features/driver/next_stop_tracker_test.dart` |
-| Buses en curso: ruta → buses → en vivo, sin buses, ver paradas, ver ruta en el mapa, reintentar | `test/features/passenger/buses_in_progress_screen_test.dart` |
+| Buses en curso: ruta → buses → en vivo, estado y próxima parada de cada bus, bus sin posición, viaje terminado oculto, sin buses, ver paradas, ver ruta en el mapa, reintentar | `test/features/passenger/buses_in_progress_screen_test.dart` |
 
 ## 10. Rutas en el mapa del pasajero
 
