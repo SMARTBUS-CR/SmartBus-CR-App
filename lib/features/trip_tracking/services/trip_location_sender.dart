@@ -38,7 +38,14 @@ class TripTrackingSnapshot {
     this.sentCount = 0,
     this.pendingCount = 0,
     this.lastError,
+    this.sessionExpired = false,
+    this.latitude,
+    this.longitude,
   });
+
+  /// Position of the last GPS reading (the bus), to draw it on the map.
+  final double? latitude;
+  final double? longitude;
 
   final TripTrackingState state;
 
@@ -60,6 +67,11 @@ class TripTrackingSnapshot {
   /// User-friendly message of the last failure, or `null` when healthy.
   final String? lastError;
 
+  /// [TripTrackingState.rejected] because the backend answered 401: the
+  /// session is no longer valid, so the UI must send the driver to Login
+  /// (retrying would get 401 again).
+  final bool sessionExpired;
+
   bool get isTracking => state == TripTrackingState.tracking;
 
   TripTrackingSnapshot copyWith({
@@ -71,8 +83,13 @@ class TripTrackingSnapshot {
     int? pendingCount,
     String? lastError,
     bool clearError = false,
+    bool? sessionExpired,
+    double? latitude,
+    double? longitude,
   }) {
     return TripTrackingSnapshot(
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
       state: state ?? this.state,
       tripId: tripId ?? this.tripId,
       lastFixAt: lastFixAt ?? this.lastFixAt,
@@ -80,6 +97,7 @@ class TripTrackingSnapshot {
       sentCount: sentCount ?? this.sentCount,
       pendingCount: pendingCount ?? this.pendingCount,
       lastError: clearError ? null : (lastError ?? this.lastError),
+      sessionExpired: sessionExpired ?? this.sessionExpired,
     );
   }
 }
@@ -153,7 +171,12 @@ class TripLocationSender {
   Future<void> start({required String tripId}) async {
     if (snapshot.value.isTracking || _disposed) return;
     _tripId = tripId;
-    _set(state: TripTrackingState.starting, tripId: tripId, clearError: true);
+    // Fresh counters: the sender lives for the whole session and may have
+    // sent another trip before (see ActiveTripTracking).
+    snapshot.value = TripTrackingSnapshot(
+      state: TripTrackingState.starting,
+      tripId: tripId,
+    );
 
     final blocker = await _ensureLocationAccess();
     if (blocker != null) {
@@ -239,7 +262,8 @@ class TripLocationSender {
           intervalDuration: interval,
           foregroundNotificationConfig: const ForegroundNotificationConfig(
             notificationTitle: 'SmartBus · recorrido activo',
-            notificationText: 'Enviando la ubicación del autobús',
+            notificationText:
+                'Enviando la ubicación del autobús. No cierres la app.',
             notificationChannelName: 'Recorrido en curso',
             enableWakeLock: true,
             setOngoing: true,
@@ -265,7 +289,11 @@ class TripLocationSender {
     final position = _latest ?? await Geolocator.getLastKnownPosition();
     if (position != null) {
       _enqueue(GpsFix.fromPosition(position, tripId: _tripId));
-      _set(lastFixAt: DateTime.now());
+      _set(
+        lastFixAt: DateTime.now(),
+        latitude: position.latitude,
+        longitude: position.longitude,
+      );
     }
     await _flush();
   }
@@ -307,6 +335,7 @@ class TripLocationSender {
               state: TripTrackingState.rejected,
               lastError: rejection,
               pendingCount: 0,
+              sessionExpired: e.type == ApiErrorType.unauthorized,
             );
             break;
           }
@@ -357,9 +386,14 @@ class TripLocationSender {
     int? pendingCount,
     String? lastError,
     bool clearError = false,
+    bool? sessionExpired,
+    double? latitude,
+    double? longitude,
   }) {
     if (_disposed) return;
     snapshot.value = snapshot.value.copyWith(
+      latitude: latitude,
+      longitude: longitude,
       state: state,
       tripId: tripId,
       lastFixAt: lastFixAt,
@@ -368,6 +402,7 @@ class TripLocationSender {
       pendingCount: pendingCount,
       lastError: lastError,
       clearError: clearError,
+      sessionExpired: sessionExpired,
     );
   }
 }
