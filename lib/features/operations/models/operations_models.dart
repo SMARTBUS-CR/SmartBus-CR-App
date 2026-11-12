@@ -135,6 +135,26 @@ class DriverTrip {
     plannedPattern: pattern ?? plannedPattern,
   );
 
+  /// This trip updated with [fresh] (the same trip asked again, e.g.
+  /// `GET ops/trips/{id}`, which has no `include`): the status and the
+  /// actual times come from [fresh]; what [fresh] lacks (bus, headsign,
+  /// planned route…) is kept from this one.
+  DriverTrip refreshedWith(DriverTrip fresh) => DriverTrip(
+    id: id,
+    status: fresh.status,
+    routePatternId: fresh.routePatternId ?? routePatternId,
+    scheduledDepartureAt: fresh.scheduledDepartureAt ?? scheduledDepartureAt,
+    scheduledArrivalAt: fresh.scheduledArrivalAt ?? scheduledArrivalAt,
+    actualDepartureAt: fresh.actualDepartureAt ?? actualDepartureAt,
+    actualArrivalAt: fresh.actualArrivalAt ?? actualArrivalAt,
+    routeCode: fresh.routeCode ?? routeCode,
+    routeName: fresh.routeName ?? routeName,
+    headsign: fresh.headsign ?? headsign,
+    busPlate: fresh.busPlate ?? busPlate,
+    busUnit: fresh.busUnit ?? busUnit,
+    plannedPattern: fresh.plannedPattern ?? plannedPattern,
+  );
+
   /// "Bus ABC-123 · Unidad 12", or whatever part is known; `null` if none.
   String? get busLabel {
     final parts = [
