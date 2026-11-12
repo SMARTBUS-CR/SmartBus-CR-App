@@ -119,15 +119,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   /// Last known height of the screen body (for the camera padding).
   double _bodyHeight = 0;
 
-  final TextEditingController _searchController = TextEditingController();
-  final FocusNode _searchFocus = FocusNode();
-
   /// Center on the user only the first time a position arrives.
   bool _centeredOnUser = false;
-
-  /// The search panel is open while the field is focused or has text.
-  bool get _searching =>
-      _searchFocus.hasFocus || _searchController.text.isNotEmpty;
 
   bool get _hasLocation =>
       _access == LocationAccess.granted && _location != null;
@@ -136,8 +129,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _searchFocus.addListener(_onSearchChanged);
-    _searchController.addListener(_onSearchChanged);
     _loadUserName();
     _initLocation(request: true);
     _loadRoutes();
@@ -148,19 +139,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     WidgetsBinding.instance.removeObserver(this);
     _locationSub?.cancel();
     _stopLiveBuses();
-    _searchController.dispose();
-    _searchFocus.dispose();
     _sheetController.dispose();
     super.dispose();
-  }
-
-  void _onSearchChanged() {
-    if (mounted) setState(() {});
-  }
-
-  void _closeSearch() {
-    _searchController.clear();
-    _searchFocus.unfocus();
   }
 
   void _toggleMapMode() {
@@ -488,6 +468,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     }
   }
 
+  /// The search bar is a button: the user types on "Buscar ruta".
+  void _openSearch() => Navigator.pushNamed(context, '/passenger/search');
+
   Future<void> _onChipTap(MapQuickChip chip) async {
     // Route -> buses running now -> live tracking, or "Ver ruta" back here.
     if (chip.label == 'Buses en curso') {
@@ -567,21 +550,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     // SmartBus map design: dark cards over a light map, in any phone theme.
     const colors = MapOverlayColors.smartBus;
     final topInset = MediaQuery.paddingOf(context).top;
-    final searching = _searching;
     final routeShown = _selectedRoute != null;
-    final showBanner =
-        !searching && _access != null && _access != LocationAccess.granted;
+    final showBanner = _access != null && _access != LocationAccess.granted;
 
-    // Android "back" closes the search first, then the shown route.
+    // Android "back" closes the shown route first.
     return PopScope(
-      canPop: !searching && !routeShown,
+      canPop: !routeShown,
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop) return;
-        if (searching) {
-          _closeSearch();
-        } else if (routeShown) {
-          _clearSelection();
-        }
+        if (!didPop && routeShown) _clearSelection();
       },
       child: Scaffold(
         bottomNavigationBar: PassengerBottomNav(
@@ -608,7 +584,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                   ),
                 ),
 
-                // Search field, chips (or search results) and location notice.
+                // Search bar (opens "Buscar ruta"), chips and location notice.
                 Positioned(
                   top: 0,
                   left: 0,
@@ -622,23 +598,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                           padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
                           child: MapSearchBar(
                             colors: MapOverlayColors.searchBar,
-                            controller: _searchController,
-                            focusNode: _searchFocus,
-                            searching: searching,
-                            onClose: _closeSearch,
+                            onTap: _openSearch,
                           ),
                         ),
-                        if (searching)
-                          MapSearchResults(
-                            colors: MapOverlayColors.searchBar,
-                            query: _searchController.text,
-                          )
-                        else
-                          MapQuickChips(
-                            chips: _chips,
-                            colors: colors,
-                            onTap: _onChipTap,
-                          ),
+                        MapQuickChips(
+                          chips: _chips,
+                          colors: colors,
+                          onTap: _onChipTap,
+                        ),
                         if (showBanner) ...[
                           const SizedBox(height: 10),
                           LocationAccessBanner(

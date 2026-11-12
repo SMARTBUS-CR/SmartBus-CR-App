@@ -26,8 +26,8 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 | `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register`, auto-login → `/passenger/home` |
 | `auth/verify_email_screen.dart` | Verificación del correo con código de 6 dígitos: ruta `/verify-email` (`VerifyEmailArgs`), reenvío con espera de 60 s; al verificar inicia sesión → home del rol |
 | `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register` → `/verify-email` (sin sesión hasta verificar el correo) |
-| `passenger/passenger_home_screen.dart` | RF-08 (mapa principal), RF-09 (búsqueda) |
-| `passenger/route_search_screen.dart` | RF-09 |
+| `passenger/passenger_home_screen.dart` | RF-08 (mapa principal); la barra "¿A dónde vas?" abre la búsqueda |
+| `passenger/route_search_screen.dart` | RF-09: "Buscar ruta" por nombre, número o destino (sección 11) |
 | `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar". Entradas "Editar perfil" y "Cambiar contraseña". Botón "Eliminar cuenta" con confirmación (solo UI: aún no llama al backend) |
 | `passenger/edit_profile_screen.dart` | Editar nombre y correo (`updateProfile`): solo envía lo que cambió; cambiar el correo pide la contraseña actual y luego verificar el nuevo correo con código |
 | `passenger/change_password_screen.dart` | Cambiar contraseña (`changePassword`): actual + nueva (requisitos en vivo) + confirmación |
@@ -187,8 +187,8 @@ distribución inspirada en Google Maps y la identidad de SmartBus.
 - **Si se usa EOX para el satélite:** solo sirve la capa de **2016**. Las de 2018
   en adelante prohíben el uso comercial (CC BY-NC-SA) y la de 2017 no tiene
   imagen de Costa Rica a zoom alto.
-- **Búsqueda:** "¿A dónde vas?" se escribe en el mismo lugar (sin abrir otra
-  pantalla) y por ahora muestra "Búsqueda de rutas: próximamente".
+- **Búsqueda:** "¿A dónde vas?" es un botón: abre la pantalla "Buscar ruta"
+  (`/passenger/search`, sección 11) con el teclado listo.
 
 Se pueden cambiar sin tocar código (por ejemplo, otro estilo o un OpenFreeMap
 propio, ya que el servicio público no tiene SLA):
@@ -389,6 +389,7 @@ mismo Gateway). Todo pasa por `OperationsService`
 | `startTrip(id)` | `POST ops/trips/{id}/start` | Sí | Conductor asignado |
 | `completeTrip(id)` | `POST ops/trips/{id}/complete` | Sí | Conductor asignado |
 | `routes()` | `GET ops/routes` | No | Pasajero |
+| `searchRoutes(query, {page})` | `GET ops/routes?include=company,patterns` (catálogo completo, se busca en el teléfono) | No | Pasajero (sección 11) |
 | `routesWithPatterns()` | `GET ops/routes?include=patterns` (rutas + sentidos + paradas en **una** petición; ver §10) | No | Pasajero |
 | `routePatterns(routeId)` | `GET ops/routes/{id}/patterns` (trazo + paradas) | No | Pasajero |
 | `ongoingTrips(patternId)` | `GET ops/route-patterns/{id}/trips` (solo `in_progress`, sin datos del conductor) | No | Pasajero |
@@ -541,3 +542,71 @@ quedan igual.
 | AC1–AC9 con mapa falso y `FakeOperations` | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Route visualization*) |
 | Buses en vivo: un tracker por viaje, altas / bajas al refrescar, viaje terminado, error, dispose | `test/features/trip_tracking/route_live_buses_test.dart` |
 | Buses en vivo en el inicio: pines, lista, cambio de sentido, cerrar, abrir seguimiento, señal débil | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Live buses on the route*) |
+
+## 11. Búsqueda de rutas (pasajero)
+
+La barra **"¿A dónde vas?"** del inicio abre **"Buscar ruta"**
+(`features/passenger/route_search_screen.dart`, ruta `/passenger/search`) con
+el teclado listo. Usa el catálogo público del Dashboard: **no necesita token**.
+
+### Cómo busca
+
+- Espera **400 ms** sin escribir y al menos **2 caracteres**; con menos no se
+  envía nada.
+- Busca por **nombre, número o destino**, **con o sin tilde** y sin importar
+  mayúsculas: "san jose" encuentra "San José", "pena" encuentra "Peña Blanca"
+  y "perez zeledon" encuentra las rutas que van hacia "Pérez Zeledón".
+- **Por qué se busca en el teléfono:** los filtros del Dashboard
+  (`filter[name]`, `filter[code]`) comparan en PostgreSQL con `LIKE`, que
+  distingue las tildes ("jose" no encuentra "José"), y no hay filtro por
+  destino. Por eso `OperationsService.searchRoutes(texto)`:
+  1. descarga **una vez** el catálogo público (`searchCatalogue()`:
+     `GET ops/routes?include=company,patterns`, todas las páginas de 100). Las
+     búsquedas que llegan mientras se descarga comparten la misma petición. Si
+     falla, no se guarda y la siguiente búsqueda lo intenta otra vez;
+  2. compara el texto con `foldForSearch` (minúsculas y sin tildes: á→a, ñ→n,
+     ü→u…).
+- **Orden:** primero el número exacto, después las rutas cuyo número o nombre
+  contiene el texto, y al final las que solo coinciden por destino. Dentro de
+  cada grupo, por número.
+- Solo se muestra la **última** búsqueda: si una respuesta vieja llega tarde, se
+  ignora. Al borrar con la X también se ignora lo que estaba en camino.
+- **"Cargar más"** muestra los 20 resultados siguientes. Si falla, se
+  mantienen los resultados y se ofrece "Reintentar".
+
+### Qué muestra cada resultado
+
+Código (insignia verde), nombre (máximo 2 líneas) con el texto buscado en
+negrita (también sin tilde: "jose" resalta "José"), y debajo la **empresa** (nombre comercial, o la razón social si no
+tiene) y los **destinos** de sus recorridos ("Hacia Heredia, San José"). Estos
+datos salen del `included` del documento JSON:API (`JsonApiIncluded`).
+
+Al tocar un resultado se abre el **detalle de la ruta** (`/passenger/route`,
+argumento `TransitRoute`): la pantalla `RouteBusesScreen` de "Buses en curso",
+con sus recorridos, paradas y buses en vivo.
+
+### Estados
+
+| Estado | Qué se ve |
+|---|---|
+| Campo vacío o 1 carácter | Indicación: "Escribe al menos 2 letras…" |
+| Buscando | Indicador de carga (el texto escrito se mantiene) |
+| Sin resultados | `No encontramos rutas para "<texto>".` + sugerencia |
+| Sin red, timeout, 429, 5xx | Mensaje del error + **Reintentar** (repite la misma búsqueda) |
+
+### Mejora sugerida al backend
+
+Descargar el catálogo completo funciona bien con pocas rutas, pero con
+`include=patterns` cada recorrido trae sus paradas y su trazo, así que la
+descarga crece con el catálogo. Lo ideal es un filtro en `GET routes` del
+Dashboard que busque nombre, código y `headsign` **sin tildes** (PostgreSQL
+`unaccent` + `ILIKE`), por ejemplo `filter[search]`. Cuando exista, solo cambia
+`searchRoutes`: la pantalla no cambia.
+
+### Tests
+
+| Qué | Archivo |
+|---|---|
+| Catálogo (todas las páginas, una sola descarga, reintento si falla), con o sin tilde, por número / nombre / destino, orden, páginas de 20 | `test/features/operations/route_search_service_test.dart` |
+| AC1–AC9: teclado, espera de 400 ms, mínimo 2 caracteres, respuestas viejas, resultados, resaltado, cargar más, abrir ruta, sin resultados, borrar, errores + reintentar, pantalla 320 × 568 | `test/features/passenger/route_search_screen_test.dart` |
+| La barra del inicio abre "Buscar ruta" | `test/features/passenger/passenger_home_screen_test.dart` |

@@ -37,6 +37,64 @@ Map<String, dynamic> routeResource() => {
   'attributes': {'code': 'PV-RF', 'name': 'Puerto Viejo'},
 };
 
+const companyId = 'c0100000-0000-4000-8000-000000000001';
+
+/// A route of a `GET ops/routes?include=company,patterns` document.
+Map<String, dynamic> searchRouteResource({
+  required String id,
+  required String code,
+  required String name,
+  List<String> patternIds = const [],
+}) => {
+  'id': id,
+  'type': 'routes',
+  'attributes': {'code': code, 'name': name, 'company_id': companyId},
+  'relationships': {
+    'company': {
+      'data': {'type': 'companies', 'id': companyId},
+    },
+    'patterns': {
+      'data': [
+        for (final patternId in patternIds)
+          {'type': 'route-patterns', 'id': patternId},
+      ],
+    },
+  },
+};
+
+/// `included` of a route search: the company and two directions.
+List<Map<String, dynamic>> searchIncluded() => [
+  {
+    'id': companyId,
+    'type': 'companies',
+    'attributes': {
+      'legal_name': 'Transportes Heredianos S.A.',
+      'trade_name': 'TUASA',
+    },
+  },
+  {
+    'id': 'p-1',
+    'type': 'route-patterns',
+    'attributes': {'code': '400-1', 'headsign': 'Heredia'},
+  },
+  {
+    'id': 'p-2',
+    'type': 'route-patterns',
+    'attributes': {'code': '400-2', 'headsign': 'San José'},
+  },
+];
+
+/// A page of `GET ops/routes` (Laravel pagination meta).
+Map<String, dynamic> searchDocument(
+  List<Map<String, dynamic>> routes, {
+  int currentPage = 1,
+  int lastPage = 1,
+}) => {
+  'data': routes,
+  'included': searchIncluded(),
+  'meta': {'current_page': currentPage, 'last_page': lastPage},
+};
+
 Map<String, dynamic> patternResource({
   Object? geometry = const {
     'type': 'LineString',
@@ -199,6 +257,19 @@ class FakeOperations extends OperationsService {
   Future<List<TransitRoute>> routes() async {
     calls.add('routes');
     return routeList;
+  }
+
+  /// Answers of [searchRoutes]; by default no route matches.
+  Future<RoutePage> Function(String query, int page)? onSearch;
+
+  @override
+  Future<RoutePage> searchRoutes(String query, {int page = 1}) {
+    calls.add('search $query $page');
+    final handler = onSearch;
+    if (handler == null) {
+      return Future.value(const RoutePage(routes: [], hasMore: false));
+    }
+    return handler(query, page);
   }
 
   @override
