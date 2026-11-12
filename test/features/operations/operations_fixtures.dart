@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:smartbus_drivers/core/network/api_exception.dart';
 import 'package:smartbus_drivers/features/operations/models/operations_models.dart';
 import 'package:smartbus_drivers/features/operations/services/operations_service.dart';
 import 'package:smartbus_drivers/features/trip_tracking/models/trip_tracking.dart';
@@ -9,6 +12,8 @@ const tripId = 'b0700000-0000-4000-8000-000000000002';
 const patternId = 'a0600000-0000-4000-8000-000000000001';
 const routeId = 'a0500000-0000-4000-8000-000000000001';
 
+const busId = 'b0300000-0000-4000-8000-000000000001';
+
 Map<String, dynamic> tripResource({
   String id = tripId,
   String status = 'scheduled',
@@ -17,6 +22,8 @@ Map<String, dynamic> tripResource({
     'route_name': 'Puerto Viejo',
     'headsign': 'Puerto Viejo',
   },
+  String? actualDepartureAt,
+  bool withRelationships = false,
 }) => {
   'id': id,
   'type': 'trips',
@@ -26,10 +33,33 @@ Map<String, dynamic> tripResource({
     'service_date': '2026-11-11',
     'scheduled_departure_at': '2026-11-11T13:00:00.000000Z',
     'scheduled_arrival_at': '2026-11-11T14:00:00.000000Z',
-    'actual_departure_at': null,
+    'actual_departure_at': actualDepartureAt,
     'planned_route_snapshot': snapshot,
   },
+  if (withRelationships)
+    'relationships': {
+      'bus': {
+        'data': {'type': 'buses', 'id': busId},
+      },
+      'pattern': {
+        'data': {'type': 'route-patterns', 'id': patternId},
+      },
+    },
 };
+
+/// `included` of `GET ops/driver/trips?include=pattern,bus`.
+List<Map<String, dynamic>> driverTripsIncluded() => [
+  {
+    'id': busId,
+    'type': 'buses',
+    'attributes': {'plate_number': 'SJB-1234', 'unit_number': '07'},
+  },
+  {
+    'id': patternId,
+    'type': 'route-patterns',
+    'attributes': {'code': 'PV-RF-1', 'headsign': 'Terminal Puerto Viejo'},
+  },
+];
 
 Map<String, dynamic> routeResource() => {
   'id': routeId,
@@ -148,8 +178,71 @@ Map<String, dynamic> liveTripResource({String id = tripId}) => {
   },
 };
 
-DriverTrip driverTrip({String id = tripId, String status = 'scheduled'}) =>
-    DriverTrip.fromJsonApi(tripResource(id: id, status: status));
+DriverTrip driverTrip({
+  String id = tripId,
+  String status = 'scheduled',
+  String? actualDepartureAt,
+  Object? snapshot = const {
+    'route_code': 'PV-RF',
+    'route_name': 'Puerto Viejo',
+    'headsign': 'Puerto Viejo',
+  },
+}) => DriverTrip.fromJsonApi(
+  tripResource(
+    id: id,
+    status: status,
+    actualDepartureAt: actualDepartureAt,
+    snapshot: snapshot,
+  ),
+);
+
+/// `planned_route_snapshot` as the Dashboard stores it: the line and three
+/// stops (`lat` / `lng` as strings), out of order on purpose.
+const Map<String, dynamic> plannedSnapshot = {
+  'schema_version': 1,
+  'pattern_id': patternId,
+  'pattern_code': 'PV-RF-1',
+  'pattern_name': 'Sarapiquí – Puerto Viejo',
+  'headsign': 'Puerto Viejo',
+  'route_id': routeId,
+  'route_code': 'PV-RF',
+  'route_name': 'Puerto Viejo',
+  'route_geometry': {
+    'type': 'LineString',
+    'coordinates': [
+      [-84.000, 10.460],
+      [-84.000, 10.470],
+      [-84.000, 10.480],
+    ],
+  },
+  'distance_meters': '2200',
+  'occurrences': [
+    {
+      'stop_id': 's2',
+      'name': 'Centro',
+      'stop_sequence': 2,
+      'lat': '10.470',
+      'lng': '-84.000',
+      'minutes_from_start': 10,
+    },
+    {
+      'stop_id': 's1',
+      'name': 'Terminal',
+      'stop_sequence': 1,
+      'lat': '10.460',
+      'lng': '-84.000',
+      'minutes_from_start': 0,
+    },
+    {
+      'stop_id': 's3',
+      'name': 'Muelle',
+      'stop_sequence': 3,
+      'lat': '10.480',
+      'lng': '-84.000',
+      'minutes_from_start': 20,
+    },
+  ],
+};
 
 /// A stop at [lat], [lng] (order = [seq]).
 PatternStop stopAt(
@@ -239,11 +332,19 @@ class FakeOperations extends OperationsService {
     ].where((trip) => trip.status == status).toList();
   }
 
+  /// While not null, [startTrip] waits for it (to see the spinner).
+  Completer<void>? startGate;
+
   @override
   Future<DriverTrip> startTrip(String tripId) async {
     calls.add('start $tripId');
+    await startGate?.future;
     if (startError != null) throw startError!;
-    return driverTrip(status: 'in_progress');
+    return driverTrip(
+      id: tripId,
+      status: 'in_progress',
+      actualDepartureAt: '2026-11-11T13:05:00.000000Z',
+    );
   }
 
   @override
@@ -283,6 +384,32 @@ class FakeOperations extends OperationsService {
   Future<List<RoutePattern>> routePatterns(String routeId) async {
     calls.add('patterns $routeId');
     return patterns;
+  }
+
+  /// Answer of [routePattern] (`GET ops/route-patterns/{id}`); `null` = 404.
+  RoutePattern? patternById;
+
+  @override
+  Future<RoutePattern> routePattern(String patternId) async {
+    calls.add('pattern $patternId');
+    final pattern = patternById;
+    if (pattern == null) {
+      throw const ApiException(ApiErrorType.notFound, 'No encontrado');
+    }
+    return pattern;
+  }
+
+  /// Answer of [publicTrip]; `null` = 404.
+  LiveBusTrip? publicTripResult;
+
+  @override
+  Future<LiveBusTrip> publicTrip(String tripId) async {
+    calls.add('publicTrip $tripId');
+    final trip = publicTripResult;
+    if (trip == null) {
+      throw const ApiException(ApiErrorType.notFound, 'No encontrado');
+    }
+    return trip;
   }
 
   @override
