@@ -339,6 +339,38 @@ class FakeOperations extends OperationsService {
     ].where((trip) => trip.status == status).toList();
   }
 
+  /// Pages of [driverTripHistory] (1-based) for every status; filtered by
+  /// status here. [historyError] fails the next calls.
+  List<List<DriverTrip>> historyPages = const [];
+  Exception? historyError;
+
+  /// While not null, [driverTripHistory] waits for it.
+  Completer<void>? historyGate;
+
+  @override
+  Future<DriverTripPage> driverTripHistory({
+    int page = 1,
+    TripStatus? status,
+  }) async {
+    calls.add('history $page${status == null ? '' : ' ${status.name}'}');
+    await historyGate?.future;
+    if (historyError != null) throw historyError!;
+    if (status != null) {
+      // Filtered: everything that matches, in one page.
+      return DriverTripPage(
+        trips: [
+          for (final trips in historyPages)
+            ...trips.where((t) => t.status == status),
+        ],
+        hasMore: false,
+      );
+    }
+    return DriverTripPage(
+      trips: page <= historyPages.length ? historyPages[page - 1] : const [],
+      hasMore: page < historyPages.length,
+    );
+  }
+
   /// While not null, [startTrip] waits for it (to see the spinner).
   Completer<void>? startGate;
 
