@@ -41,6 +41,35 @@ class OperationsService {
     ];
   }
 
+  /// Trips per page of [driverTripHistory].
+  static const historyPageSize = 20;
+
+  /// `GET ops/driver/trips` — **every** trip assigned to the driver (any day),
+  /// the most recent first (`sort=-scheduled_departure_at`), with their
+  /// pattern and bus. [status] filters by status; [page] starts at 1.
+  Future<DriverTripPage> driverTripHistory({
+    int page = 1,
+    TripStatus? status,
+  }) async {
+    final body = await _client.get(
+      ApiConfig.opsDriverTrips({
+        'filter[status]': ?_statusValue(status),
+        'include': 'pattern,bus',
+        'sort': '-scheduled_departure_at',
+        'page[size]': '$historyPageSize',
+        'page[number]': '$page',
+      }),
+    );
+    final included = JsonApiIncluded(body['included']);
+    return DriverTripPage(
+      trips: [
+        for (final resource in _resources(body))
+          DriverTrip.fromJsonApi(resource, included: included),
+      ],
+      hasMore: _hasNextPage(body),
+    );
+  }
+
   /// `POST ops/trips/{id}/start` — the trip becomes `in_progress`, so the GPS
   /// service starts accepting its locations. Starting a trip already in
   /// progress returns it again (idempotent).
