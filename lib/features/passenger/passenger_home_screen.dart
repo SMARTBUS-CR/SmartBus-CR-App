@@ -53,22 +53,13 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   double _sheetExtent = _sheetInitial;
   MapMode _mapMode = MapMode.streets;
 
-  final TextEditingController _searchController = TextEditingController();
-  final FocusNode _searchFocus = FocusNode();
-
   /// Center on the user only the first time a position arrives.
   bool _centeredOnUser = false;
-
-  /// The search panel is open while the field is focused or has text.
-  bool get _searching =>
-      _searchFocus.hasFocus || _searchController.text.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _searchFocus.addListener(_onSearchChanged);
-    _searchController.addListener(_onSearchChanged);
     _loadUserName();
     _initLocation(request: true);
   }
@@ -77,19 +68,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _locationSub?.cancel();
-    _searchController.dispose();
-    _searchFocus.dispose();
     super.dispose();
   }
 
-  void _onSearchChanged() {
-    if (mounted) setState(() {});
-  }
-
-  void _closeSearch() {
-    _searchController.clear();
-    _searchFocus.unfocus();
-  }
+  void _openSearch() => Navigator.pushNamed(context, '/passenger/search');
 
   void _toggleMapMode() {
     setState(
@@ -209,138 +191,119 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     // SmartBus map design: dark cards over a light map, in any phone theme.
     const colors = MapOverlayColors.smartBus;
     final topInset = MediaQuery.paddingOf(context).top;
-    final searching = _searching;
-    final showBanner =
-        !searching && _access != null && _access != LocationAccess.granted;
+    final showBanner = _access != null && _access != LocationAccess.granted;
 
-    // Android "back" closes the search first, like Google Maps.
-    return PopScope(
-      canPop: !searching,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _closeSearch();
-      },
-      child: Scaffold(
-        bottomNavigationBar: PassengerBottomNav(
-          currentIndex: 0,
-          onTap: _onTabTap,
-        ),
-        body: LayoutBuilder(
-          builder: (context, constraints) {
-            final height = constraints.maxHeight;
-            return Stack(
-              children: [
-                Positioned.fill(
-                  child: widget.mapBuilder(
-                    context,
-                    PassengerMapOptions(
-                      mode: _mapMode,
-                      onReady: _onMapReady,
-                      // Below the search bar and the chips.
-                      compassTopMargin: topInset + 128,
-                    ),
+    return Scaffold(
+      bottomNavigationBar: PassengerBottomNav(
+        currentIndex: 0,
+        onTap: _onTabTap,
+      ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final height = constraints.maxHeight;
+          return Stack(
+            children: [
+              Positioned.fill(
+                child: widget.mapBuilder(
+                  context,
+                  PassengerMapOptions(
+                    mode: _mapMode,
+                    onReady: _onMapReady,
+                    // Below the search bar and the chips.
+                    compassTopMargin: topInset + 128,
                   ),
                 ),
+              ),
 
-                // Search field, chips (or search results) and location notice.
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: SafeArea(
-                    bottom: false,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-                          child: MapSearchBar(
-                            colors: MapOverlayColors.searchBar,
-                            controller: _searchController,
-                            focusNode: _searchFocus,
-                            searching: searching,
-                            onClose: _closeSearch,
-                          ),
-                        ),
-                        if (searching)
-                          MapSearchResults(
-                            colors: MapOverlayColors.searchBar,
-                            query: _searchController.text,
-                          )
-                        else
-                          MapQuickChips(
-                            chips: _chips,
-                            colors: colors,
-                            onTap: _onChipTap,
-                          ),
-                        if (showBanner) ...[
-                          const SizedBox(height: 10),
-                          LocationAccessBanner(
-                            access: _access!,
-                            colors: colors,
-                            onAction: _fixLocationAccess,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-
-                // License attribution: its own line, right above the sheet.
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: height * _sheetExtent + 6,
-                  child: MapAttribution(mode: _mapMode),
-                ),
-
-                // Map mode + "my location": against the right edge, above the
-                // attribution line (never on top of it).
-                Positioned(
-                  right: 16,
-                  bottom: height * _sheetExtent + 24,
+              // Search bar (opens "Buscar ruta"), chips and location notice.
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: SafeArea(
+                  bottom: false,
                   child: Column(
-                    key: const Key('map-buttons'),
-                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      MapModeButton(
-                        colors: colors,
-                        mode: _mapMode,
-                        onPressed: _toggleMapMode,
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+                        child: MapSearchBar(
+                          colors: MapOverlayColors.searchBar,
+                          onTap: _openSearch,
+                        ),
                       ),
-                      const SizedBox(height: 10),
-                      MyLocationButton(
+                      MapQuickChips(
+                        chips: _chips,
                         colors: colors,
-                        active:
-                            _access == LocationAccess.granted &&
-                            _location != null,
-                        onPressed: _onMyLocationPressed,
+                        onTap: _onChipTap,
                       ),
+                      if (showBanner) ...[
+                        const SizedBox(height: 10),
+                        LocationAccessBanner(
+                          access: _access!,
+                          colors: colors,
+                          onAction: _fixLocationAccess,
+                        ),
+                      ],
                     ],
                   ),
                 ),
+              ),
 
-                NotificationListener<DraggableScrollableNotification>(
-                  onNotification: (notification) {
-                    setState(() => _sheetExtent = notification.extent);
-                    return false;
-                  },
-                  child: DraggableScrollableSheet(
-                    initialChildSize: _sheetInitial,
-                    minChildSize: _sheetMin,
-                    maxChildSize: _sheetMax,
-                    snap: true,
-                    builder: (context, scrollController) =>
-                        MapBottomSheetContent(
-                          colors: MapOverlayColors.sheet,
-                          scrollController: scrollController,
-                          firstName: _firstName,
-                        ),
+              // License attribution: its own line, right above the sheet.
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: height * _sheetExtent + 6,
+                child: MapAttribution(mode: _mapMode),
+              ),
+
+              // Map mode + "my location": against the right edge, above the
+              // attribution line (never on top of it).
+              Positioned(
+                right: 16,
+                bottom: height * _sheetExtent + 24,
+                child: Column(
+                  key: const Key('map-buttons'),
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    MapModeButton(
+                      colors: colors,
+                      mode: _mapMode,
+                      onPressed: _toggleMapMode,
+                    ),
+                    const SizedBox(height: 10),
+                    MyLocationButton(
+                      colors: colors,
+                      active:
+                          _access == LocationAccess.granted &&
+                          _location != null,
+                      onPressed: _onMyLocationPressed,
+                    ),
+                  ],
+                ),
+              ),
+
+              NotificationListener<DraggableScrollableNotification>(
+                onNotification: (notification) {
+                  setState(() => _sheetExtent = notification.extent);
+                  return false;
+                },
+                child: DraggableScrollableSheet(
+                  initialChildSize: _sheetInitial,
+                  minChildSize: _sheetMin,
+                  maxChildSize: _sheetMax,
+                  snap: true,
+                  builder: (context, scrollController) => MapBottomSheetContent(
+                    colors: MapOverlayColors.sheet,
+                    scrollController: scrollController,
+                    firstName: _firstName,
                   ),
                 ),
-              ],
-            );
-          },
-        ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
