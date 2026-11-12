@@ -57,6 +57,8 @@ void main() {
       expect(request.url.path, endsWith('/ops/driver/trips'));
       expect(request.url.queryParameters['filter[service_date]'], '2026-11-11');
       expect(request.url.queryParameters.containsKey('filter[status]'), false);
+      expect(request.url.queryParameters['include'], 'pattern,bus');
+      expect(request.url.queryParameters['sort'], 'scheduled_departure_at');
       expect(request.headers['Authorization'], 'Bearer tok');
 
       final trip = trips.single;
@@ -69,6 +71,76 @@ void main() {
         trip.scheduledDepartureAt?.toUtc(),
         DateTime.utc(2026, 11, 11, 13),
       );
+    });
+
+    test('driverTrips: bus plate and unit from the included bus', () async {
+      final h = _Harness({
+        'data': [tripResource(withRelationships: true)],
+        'included': driverTripsIncluded(),
+      });
+
+      final trip = (await h.service.driverTrips()).single;
+
+      expect(trip.busPlate, 'SJB-1234');
+      expect(trip.busUnit, '07');
+      expect(trip.busLabel, 'Bus SJB-1234 · Unidad 07');
+      // The route snapshot wins over the pattern headsign.
+      expect(trip.headsign, 'Puerto Viejo');
+    });
+
+    test('driverTrips: without snapshot, headsign of the pattern', () async {
+      final h = _Harness({
+        'data': [tripResource(snapshot: null, withRelationships: true)],
+        'included': driverTripsIncluded(),
+      });
+
+      final trip = (await h.service.driverTrips()).single;
+
+      expect(trip.headsign, 'Terminal Puerto Viejo');
+    });
+
+    test('driverTrips: the planned route of the trip (snapshot)', () async {
+      final h = _Harness({
+        'data': [tripResource(snapshot: plannedSnapshot)],
+      });
+
+      final route = (await h.service.driverTrips()).single.plannedPattern!;
+
+      expect(route.id, patternId);
+      expect(route.headsign, 'Puerto Viejo');
+      expect(route.geometry, hasLength(3));
+      expect(route.geometry.first.latitude, 10.46);
+      expect(route.geometry.first.longitude, -84.0);
+      // Sorted by stop_sequence; lat / lng arrive as strings.
+      expect(route.stops.map((s) => s.name), ['Terminal', 'Centro', 'Muelle']);
+      expect(route.stops[1].latitude, 10.47);
+      expect(route.stops[1].minutesFromStart, 10);
+      expect(route.distanceMeters, 2200);
+    });
+
+    test('driverTrips: a snapshot without route data → no planned route', () {
+      final trip = DriverTrip.fromJsonApi(tripResource());
+      expect(trip.plannedPattern, isNull);
+    });
+
+    test('routePattern: GET ops/route-patterns/{id}', () async {
+      final h = _Harness({'data': patternResource()});
+
+      final pattern = await h.service.routePattern(patternId);
+
+      expect(
+        h.requests.single.url.path,
+        endsWith('/ops/route-patterns/$patternId'),
+      );
+      expect(pattern.stops.map((s) => s.name), ['Terminal', 'Centro']);
+    });
+
+    test('driverTrips: no bus included → no bus label', () async {
+      final h = _Harness({
+        'data': [tripResource()],
+      });
+
+      expect((await h.service.driverTrips()).single.busLabel, isNull);
     });
 
     test('driverTrips: filters by status', () async {
@@ -94,12 +166,23 @@ void main() {
     });
 
     test('startTrip / completeTrip: POST and return the new status', () async {
-      final h = _Harness({'data': tripResource(status: 'in_progress')});
+      final h = _Harness({
+        'data': tripResource(
+          status: 'in_progress',
+          actualDepartureAt: '2026-11-11T13:05:00.000000Z',
+        ),
+      });
 
       final started = await h.service.startTrip(tripId);
       await h.service.completeTrip(tripId);
 
       expect(started.status, TripStatus.inProgress);
+      expect(
+        started.actualDepartureAt?.toUtc(),
+        DateTime.utc(2026, 11, 11, 13, 5),
+      );
+      expect(started.actualDepartureAt!.isUtc, isFalse); // shown in local time
+      expect(h.requests.first.headers['Authorization'], 'Bearer tok');
       expect(h.requests.map((r) => r.method), ['POST', 'POST']);
       expect(h.requests[0].url.path, endsWith('/ops/trips/$tripId/start'));
       expect(h.requests[1].url.path, endsWith('/ops/trips/$tripId/complete'));
@@ -115,13 +198,49 @@ void main() {
       expect(
         h.service.startTrip(tripId),
         throwsA(
-          isA<ApiException>().having(
-            (e) => e.type,
-            'type',
-            ApiErrorType.conflict,
-          ),
+          isA<ApiException>()
+              .having((e) => e.type, 'type', ApiErrorType.conflict)
+              .having((e) => e.message, 'message', 'El viaje ya fue iniciado.'),
         ),
       );
+    });
+
+    test('startTrip: 422 business rule arrives with the backend message', () {
+      final h = _Harness({
+        'errors': [
+          {
+            'status': '422',
+            'detail': 'The driver already has a trip in progress.',
+            'source': {'pointer': '/data/attributes/driver_id'},
+          },
+        ],
+      }, status: 422);
+
+      expect(
+        h.service.startTrip(tripId),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.type, 'type', ApiErrorType.validation)
+              .having(
+                (e) => e.message,
+                'message',
+                'The driver already has a trip in progress.',
+              ),
+        ),
+      );
+    });
+
+    test('startTrip: 403 / 404 arrive as forbidden / notFound', () async {
+      for (final (status, type) in [
+        (403, ApiErrorType.forbidden),
+        (404, ApiErrorType.notFound),
+      ]) {
+        final h = _Harness({'errors': <Object>[]}, status: status);
+        await expectLater(
+          h.service.startTrip(tripId),
+          throwsA(isA<ApiException>().having((e) => e.type, 'type', type)),
+        );
+      }
     });
   });
 
