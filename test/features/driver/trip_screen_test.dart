@@ -6,7 +6,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:smartbus_drivers/core/location/location_service.dart';
 import 'package:smartbus_drivers/core/network/api_exception.dart';
 import 'package:smartbus_drivers/core/storage/secure_session_store.dart';
+import 'package:smartbus_drivers/core/theme.dart';
 import 'package:smartbus_drivers/features/driver/trip_screen.dart';
+import 'package:smartbus_drivers/features/driver/widgets/trip_status_badge.dart';
 import 'package:smartbus_drivers/features/operations/models/operations_models.dart';
 import 'package:smartbus_drivers/features/passenger/map/passenger_map.dart';
 import 'package:smartbus_drivers/features/trip_tracking/models/trip_tracking.dart';
@@ -127,10 +129,13 @@ Future<_FakeMap> _pumpTrip(
   bool autoStart = false,
 }) async {
   final map = _FakeMap();
+  final opened = trip ?? (status == null ? null : driverTrip(status: status));
+  // Refreshing on open answers the same trip (tests change it on purpose).
+  operations.knownTrip ??= opened;
   await tester.pumpWidget(
     MaterialApp(
       home: TripScreen(
-        trip: trip ?? (status == null ? null : driverTrip(status: status)),
+        trip: opened,
         autoStart: autoStart,
         operations: operations,
         sender: sender,
@@ -506,7 +511,8 @@ void main() {
         autoStart: true,
       );
 
-      expect(operations.calls, isEmpty);
+      // Only the status refresh: no start, no complete.
+      expect(operations.calls, ['trip $tripId']);
       expect(sender.started, isEmpty);
       expect(find.text('El viaje aún no ha iniciado'), findsOneWidget);
     });
@@ -749,7 +755,414 @@ void main() {
       });
     }
   });
+
+  group('Trip status', () {
+    final badge = find.byKey(const Key('trip-status-badge'));
+    final message = find.byKey(const Key('trip-status-message'));
+
+    /// The badge shows [label] in [color].
+    void expectBadge(String label, Color color) {
+      final text = find.descendant(of: badge, matching: find.text(label));
+      expect(text, findsOneWidget, reason: 'badge "$label"');
+      expect(_textOf(text).style?.color, color);
+    }
+
+    String messageText(WidgetTester tester) =>
+        tester.widget<Text>(message).data!;
+
+    int refreshes(FakeOperations operations) =>
+        operations.calls.where((c) => c == 'trip $tripId').length;
+
+    testWidgets('AC1 · scheduled: "Programado" (same as Inicio), "Listo para '
+        'iniciar"', (tester) async {
+      await _pumpTrip(
+        tester,
+        operations: FakeOperations(),
+        sender: _FakeSender(),
+        status: 'scheduled',
+      );
+
+      final (label, color) = tripStatusBadge(TripStatus.scheduled);
+      expect(label, 'Programado');
+      expectBadge(label, color);
+      expect(messageText(tester), 'Listo para iniciar');
+    });
+
+    testWidgets('AC2 · in progress and sending: green "En curso" and the last '
+        'confirmed location', (tester) async {
+      final sender = _FakeSender();
+      await _pumpTrip(
+        tester,
+        operations: FakeOperations(),
+        sender: sender,
+        status: 'in_progress',
+        autoStart: true,
+      );
+      expect(messageText(tester), 'Enviando ubicación · sin confirmar');
+
+      sender.moveTo(10.46, -84.0); // the GPS service confirmed it
+      await tester.pump();
+
+      expectBadge('En curso', SmartBusColors.verdeMenta);
+      expect(
+        messageText(tester),
+        'Enviando ubicación · última hace un momento',
+      );
+    });
+
+    testWidgets('AC3 · in progress but not sending: orange "ubicación '
+        'detenida"; "Continuar recorrido" resumes', (tester) async {
+      final sender = _FakeSender();
+      // From the tab, after reopening the app: nothing is being sent.
+      await _pumpTrip(
+        tester,
+        operations: FakeOperations(trips: [driverTrip(status: 'in_progress')]),
+        sender: sender,
+      );
+
+      expectBadge('En curso · ubicación detenida', SmartBusColors.retraso);
+      expect(messageText(tester), 'No se está enviando tu ubicación');
+
+      await tester.tap(find.text('Continuar recorrido'));
+      await tester.pump();
+      expect(sender.started, [tripId]);
+      expectBadge('En curso', SmartBusColors.verdeMenta);
+    });
+
+    testWidgets('AC4 · location rejected: red, with the reason; "Reintentar" '
+        'sends again', (tester) async {
+      final sender = _FakeSender();
+      await _pumpTrip(
+        tester,
+        operations: FakeOperations(),
+        sender: sender,
+        status: 'in_progress',
+        autoStart: true,
+      );
+
+      sender.snapshot.value = sender.snapshot.value.copyWith(
+        state: TripTrackingState.rejected,
+        lastError: 'Este viaje no está en curso.',
+      );
+      await tester.pump();
+
+      expectBadge('En curso · ubicación rechazada', SmartBusColors.error);
+      expect(messageText(tester), 'Este viaje no está en curso.');
+
+      await tester.tap(find.text('Reintentar'));
+      await tester.pump();
+      expect(sender.started, [tripId, tripId]);
+    });
+
+    testWidgets('AC5 · completed: "Finalizado", the arrival time and no '
+        'start / finish buttons', (tester) async {
+      await _pumpTrip(
+        tester,
+        operations: FakeOperations(),
+        sender: _FakeSender(),
+        trip: driverTrip(
+          status: 'completed',
+          actualDepartureAt: '2026-11-11T13:05:00.000000Z',
+          actualArrivalAt: completedArrivalAt,
+        ),
+      );
+
+      final arrival = formatHour(DateTime.parse(completedArrivalAt));
+      final (label, color) = tripStatusBadge(TripStatus.completed);
+      expectBadge(label, color);
+      expect(messageText(tester), 'Recorrido finalizado · llegada $arrival');
+      expect(find.text('Llegada: $arrival'), findsOneWidget);
+      expect(find.text('Finalizar recorrido'), findsNothing);
+      expect(find.text('Continuar recorrido'), findsNothing);
+      expect(find.textContaining('Iniciar'), findsNothing);
+    });
+
+    for (final (status, label, notice) in [
+      (
+        'cancelled',
+        'Cancelado',
+        'El viaje fue cancelado desde el panel de administración. '
+            'Se dejó de enviar tu ubicación.',
+      ),
+      (
+        'completed',
+        'Finalizado',
+        'El viaje se finalizó desde el panel de administración. '
+            'Se dejó de enviar tu ubicación.',
+      ),
+    ]) {
+      testWidgets('AC6 · $status from the admin panel: within 60 s the badge '
+          'changes, the GPS stops and it says why', (tester) async {
+        final operations = FakeOperations();
+        final sender = _FakeSender();
+        await _pumpTrip(
+          tester,
+          operations: operations,
+          sender: sender,
+          status: 'in_progress',
+          autoStart: true,
+        );
+        expect(refreshes(operations), 1); // on open
+
+        operations.tripStatus = status;
+        await tester.pump(const Duration(seconds: 59));
+        expect(refreshes(operations), 1);
+        expect(sender.stops, 0);
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump();
+
+        expect(refreshes(operations), 2);
+        expect(sender.stops, 1);
+        expectBadge(label, tripStatusBadge(TripStatus.fromApi(status)).$2);
+        expect(find.text(notice), findsOneWidget);
+        expect(find.byKey(const Key('trip-map')), findsNothing);
+        expect(find.byKey(const Key('trip-finished')), findsOneWidget);
+      });
+    }
+
+    testWidgets('AC6 · no refresh while the app is in the background; it '
+        'refreshes when it comes back', (tester) async {
+      final operations = FakeOperations();
+      await _pumpTrip(
+        tester,
+        operations: operations,
+        sender: _FakeSender(),
+        status: 'in_progress',
+        autoStart: true,
+      );
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump(const Duration(minutes: 3));
+      expect(refreshes(operations), 1);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(refreshes(operations), 2);
+    });
+
+    testWidgets('AC7 · pulling the panel down asks again, with a loading '
+        'indicator', (tester) async {
+      final operations = FakeOperations();
+      await _pumpTrip(
+        tester,
+        operations: operations,
+        sender: _FakeSender(),
+        status: 'in_progress',
+        autoStart: true,
+      );
+      operations.tripGate = Completer<void>();
+
+      await tester.fling(
+        find.byKey(const Key('trip-panel')),
+        const Offset(0, 400),
+        1000,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(refreshes(operations), 2);
+      expect(find.byKey(const Key('status-refreshing')), findsOneWidget);
+
+      operations.tripGate!.complete();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('status-refreshing')), findsNothing);
+    });
+
+    testWidgets('AC7 · pull-to-refresh also on the status view (scheduled '
+        'trip)', (tester) async {
+      final operations = FakeOperations();
+      await _pumpTrip(
+        tester,
+        operations: operations,
+        sender: _FakeSender(),
+        status: 'scheduled',
+      );
+
+      await tester.fling(
+        find.text('El viaje aún no ha iniciado'),
+        const Offset(0, 400),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      expect(refreshes(operations), 2);
+    });
+
+    for (final error in [
+      ApiException.noConnection,
+      ApiException.timeout,
+      ApiException.fromStatus(429),
+      ApiException.fromStatus(503),
+    ]) {
+      testWidgets('AC8 · ${error.type.name}: the last status stays, "No se '
+          'pudo actualizar" and "Reintentar"', (tester) async {
+        final operations = FakeOperations();
+        final sender = _FakeSender();
+        await _pumpTrip(
+          tester,
+          operations: operations,
+          sender: sender,
+          status: 'in_progress',
+          autoStart: true,
+        );
+        operations.tripError = error;
+
+        await tester.tap(find.byKey(const Key('refresh-status')));
+        await tester.pump();
+
+        expect(find.text(statusRefreshFailedMessage), findsOneWidget);
+        expectBadge('En curso', SmartBusColors.verdeMenta);
+        expect(sender.stops, 0);
+        expect(find.byKey(const Key('trip-map')), findsOneWidget);
+
+        operations.tripError = null;
+        await tester.tap(find.byKey(const Key('status-retry')));
+        await tester.pump();
+        expect(find.text(statusRefreshFailedMessage), findsNothing);
+        expect(refreshes(operations), 3);
+      });
+    }
+
+    testWidgets('AC8 · 401: clears the session and goes to Login', (
+      tester,
+    ) async {
+      final operations = FakeOperations()
+        ..tripError = ApiException.fromStatus(401);
+      final sender = _FakeSender();
+      await _pumpTrip(
+        tester,
+        operations: operations,
+        sender: sender,
+        status: 'in_progress',
+        autoStart: true,
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('login'), findsOneWidget);
+      expect(find.text(sessionExpiredMessage), findsOneWidget);
+      expect(sender.stops, 1);
+      expect(await SecureSessionStore().readToken(), isNull);
+    });
+
+    for (final status in [403, 404]) {
+      testWidgets('AC8 · $status: "Este viaje ya no está disponible", the GPS '
+          'stops and a button back to Inicio', (tester) async {
+        final operations = FakeOperations();
+        final sender = _FakeSender();
+        await _pumpTrip(
+          tester,
+          operations: operations,
+          sender: sender,
+          status: 'in_progress',
+          autoStart: true,
+        );
+        operations.tripError = ApiException.fromStatus(status);
+
+        await tester.tap(find.byKey(const Key('refresh-status')));
+        await tester.pump();
+
+        expect(find.text(tripUnavailableMessage), findsOneWidget);
+        expect(sender.stops, 1);
+        expect(find.byKey(const Key('trip-status')), findsNothing);
+        await tester.tap(find.text('Ir a Inicio'));
+        await tester.pumpAndSettle();
+        expect(find.text('home'), findsOneWidget);
+      });
+    }
+
+    testWidgets('a late refresh does not undo "Finalizar"', (tester) async {
+      final operations = FakeOperations();
+      final sender = _FakeSender();
+      await _pumpTrip(
+        tester,
+        operations: operations,
+        sender: sender,
+        status: 'in_progress',
+        autoStart: true,
+      );
+      operations.tripGate = Completer<void>();
+      await tester.tap(find.byKey(const Key('refresh-status')));
+      await tester.pump();
+
+      // The refresh is still waiting when the driver finishes the trip (its
+      // progress bar animates: pump, not pumpAndSettle).
+      await tester.tap(find.byKey(const Key('finish-trip')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(find.byKey(const Key('finish-trip-confirm')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Recorrido finalizado'), findsOneWidget);
+
+      operations.tripGate!.complete(); // answers "in_progress", too late
+      await tester.pumpAndSettle();
+      expect(find.text('Recorrido finalizado'), findsOneWidget);
+      expectBadge('Finalizado', SmartBusColors.completado);
+    });
+
+    testWidgets('a refresh keeps the bus and destination already shown', (
+      tester,
+    ) async {
+      final operations = FakeOperations()..tripStatus = 'in_progress';
+      await _pumpTrip(
+        tester,
+        operations: operations,
+        sender: _FakeSender(),
+        // As Inicio loads it (`include=pattern,bus`).
+        trip: DriverTrip.fromJsonApi(
+          tripResource(status: 'in_progress', withRelationships: true),
+          included: JsonApiIncluded(driverTripsIncluded()),
+        ),
+        autoStart: true,
+      );
+      await tester.pump();
+
+      // GET ops/trips/{id} has no include: the plate must not disappear.
+      expect(find.textContaining('Bus SJB-1234'), findsOneWidget);
+    });
+
+    testWidgets('AC9 · text + icon + semantics label; fits 320 × 568 with the '
+        'longest status', (tester) async {
+      tester.view.physicalSize = const Size(320, 568) * 2;
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.reset);
+      final semantics = tester.ensureSemantics();
+      final sender = _FakeSender();
+      await _pumpTrip(
+        tester,
+        operations: FakeOperations(),
+        sender: sender,
+        status: 'in_progress',
+        autoStart: true,
+      );
+      sender.snapshot.value = sender.snapshot.value.copyWith(
+        state: TripTrackingState.rejected,
+        lastError: 'El viaje no está asignado a tu cuenta.',
+      );
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(
+        find.bySemanticsLabel(
+          'Estado del viaje: En curso · ubicación rechazada',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: badge, matching: find.byIcon(Icons.gps_off)),
+        findsOneWidget,
+      );
+      semantics.dispose();
+    });
+  });
 }
+
+/// The [Text] widget found by [finder].
+Text _textOf(Finder finder) => finder.evaluate().single.widget as Text;
 
 /// The Gateway answers 401 to the trips list.
 class _UnauthorizedOperations extends FakeOperations {
