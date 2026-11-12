@@ -455,7 +455,8 @@ un viaje, después del permiso de ubicación (`NotificationPermission`, canal
 
 "Iniciar recorrido" (en Inicio) primero inicia el viaje en el Dashboard y
 "Finalizar recorrido" lo completa (sección 9), así el GPS ya no responde `409`
-por un viaje sin iniciar.
+por un viaje sin iniciar. Al finalizar, el GPS sigue enviando hasta que el
+Dashboard confirma; recién entonces se detiene.
 
 Tests: `test/features/trip_tracking/trip_location_sender_test.dart`.
 
@@ -471,7 +472,8 @@ mismo Gateway). Todo pasa por `OperationsService`
 |---|---|---|---|
 | `driverTrips({serviceDate, status})` | `GET ops/driver/trips?include=pattern,bus&sort=scheduled_departure_at` | Sí | Conductor |
 | `startTrip(id)` | `POST ops/trips/{id}/start` | Sí | Conductor asignado |
-| `completeTrip(id)` | `POST ops/trips/{id}/complete` | Sí | Conductor asignado |
+| `completeTrip(id)` | `POST ops/trips/{id}/complete` (idempotente; devuelve `actual_arrival_at`) | Sí | Conductor asignado |
+| `trip(id)` | `GET ops/trips/{id}` (estado actual del viaje; se usa tras un `409` al finalizar) | Sí | Conductor asignado |
 | `routes()` | `GET ops/routes` | No | Pasajero |
 | `searchRoutes(query, {page})` | `GET ops/routes?include=company,patterns` (catálogo completo, se busca en el teléfono) | No | Pasajero (sección 12) |
 | `routesWithPatterns()` | `GET ops/routes?include=patterns` (rutas + sentidos + paradas en **una** petición; ver §10) | No | Pasajero |
@@ -509,8 +511,27 @@ recorrido, fecha y hora). El conductor solo inicia uno ya programado.
    "Inició a las HH:MM" con la hora **del backend** en hora local. La pestaña
    **Recorrido** sin viaje busca el que está en curso. `TripScreen` nunca
    inicia un viaje `scheduled` (manda a Inicio).
-4. **Finalizar recorrido**: detiene el GPS y llama `completeTrip`. Si falla,
-   ofrece **Reintentar** (el GPS ya está detenido).
+4. **Finalizar recorrido** (en el panel de Recorrido mientras el viaje está
+   `in_progress`; también si el GPS está pausado, como enlace bajo
+   "Continuar recorrido"):
+   1. diálogo **"¿Finalizar el recorrido?"**: "Cancelar" o tocar afuera no
+      envía nada y el GPS sigue;
+   2. `completeTrip` con **spinner** en el botón ("Finalizando…",
+      deshabilitado). Mientras espera, **el GPS sigue enviando** y el mapa se
+      mantiene;
+   3. con `200` (`completed` + `actual_arrival_at`) **recién ahí se detiene el
+      GPS** y se muestra "Recorrido finalizado" con **"Llegada: HH:MM"**: la
+      hora del backend en hora local, no la del teléfono. Si ya estaba
+      completado (otro dispositivo), el backend responde `200` igual.
+
+Errores al finalizar:
+
+| Respuesta | Qué ve el conductor | GPS |
+|---|---|---|
+| `409` no está en curso | Mensaje del backend ("Solo se pueden completar viajes en curso.") y se consulta `GET ops/trips/{id}`: si está cancelado / completado / programado se muestra ese estado | Se detiene si el viaje ya no está en curso; si sigue en curso, sigue |
+| `403` / `404` | "No puedes finalizar este viaje." + pantalla con "Ir a Inicio" | Se detiene |
+| `401` | Se borra la sesión → Login con "Tu sesión expiró. Inicia sesión nuevamente." | Se detiene |
+| Sin red, timeout, `429`, `5xx` | SnackBar con el mensaje + **Reintentar** (vuelve a llamar `complete`, sin diálogo); el viaje sigue en curso | Sigue enviando (las ubicaciones pendientes quedan en cola) |
 
 Errores al iniciar (SnackBar en Inicio; el GPS no se enciende):
 
@@ -542,7 +563,8 @@ Un viaje terminado desaparece de la lista (el Dashboard solo devuelve los
 |---|---|
 | URLs, filtros y lectura JSON:API (trazo `[lng, lat]`, paradas ordenadas, snapshot, placa del bus, 409/422 con mensaje) | `test/features/operations/operations_service_test.dart` |
 | Inicio del conductor (AC1–AC9): lista, confirmación, permiso de ubicación, un solo viaje activo, 409/422/403/404/401, red y reintentar, spinner | `test/features/driver/driver_home_screen_test.dart` |
-| Recorrido: mapa con la ruta del viaje (o del Dashboard), bus y cámara, próxima parada, panel compacto en teléfono chico, GPS entre pestañas, 401, finalizar, reintentar | `test/features/driver/trip_screen_test.dart` |
+| Recorrido: mapa con la ruta del viaje (o del Dashboard), bus y cámara, próxima parada, panel compacto en teléfono chico, GPS entre pestañas, 401 | `test/features/driver/trip_screen_test.dart` |
+| Finalizar recorrido (AC1–AC9, grupo *Trip completion*): botón también con GPS pausado, confirmación (cancelar / tocar afuera), 200 con hora de llegada del backend, spinner sin doble envío y GPS hasta confirmar, 409 (cancelado / sigue en curso), 403/404, red / timeout / 429 / 5xx + reintentar | `test/features/driver/trip_screen_test.dart` |
 | Próxima parada: inicio, avance, retomar a mitad, saltar paradas, fin | `test/features/driver/next_stop_tracker_test.dart` |
 | Buses en curso: ruta → buses → en vivo, sin buses, ver paradas, ver ruta en el mapa, reintentar | `test/features/passenger/buses_in_progress_screen_test.dart` |
 

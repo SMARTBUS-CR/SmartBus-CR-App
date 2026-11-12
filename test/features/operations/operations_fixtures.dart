@@ -23,6 +23,7 @@ Map<String, dynamic> tripResource({
     'headsign': 'Puerto Viejo',
   },
   String? actualDepartureAt,
+  String? actualArrivalAt,
   bool withRelationships = false,
 }) => {
   'id': id,
@@ -34,6 +35,7 @@ Map<String, dynamic> tripResource({
     'scheduled_departure_at': '2026-11-11T13:00:00.000000Z',
     'scheduled_arrival_at': '2026-11-11T14:00:00.000000Z',
     'actual_departure_at': actualDepartureAt,
+    'actual_arrival_at': actualArrivalAt,
     'planned_route_snapshot': snapshot,
   },
   if (withRelationships)
@@ -182,6 +184,7 @@ DriverTrip driverTrip({
   String id = tripId,
   String status = 'scheduled',
   String? actualDepartureAt,
+  String? actualArrivalAt,
   Object? snapshot = const {
     'route_code': 'PV-RF',
     'route_name': 'Puerto Viejo',
@@ -192,9 +195,13 @@ DriverTrip driverTrip({
     id: id,
     status: status,
     actualDepartureAt: actualDepartureAt,
+    actualArrivalAt: actualArrivalAt,
     snapshot: snapshot,
   ),
 );
+
+/// `actual_arrival_at` that [FakeOperations.completeTrip] answers (UTC).
+const completedArrivalAt = '2026-11-11T14:07:00.000000Z';
 
 /// `planned_route_snapshot` as the Dashboard stores it: the line and three
 /// stops (`lat` / `lng` as strings), out of order on purpose.
@@ -347,11 +354,30 @@ class FakeOperations extends OperationsService {
     );
   }
 
+  /// While not null, [completeTrip] waits for it (to see the spinner).
+  Completer<void>? completeGate;
+
   @override
   Future<DriverTrip> completeTrip(String tripId) async {
     calls.add('complete $tripId');
+    await completeGate?.future;
     if (completeError != null) throw completeError!;
-    return driverTrip(status: 'completed');
+    return driverTrip(
+      status: 'completed',
+      actualDepartureAt: '2026-11-11T13:05:00.000000Z',
+      actualArrivalAt: completedArrivalAt,
+    );
+  }
+
+  /// Status that [trip] answers (`GET ops/trips/{id}`).
+  String tripStatus = 'in_progress';
+  Exception? tripError;
+
+  @override
+  Future<DriverTrip> trip(String tripId) async {
+    calls.add('trip $tripId');
+    if (tripError != null) throw tripError!;
+    return driverTrip(id: tripId, status: tripStatus);
   }
 
   @override
