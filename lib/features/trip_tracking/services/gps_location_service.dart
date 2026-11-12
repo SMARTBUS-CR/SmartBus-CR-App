@@ -26,6 +26,7 @@ class GpsLocationService {
     final body = await _client.post(
       ApiConfig.gpsLocations(),
       body: fix.toJsonApi(),
+      timeout: ApiConfig.gpsSendTimeout,
     );
     final data = body['data'];
     return data is Map ? data['id']?.toString() : null;
