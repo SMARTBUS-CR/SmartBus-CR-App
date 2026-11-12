@@ -489,6 +489,10 @@ recorrido, fecha y hora). El conductor solo inicia uno ya programado.
    (`include=bus`), horas programadas y estado. Arriba va cualquier viaje de
    otro día que siga **en curso** (cruzó la medianoche o nadie lo finalizó).
    Sin viajes: "No tienes viajes asignados para hoy.".
+   **Ver paradas (N)** despliega, antes de iniciar, las paradas del viaje en
+   orden con la hora programada de cada una (salida + `minutes_from_start`),
+   sacadas de la ruta planificada del viaje (`planned_route_snapshot`, sin otra
+   petición). Si el viaje no trae paradas, no aparece.
 2. **Iniciar recorrido** — solo en viajes `scheduled` y solo si **no hay otro
    en curso** (en ese caso los demás dicen "Finaliza el recorrido en curso para
    iniciar este viaje."):

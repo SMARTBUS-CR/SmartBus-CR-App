@@ -476,6 +476,10 @@ class _TripCard extends StatelessWidget {
               ),
             ),
           ],
+          if (trip.plannedPattern?.stops.isNotEmpty ?? false) ...[
+            const SizedBox(height: 8),
+            TripStopsList(trip: trip),
+          ],
           ..._action(context),
         ],
       ),
@@ -540,6 +544,167 @@ class _TripCard extends StatelessWidget {
       case _TripAction.none:
         return const [];
     }
+  }
+}
+
+/// "Ver paradas (N)": the stops of the trip in travel order, with the
+/// scheduled time at each one (departure + `minutes_from_start`), from the
+/// route planned for the trip (`planned_route_snapshot`). Collapsed by default
+/// so the trip list stays short.
+class TripStopsList extends StatefulWidget {
+  const TripStopsList({super.key, required this.trip});
+
+  final DriverTrip trip;
+
+  @override
+  State<TripStopsList> createState() => _TripStopsListState();
+}
+
+class _TripStopsListState extends State<TripStopsList> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final trip = widget.trip;
+    final stops = trip.plannedPattern?.stops ?? const <PatternStop>[];
+    final departure = trip.scheduledDepartureAt;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        InkWell(
+          key: Key('trip-stops-${trip.id}'),
+          borderRadius: BorderRadius.circular(8),
+          onTap: () => setState(() => _open = !_open),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.place_outlined,
+                  size: 18,
+                  color: SmartBusColors.azulPrincipal,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _open ? 'Ocultar paradas' : 'Ver paradas (${stops.length})',
+                    style: const TextStyle(
+                      color: SmartBusColors.azulPrincipal,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Icon(
+                  _open ? Icons.expand_less : Icons.expand_more,
+                  color: SmartBusColors.azulPrincipal,
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_open)
+          for (var i = 0; i < stops.length; i++)
+            _StopRow(
+              key: Key('trip-stop-${trip.id}-$i'),
+              number: i + 1,
+              name: stops[i].name,
+              time: switch ((departure, stops[i].minutesFromStart)) {
+                (final DateTime at, final int minutes) => formatHour(
+                  at.add(Duration(minutes: minutes)),
+                ),
+                _ => null,
+              },
+              first: i == 0,
+              last: i == stops.length - 1,
+            ),
+      ],
+    );
+  }
+}
+
+/// One stop: number on a small vertical line, name and scheduled time.
+class _StopRow extends StatelessWidget {
+  const _StopRow({
+    super.key,
+    required this.number,
+    required this.name,
+    required this.time,
+    required this.first,
+    required this.last,
+  });
+
+  final int number;
+  final String name;
+  final String? time;
+  final bool first;
+  final bool last;
+
+  @override
+  Widget build(BuildContext context) {
+    final edge = first || last;
+    final color = first
+        ? SmartBusColors.verdeTurquesa
+        : (last ? SmartBusColors.azulPrincipal : Colors.grey.shade500);
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: 26,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // The line joining the stops.
+                Positioned(
+                  top: first ? 14 : 0,
+                  bottom: last ? 14 : 0,
+                  child: Container(width: 2, color: Colors.grey.shade300),
+                ),
+                Container(
+                  width: 20,
+                  height: 20,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: edge ? color : SmartBusColors.blanco,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: color, width: 2),
+                  ),
+                  child: Text(
+                    '$number',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: edge ? SmartBusColors.blanco : color,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Text(
+                name,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: edge ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ),
+          ),
+          if (time != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 8, top: 5),
+              child: Text(
+                time!,
+                style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
 
