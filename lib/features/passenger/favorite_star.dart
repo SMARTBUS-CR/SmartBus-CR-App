@@ -101,9 +101,9 @@ Future<void> addFavorite(
   final navigator = Navigator.of(context);
   try {
     final sent = await favorites.add(route);
-    if (sent) _show(messenger, 'Ruta agregada a favoritos.');
+    if (sent) showFavoritesMessage(messenger, 'Ruta agregada a favoritos.');
   } on ApiException catch (e) {
-    await _onError(messenger, navigator, e);
+    await handleFavoritesError(messenger, navigator, e);
   }
 }
 
@@ -118,28 +118,28 @@ Future<void> removeFavorite(
   try {
     final removed = await favorites.remove(routeId);
     if (removed == null) return;
-    _show(
+    showFavoritesMessage(
       messenger,
       'Ruta eliminada de favoritos.',
       action: SnackBarAction(
         label: 'Deshacer',
         onPressed: () async {
           try {
-            await favorites.add(removed.route);
+            await favorites.add(removed.route, label: removed.label);
           } on ApiException catch (e) {
-            await _onError(messenger, navigator, e);
+            await handleFavoritesError(messenger, navigator, e);
           }
         },
       ),
     );
   } on ApiException catch (e) {
-    await _onError(messenger, navigator, e);
+    await handleFavoritesError(messenger, navigator, e);
   }
 }
 
 /// 401: the session is cleared and the passenger goes to login. Anything
 /// else: the star / list are already back; just say why.
-Future<void> _onError(
+Future<void> handleFavoritesError(
   ScaffoldMessengerState messenger,
   NavigatorState navigator,
   ApiException e,
@@ -148,7 +148,7 @@ Future<void> _onError(
     await sessionExpired(messenger, navigator, e.message);
     return;
   }
-  _show(messenger, e.message, color: SmartBusColors.error);
+  showFavoritesMessage(messenger, e.message, color: SmartBusColors.error);
 }
 
 /// Clears the session and opens login with [message].
@@ -163,11 +163,11 @@ Future<void> sessionExpired(
   } catch (_) {
     // Nothing stored to clear.
   }
-  _show(messenger, message, color: SmartBusColors.error);
+  showFavoritesMessage(messenger, message, color: SmartBusColors.error);
   navigator.pushNamedAndRemoveUntil('/login', (_) => false);
 }
 
-void _show(
+void showFavoritesMessage(
   ScaffoldMessengerState messenger,
   String message, {
   Color? color,
