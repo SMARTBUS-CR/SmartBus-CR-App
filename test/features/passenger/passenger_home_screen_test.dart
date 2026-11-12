@@ -237,7 +237,7 @@ void main() {
     expect(location.openedSettings, [LocationAccess.deniedForever]);
   });
 
-  testWidgets('AC5 · typing in the search bar shows "próximamente" in place', (
+  testWidgets('Route search · tapping the search bar opens "Buscar ruta"', (
     tester,
   ) async {
     await _pump(
@@ -249,53 +249,18 @@ void main() {
       map: _FakeMap(),
     );
 
-    // Tapping the field opens the results panel instead of the chips.
+    // It is a button, not a field: no keyboard on the map.
+    expect(find.byType(TextField), findsNothing);
+
     await tester.tap(find.byKey(const Key('map-search-field')));
-    await tester.pump();
-    expect(find.text('Búsqueda de rutas: próximamente'), findsOneWidget);
-    expect(find.text('Escribe una ruta, parada o destino.'), findsOneWidget);
-    expect(find.text('Paradas cercanas'), findsNothing);
-
-    // The panel follows what the user types.
-    await tester.enterText(
-      find.byKey(const Key('map-search-field')),
-      'Heredia',
-    );
-    await tester.pump();
-    expect(
-      find.text('Pronto verás aquí las rutas para "Heredia".'),
-      findsOneWidget,
-    );
-
-    // It never navigates to another screen.
-    expect(find.text('search-screen'), findsNothing);
-
-    // The back arrow closes the search and brings the chips back.
-    await tester.tap(find.byKey(const Key('map-search-close')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('map-search-results')), findsNothing);
+
+    expect(find.text('search-screen'), findsOneWidget);
+
+    // Back from the search: the home is still there with its chips.
+    tester.state<NavigatorState>(find.byType(Navigator)).pop();
+    await tester.pumpAndSettle();
     expect(find.text('Paradas cercanas'), findsOneWidget);
-  });
-
-  testWidgets('AC5 · the clear button empties the search', (tester) async {
-    await _pump(
-      tester,
-      location: _FakeLocationService(
-        access: LocationAccess.granted,
-        location: _user,
-      ),
-      map: _FakeMap(),
-    );
-
-    await tester.enterText(
-      find.byKey(const Key('map-search-field')),
-      'Cartago',
-    );
-    await tester.pump();
-    await tester.tap(find.byKey(const Key('map-search-clear')));
-    await tester.pump();
-
-    expect(find.text('Escribe una ruta, parada o destino.'), findsOneWidget);
   });
 
   testWidgets('Satellite · the layers button switches streets <-> satellite', (
