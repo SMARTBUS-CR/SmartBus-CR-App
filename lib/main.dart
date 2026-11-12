@@ -5,6 +5,7 @@ import 'features/auth/splash_screen.dart';
 import 'features/auth/login_screen.dart';
 import 'features/auth/register_screen.dart';
 import 'features/auth/verify_email_screen.dart';
+import 'features/operations/models/operations_models.dart';
 import 'features/passenger/passenger_home_screen.dart';
 import 'features/passenger/route_search_screen.dart';
 import 'features/passenger/bus_tracking_screen.dart';

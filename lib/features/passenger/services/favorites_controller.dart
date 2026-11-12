@@ -97,14 +97,15 @@ class FavoritesController extends ChangeNotifier {
   /// Saves [route]. Returns `false` when nothing was sent (already a favorite
   /// or a change on it is in flight). Throws the [ApiException] after putting
   /// the star back.
-  Future<bool> add(TransitRoute route) async {
+  /// [label] keeps the alias when "Deshacer" saves a route again.
+  Future<bool> add(TransitRoute route, {String? label}) async {
     if (isBusy(route.id) || isFavorite(route.id)) return false;
     _busy.add(route.id);
-    final pending = FavoriteRoute.pending(route);
+    final pending = FavoriteRoute.pending(route, label: label);
     _favorites = [pending, ...?_favorites];
     notifyListeners();
     try {
-      final saved = await _service.addFavorite(route.id);
+      final saved = await _service.addFavorite(route.id, label: label);
       if (saved != null) {
         _favorites = [
           for (final f in _favorites!)
@@ -149,6 +150,152 @@ class FavoritesController extends ChangeNotifier {
     }
   }
 
+  /// Requests sent at the same time by [removeMany] / [restore] (there is no
+  /// bulk endpoint: one request per route).
+  static const maxParallelRequests = 4;
+
+  /// Removes several routes ("Eliminar (N)", "Eliminar todos"). They leave
+  /// the list at once; the ones the server could not remove go back to their
+  /// place. Routes not in the list or with a change in flight are skipped, so
+  /// each route is sent at most once. Never throws: see [BulkRemoval].
+  Future<BulkRemoval> removeMany(Iterable<String> routeIds) async {
+    final current = _favorites ?? const <FavoriteRoute>[];
+    final wanted = routeIds.toSet();
+    final targets = [
+      for (final f in current)
+        if (wanted.contains(f.routeId) && !isBusy(f.routeId)) f,
+    ];
+    if (targets.isEmpty) return const BulkRemoval(removed: [], order: []);
+
+    final order = [for (final f in current) f.routeId];
+    final ids = {for (final f in targets) f.routeId};
+    _busy.addAll(ids);
+    _favorites = [
+      for (final f in current)
+        if (!ids.contains(f.routeId)) f,
+    ];
+    notifyListeners();
+
+    final failed = <FavoriteRoute>[];
+    final errors = <ApiException>[];
+    await _limited(targets, (favorite) async {
+      try {
+        await _service.removeFavorite(favorite.routeId);
+      } on ApiException catch (e) {
+        failed.add(favorite);
+        errors.add(e);
+      }
+    });
+
+    _busy.removeAll(ids);
+    for (final favorite in failed) {
+      _putBack(favorite, order);
+    }
+    notifyListeners();
+    return BulkRemoval(
+      removed: [
+        for (final f in targets)
+          if (!failed.contains(f)) f,
+      ],
+      failed: [
+        for (final f in targets)
+          if (failed.contains(f)) f,
+      ],
+      order: order,
+      error: _worst(errors),
+    );
+  }
+
+  /// "Deshacer" of [removal]: saves its removed routes again (with their
+  /// alias) and puts them back in their previous order at once. Returns the
+  /// ones the server could not save (they leave the list again). Never
+  /// throws: see [BulkRemoval.error] of the result.
+  Future<BulkRemoval> restore(BulkRemoval removal) async {
+    final targets = [
+      for (final f in removal.removed)
+        if (!isFavorite(f.routeId) && !isBusy(f.routeId)) f,
+    ];
+    if (targets.isEmpty) return const BulkRemoval(removed: [], order: []);
+
+    final ids = {for (final f in targets) f.routeId};
+    _busy.addAll(ids);
+    for (final favorite in targets) {
+      _putBack(favorite, removal.order);
+    }
+    notifyListeners();
+
+    final failed = <FavoriteRoute>[];
+    final errors = <ApiException>[];
+    await _limited(targets, (favorite) async {
+      try {
+        // 409 (already saved again elsewhere) counts as saved.
+        await _service.addFavorite(favorite.routeId, label: favorite.label);
+      } on ApiException catch (e) {
+        failed.add(favorite);
+        errors.add(e);
+      }
+    });
+
+    _busy.removeAll(ids);
+    _favorites = [
+      for (final f in _favorites ?? const <FavoriteRoute>[])
+        if (!failed.any((g) => g.routeId == f.routeId)) f,
+    ];
+    notifyListeners();
+    return BulkRemoval(
+      removed: [
+        for (final f in targets)
+          if (!failed.contains(f)) f,
+      ],
+      failed: failed,
+      order: removal.order,
+      error: _worst(errors),
+    );
+  }
+
+  /// Inserts [favorite] after the routes that were before it in [order]
+  /// (routes added since then, not in [order], stay first).
+  void _putBack(FavoriteRoute favorite, List<String> order) {
+    final list = [...?_favorites];
+    if (list.any((f) => f.routeId == favorite.routeId)) return;
+    final position = order.indexOf(favorite.routeId);
+    var index = 0;
+    while (index < list.length) {
+      final other = order.indexOf(list[index].routeId);
+      if (other > position) break;
+      index++;
+    }
+    list.insert(index, favorite);
+    _favorites = list;
+  }
+
+  /// Runs [task] for every item, at most [maxParallelRequests] at a time.
+  static Future<void> _limited<T>(
+    List<T> items,
+    Future<void> Function(T) task,
+  ) async {
+    var next = 0;
+    Future<void> worker() async {
+      while (next < items.length) {
+        await task(items[next++]);
+      }
+    }
+
+    final workers = items.length < maxParallelRequests
+        ? items.length
+        : maxParallelRequests;
+    await Future.wait([for (var i = 0; i < workers; i++) worker()]);
+  }
+
+  /// The error to tell the passenger: a 401 wins (it ends the session).
+  static ApiException? _worst(List<ApiException> errors) {
+    if (errors.isEmpty) return null;
+    return errors.firstWhere(
+      (e) => e.type == ApiErrorType.unauthorized,
+      orElse: () => errors.first,
+    );
+  }
+
   Future<String?> _readToken() async {
     try {
       return await _session.readToken();
@@ -156,4 +303,31 @@ class FavoritesController extends ChangeNotifier {
       return null;
     }
   }
+}
+
+/// Result of [FavoritesController.removeMany] (or of its "Deshacer",
+/// [FavoritesController.restore]).
+class BulkRemoval {
+  const BulkRemoval({
+    required this.removed,
+    required this.order,
+    this.failed = const [],
+    this.error,
+  });
+
+  /// Routes the server removed (or, for [FavoritesController.restore], saved
+  /// again), in list order.
+  final List<FavoriteRoute> removed;
+
+  /// Routes it could not handle: they are back in the list (or, for a
+  /// restore, still out of it). Retry with their ids.
+  final List<FavoriteRoute> failed;
+
+  /// Route ids of the whole list before removing, to put routes back in place.
+  final List<String> order;
+
+  /// Why some failed (a 401 when any request had one).
+  final ApiException? error;
+
+  bool get nothingSent => removed.isEmpty && failed.isEmpty;
 }

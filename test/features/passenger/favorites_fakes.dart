@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:smartbus_drivers/core/network/api_exception.dart';
 import 'package:smartbus_drivers/features/operations/models/operations_models.dart';
 import 'package:smartbus_drivers/features/passenger/models/favorite_route.dart';
 import 'package:smartbus_drivers/features/passenger/services/favorites_service.dart';
@@ -39,6 +40,31 @@ class FakeFavoritesService extends FavoritesService {
   /// While not null, [fetchFavorites] waits for it.
   Completer<void>? fetchGate;
 
+  /// Routes whose remove / add fails with [failure] (partial failures).
+  final Set<String> failingRoutes = {};
+  Exception failure = const ApiException(
+    ApiErrorType.noConnection,
+    'Sin conexión a Internet.',
+  );
+
+  /// Requests waiting at the same time, and the most seen (parallelism).
+  int _inFlight = 0;
+  int maxInFlight = 0;
+
+  Future<void> _request(String routeId) async {
+    _inFlight++;
+    if (_inFlight > maxInFlight) maxInFlight = _inFlight;
+    try {
+      await gate?.future;
+      // Let the other parallel requests start before answering.
+      await Future<void>.delayed(Duration.zero);
+      if (error != null) throw error!;
+      if (failingRoutes.contains(routeId)) throw failure;
+    } finally {
+      _inFlight--;
+    }
+  }
+
   @override
   Future<List<FavoriteRoute>> fetchFavorites() async {
     calls.add('fetch');
@@ -49,13 +75,13 @@ class FakeFavoritesService extends FavoritesService {
   }
 
   @override
-  Future<FavoriteRoute?> addFavorite(String routeId) async {
-    calls.add('add $routeId');
-    await gate?.future;
-    if (error != null) throw error!;
+  Future<FavoriteRoute?> addFavorite(String routeId, {String? label}) async {
+    calls.add(label == null ? 'add $routeId' : 'add $routeId ($label)');
+    await _request(routeId);
     final saved = FavoriteRoute(
       id: 'fav-$routeId',
       route: TransitRoute(id: routeId, code: '', name: ''),
+      label: label,
       savedAt: DateTime(2026, 11, 12),
     );
     stored.add(saved);
@@ -65,8 +91,7 @@ class FakeFavoritesService extends FavoritesService {
   @override
   Future<void> removeFavorite(String routeId) async {
     calls.add('remove $routeId');
-    await gate?.future;
-    if (error != null) throw error!;
+    await _request(routeId);
     stored.removeWhere((f) => f.routeId == routeId);
   }
 }

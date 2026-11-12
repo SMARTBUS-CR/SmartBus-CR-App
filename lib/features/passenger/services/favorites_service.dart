@@ -26,16 +26,17 @@ class FavoritesService {
     return sortedBySavedAt(favorites);
   }
 
-  /// `POST ops/favorites {route_id}`.
+  /// `POST ops/favorites {route_id, label?}`. [label] is the alias the
+  /// passenger had (used by "Deshacer" so it is not lost).
   ///
   /// A 409 means the route was already a favorite (another device, a double
   /// tap): the wanted state is reached, so it returns `null` instead of
   /// failing.
-  Future<FavoriteRoute?> addFavorite(String routeId) async {
+  Future<FavoriteRoute?> addFavorite(String routeId, {String? label}) async {
     try {
       final body = await _client.post(
         ApiConfig.opsFavorites(),
-        body: {'route_id': routeId},
+        body: {'route_id': routeId, 'label': ?label},
       );
       final data = body['data'];
       if (data is! Map) return null;
