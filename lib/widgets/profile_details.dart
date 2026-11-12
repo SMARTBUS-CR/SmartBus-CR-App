@@ -37,7 +37,12 @@ class ProfileDetails extends StatefulWidget {
     this.canDeleteAccount = false,
     this.authService,
     this.sessionStore,
+    this.onSignOut,
   });
+
+  /// Called before going to login (logout, expired session, deleted account),
+  /// e.g. to stop the driver's GPS.
+  final VoidCallback? onSignOut;
 
   /// Accent color of the flow (header, avatar, icons).
   final Color color;
@@ -140,6 +145,7 @@ class _ProfileDetailsState extends State<ProfileDetails> {
   }
 
   Future<void> _onSessionExpired() async {
+    widget.onSignOut?.call();
     // The token is already invalid: no need to call POST /auth/logout.
     await _session.clear();
     if (!mounted) return;
@@ -148,6 +154,7 @@ class _ProfileDetailsState extends State<ProfileDetails> {
   }
 
   Future<void> _logout() async {
+    widget.onSignOut?.call();
     await _authService.logout();
     if (!mounted) return;
     Navigator.pushReplacementNamed(context, '/login');
@@ -177,6 +184,7 @@ class _ProfileDetailsState extends State<ProfileDetails> {
 
     final error = outcome.error;
     if (error == null) {
+      widget.onSignOut?.call();
       // The session is already cleared by AuthService.deleteAccount.
       _showMessage(outcome.message!, color: SmartBusColors.success);
       Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
