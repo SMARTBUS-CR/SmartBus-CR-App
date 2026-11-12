@@ -11,6 +11,7 @@ import '../../widgets/driver_bottom_nav.dart';
 import '../../widgets/smartbus_header.dart';
 import '../operations/models/operations_models.dart';
 import '../operations/services/operations_service.dart';
+import '../passenger/map/map_overlay.dart' show ApproximateRouteNote;
 import '../passenger/map/passenger_map.dart';
 import '../trip_tracking/models/trip_tracking.dart';
 import '../trip_tracking/services/active_trip_tracking.dart';
@@ -174,26 +175,46 @@ class _TripScreenState extends State<TripScreen> {
 
   // --- Trip and route ----------------------------------------------------------
 
-  /// Uses [trip] and its planned route; asks the Dashboard for the pattern
-  /// when the trip carries none.
+  /// Uses [trip] and its planned route. Asks the Dashboard for the current
+  /// pattern when the trip carries no route, or carries stops without a line
+  /// (planned before "Calculate Route" was done in the Dashboard).
   void _setTrip(DriverTrip? trip) {
     _trip = trip;
     final planned = trip?.plannedPattern;
     if (planned != null) {
-      _useRoute(planned);
-    } else if (trip?.routePatternId case final String patternId
-        when _route == null && trip!.status == TripStatus.inProgress) {
+      // Keep a line already taken from the current pattern.
+      final line = _route?.hasGeometry ?? false ? _route!.geometry : null;
+      _useRoute(
+        !planned.hasGeometry && line != null
+            ? planned.withGeometry(line)
+            : planned,
+      );
+    }
+    if (trip?.routePatternId case final String patternId
+        when !(_route?.hasGeometry ?? false) &&
+            !_routeFetched &&
+            trip!.status == TripStatus.inProgress) {
+      _routeFetched = true;
       unawaited(_fetchRoute(patternId));
     }
   }
+
+  /// The current pattern was already asked for (once per screen).
+  bool _routeFetched = false;
 
   Future<void> _fetchRoute(String patternId) async {
     try {
       final pattern = await _operations.routePattern(patternId);
       if (!mounted) return;
-      setState(() => _useRoute(pattern));
+      final planned = _trip?.plannedPattern;
+      if (planned == null) {
+        setState(() => _useRoute(pattern));
+      } else if (pattern.hasGeometry) {
+        // The trip's own stops and times, with the Dashboard's line.
+        setState(() => _useRoute(planned.withGeometry(pattern.geometry)));
+      }
     } on Exception catch (_) {
-      // No route: the map still shows the bus.
+      // No route (or no line): the map keeps what it has.
     }
   }
 
@@ -376,6 +397,9 @@ class _TripScreenState extends State<TripScreen> {
   /// `POST ops/trips/{id}/complete`. The GPS keeps sending until the
   /// Dashboard answers: it only stops once the trip is no longer running
   /// (completed, or it turns out it was cancelled / is not the driver's).
+  /// Trip whose end position was already sent ([TripLocationSender.sendFinal]).
+  String? _finalSentFor;
+
   Future<void> _complete() async {
     final trip = _trip;
     if (trip == null || _busy || !mounted) return;
@@ -384,6 +408,14 @@ class _TripScreenState extends State<TripScreen> {
       _tripError = null;
     });
     try {
+      // The end position, stored by the GPS service; it must arrive while
+      // the trip is still in progress (best effort, never blocks finishing).
+      // Once per trip, also when "Reintentar" calls this again.
+      if (_finalSentFor != trip.id &&
+          _sender.snapshot.value.tripId == trip.id) {
+        _finalSentFor = trip.id;
+        await _sender.sendFinal();
+      }
       // 200 also when it was already completed (e.g. from another device).
       final done = await _operations.completeTrip(trip.id);
       if (!mounted) return;
@@ -555,6 +587,9 @@ class _TripScreenState extends State<TripScreen> {
                         'Este viaje no tiene la ruta dibujada; se muestra '
                         'solo la posición del bus.',
                       ),
+                    ] else if (!_route!.hasGeometry) ...[
+                      const SizedBox(height: 8),
+                      const ApproximateRouteNote(),
                     ],
                   ],
                 ),
