@@ -1255,8 +1255,8 @@ class _TripChip extends StatelessWidget {
   }
 }
 
-/// "● Ubicaciones" + small sent / pending counters ("Enviando ubicación ·
-/// última hace 3 s" is in the status strip, above).
+/// "● Ubicaciones" (orange "pendientes de envío" while a send waits);
+/// "Enviando ubicación · última hace 3 s" is in the status strip, above.
 class _SendingLine extends StatelessWidget {
   const _SendingLine({required this.snap});
 
@@ -1284,68 +1284,7 @@ class _SendingLine extends StatelessWidget {
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
           ),
         ),
-        _Counter(
-          key: const Key('sent-count'),
-          icon: Icons.cloud_done_outlined,
-          value: snap.sentCount,
-          tooltip: 'Enviadas',
-        ),
-        const SizedBox(width: 6),
-        _Counter(
-          key: const Key('pending-count'),
-          icon: Icons.sync,
-          value: snap.pendingCount,
-          tooltip: 'Pendientes',
-          highlight: pending,
-        ),
       ],
-    );
-  }
-}
-
-class _Counter extends StatelessWidget {
-  const _Counter({
-    super.key,
-    required this.icon,
-    required this.value,
-    required this.tooltip,
-    this.highlight = false,
-  });
-
-  final IconData icon;
-  final int value;
-  final String tooltip;
-  final bool highlight;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = highlight
-        ? SmartBusColors.retraso
-        : SmartBusColors.azulPrincipal;
-    return Tooltip(
-      message: tooltip,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14, color: color),
-            const SizedBox(width: 4),
-            Text(
-              '$value',
-              style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
