@@ -412,6 +412,19 @@ class RoutePattern {
   /// `true` when the Dashboard has the real line of the pattern.
   bool get hasGeometry => geometry.length >= 2;
 
+  /// The same pattern (stops, times, ids) with [line] as its geometry.
+  RoutePattern withGeometry(List<GeoPoint> line) => RoutePattern(
+    id: id,
+    name: name,
+    code: code,
+    headsign: headsign,
+    routeId: routeId,
+    stops: stops,
+    geometry: line,
+    distanceMeters: distanceMeters,
+    drivingDurationSeconds: drivingDurationSeconds,
+  );
+
   /// Stops that can be drawn (with coordinates), in travel order.
   List<PatternStop> get locatedStops =>
       stops.where((stop) => stop.location != null).toList();

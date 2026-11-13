@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/location/location_service.dart';
@@ -5,8 +7,10 @@ import '../../core/network/api_exception.dart';
 import '../../core/platform/notification_permission.dart';
 import '../../core/storage/secure_session_store.dart';
 import '../../core/theme.dart';
+import '../../widgets/departures_today.dart';
 import '../../widgets/driver_bottom_nav.dart';
 import '../../widgets/smartbus_header.dart';
+import '../auth/services/session_check.dart';
 import '../operations/models/operations_models.dart';
 import '../operations/services/operations_service.dart';
 import '../trip_tracking/models/trip_tracking.dart';
@@ -28,6 +32,10 @@ import 'trip_screen.dart';
 ///
 /// A rejected start shows the reason in a SnackBar and refreshes the list.
 /// "Continuar recorrido" opens the trip in progress.
+///
+/// Each trip shows the route's **fare** (`GET ops/routes/{id}/fares`).
+/// [startTripId] (from "Iniciar viaje de vuelta" after finishing a trip)
+/// opens the start confirmation of that trip once the list is loaded.
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({
     super.key,
@@ -36,7 +44,15 @@ class DriverHomeScreen extends StatefulWidget {
     this.notifications = const NotificationPermission(),
     this.sessionStore,
     this.clock = DateTime.now,
+    this.startTripId,
+    this.sessionCheck = confirmSessionExpired,
   });
+
+  /// Confirms a `401` with the Authentication Service before signing out.
+  final SessionExpiryCheck sessionCheck;
+
+  /// Trip to offer to start right away (see the class docs).
+  final String? startTripId;
 
   final OperationsService? operations;
 
@@ -61,6 +77,13 @@ class DriverHomeScreen extends StatefulWidget {
 
   @override
   State<DriverHomeScreen> createState() => _DriverHomeScreenState();
+}
+
+/// Arguments of `/driver/home`: a trip to offer to start right away.
+class DriverHomeArgs {
+  const DriverHomeArgs({required this.startTripId});
+
+  final String startTripId;
 }
 
 class _DriverHomeScreenState extends State<DriverHomeScreen> {
@@ -105,6 +128,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       ];
       if (!mounted) return;
       setState(() => _trips = trips);
+      unawaited(_loadFares(trips));
+      _offerRequestedStart(trips);
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.type == ApiErrorType.unauthorized) {
@@ -115,6 +140,77 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// Fare of each route (by route id); missing while loading or unknown.
+  final Map<String, RouteFare?> _fares = {};
+
+  /// Timetable of each route of the driver's trips (by route id): both
+  /// directions with their weekly departures.
+  final Map<String, List<(RoutePattern, List<RouteSchedule>)>> _timetables = {};
+
+  /// Fare and timetable of each route of [trips], once per route. Best
+  /// effort: without them the screen just does not show them.
+  Future<void> _loadFares(List<DriverTrip> trips) async {
+    final routeIds = {for (final trip in trips) ?trip.plannedPattern?.routeId}
+        .where((id) => id.isNotEmpty && !_fares.containsKey(id));
+    // Every route, and its fare and timetable, at the same time (each
+    // Dashboard request takes seconds: in a row they added up).
+    await Future.wait([
+      for (final routeId in routeIds) ...[
+        _loadFare(routeId),
+        _loadTimetable(routeId),
+      ],
+    ]);
+  }
+
+  Future<void> _loadFare(String routeId) async {
+    try {
+      final fares = await _operations.routeFares(routeId);
+      if (!mounted) return;
+      setState(() => _fares[routeId] = fareOn(fares, widget.clock()));
+    } on ApiException catch (_) {
+      // No fare on that card.
+    }
+  }
+
+  Future<void> _loadTimetable(String routeId) async {
+    try {
+      final patterns = await _operations.routePatterns(routeId);
+      final schedules = await Future.wait([
+        for (final pattern in patterns)
+          _operations.patternSchedules(pattern.id),
+      ]);
+      if (!mounted) return;
+      final timetable = [
+        for (var i = 0; i < patterns.length; i++) (patterns[i], schedules[i]),
+      ];
+      if (timetable.any((entry) => entry.$2.isNotEmpty)) {
+        setState(() => _timetables[routeId] = timetable);
+      }
+    } on ApiException catch (_) {
+      // No timetable for that route.
+    }
+  }
+
+  /// [DriverHomeScreen.startTripId] was not offered yet.
+  bool _startOffered = false;
+
+  /// Opens the start confirmation of [DriverHomeScreen.startTripId] when it
+  /// is in [trips], still scheduled and no other trip is running.
+  void _offerRequestedStart(List<DriverTrip> trips) {
+    final id = widget.startTripId;
+    if (id == null || _startOffered) return;
+    _startOffered = true;
+    final trip = trips.where((trip) => trip.id == id).firstOrNull;
+    if (trip == null ||
+        trip.status != TripStatus.scheduled ||
+        _activeTrip != null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_confirmAndStart(trip));
+    });
   }
 
   // --- Start a trip ------------------------------------------------------------
@@ -244,7 +340,26 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
   }
 
+  /// Signs out only when the Authentication Service confirms the token
+  /// expired; a `401` may just mean the Gateway was slow
+  /// ([confirmSessionExpired]). Otherwise the list stays and can be retried.
   Future<void> _onSessionExpired(ApiException e) async {
+    final expired = await widget.sessionCheck();
+    if (!mounted) return;
+    if (!expired) {
+      setState(
+        () => _error ??=
+            'No se pudo verificar la conexión con el servidor. Inténtalo de '
+            'nuevo.',
+      );
+      _showSnack(
+        'No se pudo verificar la conexión con el servidor.',
+        error: true,
+        actionLabel: 'Reintentar',
+        onAction: _load,
+      );
+      return;
+    }
     ActiveTripTracking.stop(); // the GPS would get 401 too
     // The token is already invalid: no need to call POST /auth/logout.
     await _session.clear();
@@ -346,9 +461,25 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       onRefresh: _load,
       child: ListView.separated(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-        itemCount: trips.length,
+        // The trips, then the timetable of each of their routes.
+        itemCount: trips.length + _timetables.length,
         separatorBuilder: (_, _) => const SizedBox(height: 12),
         itemBuilder: (_, i) {
+          if (i >= trips.length) {
+            final (routeId, timetable) = _timetables.entries
+                .map((e) => (e.key, e.value))
+                .elementAt(i - trips.length);
+            return _RouteTimetableCard(
+              routeId: routeId,
+              routeCode: trips
+                  .where((t) => t.plannedPattern?.routeId == routeId)
+                  .map((t) => t.routeCode)
+                  .nonNulls
+                  .firstOrNull,
+              timetable: timetable,
+              now: widget.clock(),
+            );
+          }
           final trip = trips[i];
           return _TripCard(
             trip: trip,
@@ -357,6 +488,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             enabled: _startingId == null,
             onStart: () => _confirmAndStart(trip),
             onContinue: () => _openTrip(trip),
+            fare: _fares[trip.plannedPattern?.routeId],
           );
         },
       ),
@@ -376,6 +508,68 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 }
 
 // ---------------------------------------------------------------------------
+
+/// "Horario de hoy · PV-GUA" (collapsed): every departure of the day of both
+/// directions of the route, the next one highlighted — the whole route's
+/// timetable, not only the driver's trips.
+class _RouteTimetableCard extends StatelessWidget {
+  const _RouteTimetableCard({
+    required this.routeId,
+    required this.routeCode,
+    required this.timetable,
+    required this.now,
+  });
+
+  final String routeId;
+  final String? routeCode;
+  final List<(RoutePattern, List<RouteSchedule>)> timetable;
+  final DateTime now;
+
+  @override
+  Widget build(BuildContext context) {
+    // Material (not a colored Container) so the tile's tap shows.
+    return Material(
+      key: Key('route-timetable-$routeId'),
+      color: SmartBusColors.grisClaro,
+      borderRadius: BorderRadius.circular(16),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        // No divider lines around the expansion tile.
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          leading: const Icon(
+            Icons.schedule,
+            color: SmartBusColors.azulPrincipal,
+          ),
+          title: Text(
+            routeCode == null
+                ? 'Horario de hoy'
+                : 'Horario de hoy · $routeCode',
+          ),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          expandedCrossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final (pattern, weekly) in timetable)
+              if (weekly.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.only(top: 8, bottom: 6),
+                  child: Text(
+                    pattern.label,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                DeparturesToday(
+                  departures: departuresOn(weekly, now),
+                  now: now,
+                  color: SmartBusColors.azulPrincipal,
+                ),
+              ],
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 /// What a trip card offers.
 enum _TripAction {
@@ -400,10 +594,14 @@ class _TripCard extends StatelessWidget {
     required this.enabled,
     required this.onStart,
     required this.onContinue,
+    this.fare,
   });
 
   final DriverTrip trip;
   final _TripAction action;
+
+  /// The route's fare today, when known.
+  final RouteFare? fare;
 
   /// Its start request is running.
   final bool starting;
@@ -462,6 +660,14 @@ class _TripCard extends StatelessWidget {
                   ? 'Salida ${formatHour(departure)}'
                   : 'Salida ${formatHour(departure)} · '
                         'Llegada ${formatHour(arrival)}',
+              style: secondary,
+            ),
+          ],
+          if (fare case final fare?) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Tarifa ${fare.label}',
+              key: Key('trip-fare-${trip.id}'),
               style: secondary,
             ),
           ],

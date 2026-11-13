@@ -4,6 +4,42 @@ import '../../../core/config/map_config.dart';
 import '../../../core/location/location_service.dart';
 import '../../../core/theme.dart';
 
+/// Text of the note shown when the Dashboard has no `route_geometry` for the
+/// pattern: the line drawn only joins the stops in order.
+const approximateRouteText = 'Ruta aproximada: une las paradas en orden.';
+
+/// Small note over the map: "Ruta aproximada" (no line from the Dashboard).
+/// Used on the driver's route and the passenger's live tracking.
+class ApproximateRouteNote extends StatelessWidget {
+  const ApproximateRouteNote({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('approximate-route-note'),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: SmartBusColors.blanco.withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6)],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.info_outline, size: 16, color: Colors.grey.shade700),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              approximateRouteText,
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade800),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Colors of the floating elements over the map.
 ///
 /// This is the SmartBus map **design**, not a dark mode: it does not change with

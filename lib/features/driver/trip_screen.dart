@@ -11,11 +11,14 @@ import '../../widgets/driver_bottom_nav.dart';
 import '../../widgets/smartbus_header.dart';
 import '../operations/models/operations_models.dart';
 import '../operations/services/operations_service.dart';
+import '../passenger/map/map_overlay.dart' show ApproximateRouteNote;
 import '../passenger/map/passenger_map.dart';
 import '../trip_tracking/models/trip_tracking.dart';
 import '../trip_tracking/services/active_trip_tracking.dart';
 import '../trip_tracking/services/trip_location_sender.dart';
 import '../operations/services/next_stop_tracker.dart';
+import '../auth/services/session_check.dart';
+import 'driver_home_screen.dart' show DriverHomeArgs;
 
 /// Shown when the Gateway answers 401.
 const sessionExpiredMessage = 'Tu sesión expiró. Inicia sesión nuevamente.';
@@ -62,7 +65,11 @@ class TripScreen extends StatefulWidget {
     this.sender,
     this.sessionStore,
     this.mapBuilder = buildMapLibrePassengerMap,
+    this.sessionCheck = confirmSessionExpired,
   });
+
+  /// Confirms a `401` with the Authentication Service before signing out.
+  final SessionExpiryCheck sessionCheck;
 
   /// The trip picked on the home tab; `null` = look for the one in progress.
   final DriverTrip? trip;
@@ -94,6 +101,7 @@ class _TripScreenState extends State<TripScreen> {
       widget.operations ?? OperationsService();
   late final SecureSessionStore _session =
       widget.sessionStore ?? SecureSessionStore();
+  SessionExpiryCheck get _sessionCheck => widget.sessionCheck;
   Timer? _ticker; // rebuilds every second so "hace Ns" stays fresh
 
   /// The session expired: already on the way to Login.
@@ -174,26 +182,46 @@ class _TripScreenState extends State<TripScreen> {
 
   // --- Trip and route ----------------------------------------------------------
 
-  /// Uses [trip] and its planned route; asks the Dashboard for the pattern
-  /// when the trip carries none.
+  /// Uses [trip] and its planned route. Asks the Dashboard for the current
+  /// pattern when the trip carries no route, or carries stops without a line
+  /// (planned before "Calculate Route" was done in the Dashboard).
   void _setTrip(DriverTrip? trip) {
     _trip = trip;
     final planned = trip?.plannedPattern;
     if (planned != null) {
-      _useRoute(planned);
-    } else if (trip?.routePatternId case final String patternId
-        when _route == null && trip!.status == TripStatus.inProgress) {
+      // Keep a line already taken from the current pattern.
+      final line = _route?.hasGeometry ?? false ? _route!.geometry : null;
+      _useRoute(
+        !planned.hasGeometry && line != null
+            ? planned.withGeometry(line)
+            : planned,
+      );
+    }
+    if (trip?.routePatternId case final String patternId
+        when !(_route?.hasGeometry ?? false) &&
+            !_routeFetched &&
+            trip!.status == TripStatus.inProgress) {
+      _routeFetched = true;
       unawaited(_fetchRoute(patternId));
     }
   }
+
+  /// The current pattern was already asked for (once per screen).
+  bool _routeFetched = false;
 
   Future<void> _fetchRoute(String patternId) async {
     try {
       final pattern = await _operations.routePattern(patternId);
       if (!mounted) return;
-      setState(() => _useRoute(pattern));
+      final planned = _trip?.plannedPattern;
+      if (planned == null) {
+        setState(() => _useRoute(pattern));
+      } else if (pattern.hasGeometry) {
+        // The trip's own stops and times, with the Dashboard's line.
+        setState(() => _useRoute(planned.withGeometry(pattern.geometry)));
+      }
     } on Exception catch (_) {
-      // No route: the map still shows the bus.
+      // No route (or no line): the map keeps what it has.
     }
   }
 
@@ -301,10 +329,23 @@ class _TripScreenState extends State<TripScreen> {
 
   // --- Session -----------------------------------------------------------------
 
-  /// Stops the GPS, clears the session and goes to Login (only once).
+  /// Stops the GPS, clears the session and goes to Login (only once) — but
+  /// only when the Authentication Service confirms the token expired: a `401`
+  /// from the GPS service or the Dashboard may just mean the Gateway was slow
+  /// (see [confirmSessionExpired]). Otherwise the trip goes on.
   Future<void> _onSessionExpired() async {
     if (_signingOut || !mounted) return;
     _signingOut = true;
+    final expired = await _sessionCheck();
+    if (!mounted) return;
+    if (!expired) {
+      _signingOut = false;
+      _showError(
+        'No se pudo verificar la conexión con el servidor. Inténtalo de '
+        'nuevo.',
+      );
+      return;
+    }
     _sender.stop();
     // The token is already invalid: no need to call POST /auth/logout.
     await _session.clear();
@@ -376,6 +417,12 @@ class _TripScreenState extends State<TripScreen> {
   /// `POST ops/trips/{id}/complete`. The GPS keeps sending until the
   /// Dashboard answers: it only stops once the trip is no longer running
   /// (completed, or it turns out it was cancelled / is not the driver's).
+  /// The map widget, built once (see `_routeView`).
+  Widget? _mapWidget;
+
+  /// Trip whose end position was already sent ([TripLocationSender.sendFinal]).
+  String? _finalSentFor;
+
   Future<void> _complete() async {
     final trip = _trip;
     if (trip == null || _busy || !mounted) return;
@@ -384,11 +431,20 @@ class _TripScreenState extends State<TripScreen> {
       _tripError = null;
     });
     try {
+      // The end position, stored by the GPS service; it must arrive while
+      // the trip is still in progress (best effort, never blocks finishing).
+      // Once per trip, also when "Reintentar" calls this again.
+      if (_finalSentFor != trip.id &&
+          _sender.snapshot.value.tripId == trip.id) {
+        _finalSentFor = trip.id;
+        await _sender.sendFinal();
+      }
       // 200 also when it was already completed (e.g. from another device).
       final done = await _operations.completeTrip(trip.id);
       if (!mounted) return;
       if (done.status != TripStatus.inProgress) _sender.stop();
       setState(() => _trip = done.withPlannedPattern(trip.plannedPattern));
+      if (done.status == TripStatus.completed) unawaited(_loadNextTrip());
     } on ApiException catch (e) {
       if (!mounted) return;
       switch (e.type) {
@@ -411,6 +467,40 @@ class _TripScreenState extends State<TripScreen> {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  /// The driver's next trip of the day (e.g. the way back), offered on the
+  /// "Recorrido finalizado" screen. `null` while unknown or when there is none.
+  DriverTrip? _nextTrip;
+
+  /// Today's earliest trip still scheduled. Best effort: without it the
+  /// screen only offers "Volver a Inicio".
+  Future<void> _loadNextTrip() async {
+    try {
+      final scheduled = await _operations.driverTrips(
+        serviceDate: DateTime.now(),
+        status: TripStatus.scheduled,
+      );
+      if (!mounted) return;
+      final next = scheduled
+          .where((trip) => trip.status == TripStatus.scheduled)
+          .toList();
+      next.sort(
+        (a, b) => (a.scheduledDepartureAt ?? DateTime(9999)).compareTo(
+          b.scheduledDepartureAt ?? DateTime(9999),
+        ),
+      );
+      setState(() => _nextTrip = next.firstOrNull);
+    } on ApiException catch (_) {
+      // Keep "Volver a Inicio" only.
+    }
+  }
+
+  /// Home, which asks to confirm and starts [next] (location check included).
+  void _startNext(DriverTrip next) => Navigator.pushReplacementNamed(
+    context,
+    '/driver/home',
+    arguments: DriverHomeArgs(startTripId: next.id),
+  );
 
   /// After a 409: the trip's real status. If it is no longer running
   /// (cancelled, completed, scheduled), the GPS stops and the screen says so.
@@ -508,7 +598,9 @@ class _TripScreenState extends State<TripScreen> {
             key: const Key('trip-map'),
             children: [
               Positioned.fill(
-                child: widget.mapBuilder(
+                // Built once: the panel redraws every second ("hace N s"),
+                // the same instance makes Flutter skip the map.
+                child: _mapWidget ??= widget.mapBuilder(
                   context,
                   PassengerMapOptions(
                     mode: MapMode.streets,
@@ -555,6 +647,9 @@ class _TripScreenState extends State<TripScreen> {
                         'Este viaje no tiene la ruta dibujada; se muestra '
                         'solo la posición del bus.',
                       ),
+                    ] else if (!_route!.hasGeometry) ...[
+                      const SizedBox(height: 8),
+                      const ApproximateRouteNote(),
                     ],
                   ],
                 ),
@@ -619,6 +714,8 @@ class _TripScreenState extends State<TripScreen> {
       trip: trip,
       sentCount: _sender.snapshot.value.sentCount,
       onHome: _goHome,
+      nextTrip: trip.status == TripStatus.completed ? _nextTrip : null,
+      onStartNext: _startNext,
     );
   }
 }
@@ -1208,20 +1305,42 @@ class _FinishedView extends StatelessWidget {
     required this.trip,
     required this.sentCount,
     required this.onHome,
+    required this.nextTrip,
+    required this.onStartNext,
   });
 
   final DriverTrip trip;
   final int sentCount;
   final VoidCallback onHome;
 
+  /// Today's next scheduled trip, if any.
+  final DriverTrip? nextTrip;
+  final void Function(DriverTrip) onStartNext;
+
+  /// Same route, other direction (ida ↔ vuelta, all day long).
+  bool _isOtherDirection(DriverTrip next) =>
+      next.routeCode != null &&
+      next.routeCode == trip.routeCode &&
+      next.routePatternId != trip.routePatternId;
+
   @override
   Widget build(BuildContext context) {
     final cancelled = trip.status == TripStatus.cancelled;
     // The Dashboard's actual_arrival_at, never the phone clock.
     final arrival = cancelled ? null : trip.actualArrivalAt;
+    // Scrolls on a small phone (with the next trip's card).
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: _content(context, cancelled, arrival),
+      ),
+    );
+  }
+
+  Widget _content(BuildContext context, bool cancelled, DateTime? arrival) {
     return Column(
       key: const Key('trip-finished'),
-      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
       children: [
         Icon(
           cancelled ? Icons.cancel_outlined : Icons.check_circle_outline,
@@ -1251,8 +1370,81 @@ class _FinishedView extends StatelessWidget {
           style: TextStyle(color: Colors.grey.shade600),
         ),
         const SizedBox(height: 24),
-        FilledButton(onPressed: onHome, child: const Text('Volver a Inicio')),
+        if (nextTrip case final next?) ...[
+          _NextTripCard(
+            trip: next,
+            otherDirection: _isOtherDirection(next),
+            onStart: () => onStartNext(next),
+          ),
+          const SizedBox(height: 12),
+          TextButton(onPressed: onHome, child: const Text('Volver a Inicio')),
+        ] else
+          FilledButton(onPressed: onHome, child: const Text('Volver a Inicio')),
       ],
+    );
+  }
+}
+
+/// "Siguiente viaje · sentido contrario", its route and departure, and
+/// "Iniciar viaje hacia Guápiles". Works both ways: on a route driven ida y
+/// vuelta all day, the next one alternates direction every time.
+class _NextTripCard extends StatelessWidget {
+  const _NextTripCard({
+    required this.trip,
+    required this.otherDirection,
+    required this.onStart,
+  });
+
+  final DriverTrip trip;
+
+  /// Same route, the other direction.
+  final bool otherDirection;
+  final VoidCallback onStart;
+
+  @override
+  Widget build(BuildContext context) {
+    final departure = trip.scheduledDepartureAt;
+    return Container(
+      key: const Key('next-trip'),
+      margin: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: SmartBusColors.grisClaro,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            otherDirection
+                ? 'Siguiente viaje · sentido contrario'
+                : 'Siguiente viaje',
+            style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            trip.title,
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          if (departure != null)
+            Text(
+              'Sale a las ${formatHour(departure)}',
+              key: const Key('next-trip-departure'),
+            ),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            key: const Key('start-next-trip'),
+            onPressed: onStart,
+            icon: const Icon(Icons.play_arrow),
+            label: Text(
+              trip.headsign != null
+                  ? 'Iniciar viaje hacia ${trip.headsign}'
+                  : 'Iniciar siguiente viaje',
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

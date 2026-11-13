@@ -364,7 +364,7 @@ class SelectedRoutePanel extends StatelessWidget {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    'Trazado aproximado: une las paradas en orden.',
+                    approximateRouteText,
                     style: TextStyle(color: colors.muted, fontSize: 12),
                   ),
                 ),
