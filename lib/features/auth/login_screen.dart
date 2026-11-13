@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/theme.dart';
 import '../../widgets/login_form.dart';
+import 'forgot_password_screen.dart';
 import 'role_home.dart';
 import 'services/auth_service.dart';
 import 'verify_email_screen.dart';
@@ -27,6 +28,36 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   late final AuthService _authService = widget.authService ?? AuthService();
+
+  /// Email to prefill after a password reset. Changing it rebuilds the form
+  /// (its key) so the new value is shown.
+  String? _prefillEmail;
+
+  // ============================================================
+  // FORGOT PASSWORD
+  // ============================================================
+
+  /// Opens "Recuperar contraseña" with the email typed so far. When the
+  /// password was changed, shows the backend message and prefills the email
+  /// (the password field stays empty).
+  Future<void> _forgotPassword(BuildContext context, String email) async {
+    final result = await Navigator.pushNamed(
+      context,
+      '/forgot-password',
+      arguments: email,
+    );
+    if (result is! PasswordResetDone || !context.mounted) return;
+    setState(() => _prefillEmail = result.email);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(result.message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: SmartBusColors.completado,
+        ),
+      );
+  }
 
   // ============================================================
   // LOGIN
@@ -142,8 +173,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: SingleChildScrollView(
                   physics: const BouncingScrollPhysics(),
                   child: LoginForm(
+                    key: ValueKey(_prefillEmail),
+                    initialEmail: _prefillEmail,
                     onLogin: (email, password) =>
                         _handleLogin(context, email, password),
+                    onForgotPassword: (email) =>
+                        _forgotPassword(context, email),
                     onRegisterPassenger: () =>
                         Navigator.pushNamed(context, '/register'),
                   ),

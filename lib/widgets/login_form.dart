@@ -21,7 +21,9 @@ class LoginForm extends StatefulWidget {
 
   /// Called with (email, password) already validated as non-empty.
   final Future<void> Function(String email, String password) onLogin;
-  final VoidCallback? onForgotPassword;
+
+  /// "¿Olvidaste tu contraseña?", with the email typed so far (trimmed).
+  final ValueChanged<String>? onForgotPassword;
   final VoidCallback? onRegisterPassenger;
 
   /// Pre-fill the fields (e.g. test credentials). Can be edited or cleared
@@ -88,6 +90,15 @@ class _LoginFormState extends State<LoginForm> {
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
+  }
+
+  void _forgotPassword() {
+    final onForgot = widget.onForgotPassword;
+    if (onForgot == null) {
+      _showMessage('Recuperación de contraseña');
+      return;
+    }
+    onForgot(emailController.text.trim());
   }
 
   void _showMessage(String message) {
@@ -204,9 +215,8 @@ class _LoginFormState extends State<LoginForm> {
                   child: Align(
                     alignment: Alignment.centerRight,
                     child: GestureDetector(
-                      onTap:
-                          widget.onForgotPassword ??
-                          () => _showMessage('Recuperación de contraseña'),
+                      key: const Key('login_forgot_password'),
+                      onTap: isLoading ? null : _forgotPassword,
                       child: Text(
                         '¿Olvidaste tu contraseña?',
                         textAlign: TextAlign.end,
