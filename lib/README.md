@@ -914,6 +914,31 @@ directos** (sin transbordos) desde la ubicación del pasajero:
   o abrir "Paradas cercanas" quitan el destino.
 - Sin bus directo: "No encontramos un bus directo que te lleve ahí…".
 
+### Rutas que pasan cerca (por la carretera, sin parada)
+
+El catálogo tiene pocas paradas (casi solo terminales) y en zonas rurales el
+bus para donde le hacen la seña. Por eso la app también busca rutas cuya
+**línea** (`route_geometry`, la que se dibuja) pasa cerca, aunque no haya
+parada (`services/route_proximity.dart`, en el teléfono, sin peticiones):
+
+- `closestOnPath`: punto de la línea más cercano a un lugar, su distancia y
+  cuántos metros lleva desde el inicio del recorrido.
+- **Paradas cercanas** → sección **"Rutas que pasan cerca de ti"**
+  (`routesPassingNear`, ≤ 1 km de la línea): "PV-GUA · Hacia Guápiles — Pasa
+  a 220 m de ti". Tocarla dibuja el sentido y lleva el mapa al punto de la
+  carretera más cercano. Si no hay paradas pero sí rutas: "No hay paradas
+  oficiales…, pero estas rutas pasan cerca: puedes esperar el bus en la
+  carretera."
+- **¿Cómo llego?** → sección **"El bus pasa cerca"** (`routesPassingBetween`):
+  la línea pasa a ≤ 1 km del pasajero **y**, más adelante en el sentido de
+  viaje, del destino. Muestra dónde esperar ("Camina 220 m hasta la
+  carretera"), cuándo pasaría ("Pasa ~11:10 · en 55 min": salida de la
+  terminal + minutos hasta ese punto, por distancia con
+  `driving_duration_seconds`), el viaje y la caminata final. **Horas
+  aproximadas**. No repite un sentido que el Dashboard ya ofrece por paradas.
+- Sin `route_geometry` un sentido no se usa (la línea recta entre terminales
+  no es la carretera).
+
 ### Tests
 
 | Qué | Archivo |
@@ -922,6 +947,8 @@ directos** (sin transbordos) desde la ubicación del pasajero:
 | Paradas cercanas en el inicio: mapa + hoja, parada compartida, tocar parada / punto, abrir una ruta, cerrar y atrás, nada cerca, sin ubicación | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Paradas cercanas*) |
 | Horario y tarifa: tarifa en la lista, tarifa + salidas de hoy + semana en la ruta elegida, otro sentido, sin más salidas / día sin salidas, errores | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Horario y tarifa*) |
 | Salidas por parada y "¿Cómo llego?": JSON → modelo (horas locales, tarifa), agrupación de opciones, textos ("en 1 h 20 min"), parámetros de las peticiones, sin caché | `test/features/operations/trip_planning_test.dart` |
+| Rutas que pasan cerca: punto más cercano de la línea, distancia y avance, radio, sentido de viaje, sin trazo, minutos y próxima pasada | `test/features/operations/route_proximity_test.dart` |
+| "Rutas que pasan cerca de ti" y "El bus pasa cerca" en el inicio: lista, abrir donde pasa, pasos y hora aprox., destino detrás, sin repetir lo del Dashboard | `test/features/passenger/passenger_home_screen_test.dart` (grupos *Paradas cercanas* y *El bus pasa cerca*) |
 | Próximas salidas en el inicio: lista, tocar una salida, vacío, reutilizar 1 min, error y reintentar | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Próximas salidas de una parada*) |
 | ¿Cómo llego?: instrucciones, pulsación larga, pasos y tarifa, abrir y cerrar una opción, vacío / error, destino nuevo, cerrar, sin ubicación | `test/features/passenger/passenger_home_screen_test.dart` (grupo *¿Cómo llego?*) |
 | Filtro: dentro, fuera, justo en el radio, orden, lista vacía, varios sentidos, paradas sin coordenadas | `test/features/operations/nearby_routes_filter_test.dart` |
