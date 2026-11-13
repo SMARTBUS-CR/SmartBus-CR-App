@@ -126,6 +126,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   RoutePattern? _selectedPattern;
   PatternStop? _tappedStop;
 
+  /// Today's fare of each route by id (`null` = it has none). Best effort:
+  /// a route whose fare failed to load just shows no price.
+  final Map<String, RouteFare?> _fares = {};
+
+  /// Weekly departures of each direction by pattern id; a failed request
+  /// leaves it out (the panel says the timetable is unavailable).
+  final Map<String, List<RouteSchedule>> _schedules = {};
+
+  /// Directions whose timetable is being requested.
+  final Set<String> _schedulesLoading = {};
+
   /// Buses running on [_selectedPattern] (`null` without a selection).
   RouteLiveBuses? _liveBuses;
 
@@ -280,6 +291,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       final routes = await _operations.routesWithPatterns();
       if (!mounted) return;
       setState(() => _routes = routes);
+      unawaited(_loadFares(routes));
       if (_nearbyMode) {
         _updateNearbyStops();
         _drawNearbyStops(fit: true);
@@ -288,6 +300,37 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       if (mounted) setState(() => _routesError = e.message);
     } finally {
       if (mounted) setState(() => _routesLoading = false);
+    }
+  }
+
+  /// The fare of every route of the list, all at the same time (each request
+  /// takes a moment; the service caches them).
+  Future<void> _loadFares(List<TransitRoute> routes) async {
+    Future<void> fareOf(TransitRoute route) async {
+      if (_fares.containsKey(route.id)) return;
+      try {
+        final fares = await _operations.routeFares(route.id);
+        if (mounted) {
+          setState(() => _fares[route.id] = fareOn(fares, widget.clock()));
+        }
+      } on ApiException catch (_) {}
+    }
+
+    await Future.wait([for (final route in routes) fareOf(route)]);
+  }
+
+  /// The weekly departures of [pattern], once.
+  Future<void> _loadSchedules(RoutePattern pattern) async {
+    final id = pattern.id;
+    if (_schedules.containsKey(id) || _schedulesLoading.contains(id)) return;
+    setState(() => _schedulesLoading.add(id));
+    try {
+      final schedules = await _operations.patternSchedules(id);
+      if (mounted) setState(() => _schedules[id] = schedules);
+    } on ApiException catch (_) {
+      // Shown as "No se pudo cargar el horario."; retried on the next visit.
+    } finally {
+      if (mounted) setState(() => _schedulesLoading.remove(id));
     }
   }
 
@@ -347,6 +390,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           (route.patterns.isEmpty ? null : route.patterns.first);
       _tappedStop = null;
     });
+    // Usually loaded with the list; not for a route that came from elsewhere.
+    unawaited(_loadFares([route]));
     _drawSelection();
     _collapseSheet(_sheetRoute);
   }
@@ -564,6 +609,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       return;
     }
     _startLiveBuses(pattern);
+    unawaited(_loadSchedules(pattern));
     if (map == null) return;
     map.showRoute(pattern);
     _drawBuses();
@@ -685,6 +731,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           now: widget.clock(),
           onOpenBus: _openLiveTracking,
           onStopSelected: _onStopSelected,
+          fare: _fares[route.id],
+          schedules: _schedules[_selectedPattern?.id],
+          timetableLoading: _schedulesLoading.contains(_selectedPattern?.id),
         ),
       ];
     }
@@ -695,6 +744,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         colors: colors,
         mode: _listMode,
         entries: _entries(),
+        fares: _fares,
         loading: _routesLoading,
         error: _routesError,
         canShowNearby: _hasLocation,
