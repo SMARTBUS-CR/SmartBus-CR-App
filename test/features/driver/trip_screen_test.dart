@@ -110,6 +110,9 @@ class _FakeMap implements PassengerMapHandle {
     String? selectedId,
   }) async {}
 
+  @override
+  Future<void> showDestination(GeoPoint? point) async {}
+
   PassengerMapBuilder get builder =>
       (context, options) =>
           _FakeMapWidget(onReady: () => options.onReady(this));
