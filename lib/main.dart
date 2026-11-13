@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'core/theme.dart';
 import 'features/auth/splash_screen.dart';
+import 'features/auth/forgot_password_screen.dart';
 import 'features/auth/login_screen.dart';
 import 'features/auth/register_screen.dart';
 import 'features/auth/verify_email_screen.dart';
@@ -73,6 +74,12 @@ class SmartBusApp extends StatelessWidget {
           final args = settings.arguments;
           if (args is! TransitRoute) return null;
           builder = (_) => RouteBusesScreen(route: args);
+        } else if (settings.name == '/forgot-password') {
+          // Optional: the email typed on the login screen.
+          final email = settings.arguments;
+          builder = (_) => ForgotPasswordScreen(
+            initialEmail: email is String ? email : null,
+          );
         } else if (settings.name == '/verify-email') {
           final args = settings.arguments;
           // Needs the email to verify; without it there is nothing to show.
