@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/theme.dart';
 import '../../operations/models/operations_models.dart';
+import '../../operations/models/route_timetable.dart';
 import '../../operations/services/nearby_routes_filter.dart';
 import '../../trip_tracking/models/trip_tracking.dart';
 import '../../trip_tracking/services/live_trip_tracker.dart';
@@ -43,7 +44,11 @@ class RoutesSection extends StatelessWidget {
     required this.onSelect,
     required this.onShowAll,
     required this.onShowNearby,
+    this.fares = const {},
   });
+
+  /// Today's fare of each route by id (missing while loading or without one).
+  final Map<String, RouteFare?> fares;
 
   final MapOverlayColors colors;
   final RouteListMode mode;
@@ -145,6 +150,7 @@ class RoutesSection extends StatelessWidget {
             RouteListTile(
               entry: entry,
               colors: colors,
+              fare: fares[entry.route.id],
               onTap: () => onSelect(entry),
             ),
           if (nearby)
@@ -163,18 +169,22 @@ class RoutesSection extends StatelessWidget {
   }
 }
 
-/// A route of the list: code badge, name, direction and closest stop.
+/// A route of the list: code badge, name, direction, closest stop and fare.
 class RouteListTile extends StatelessWidget {
   const RouteListTile({
     super.key,
     required this.entry,
     required this.colors,
     required this.onTap,
+    this.fare,
   });
 
   final RouteListEntry entry;
   final MapOverlayColors colors;
   final VoidCallback onTap;
+
+  /// Today's fare; `null` while loading or when the route has none.
+  final RouteFare? fare;
 
   @override
   Widget build(BuildContext context) {
@@ -209,7 +219,42 @@ class RouteListTile extends StatelessWidget {
               style: TextStyle(color: colors.muted, fontSize: 13),
             ),
       isThreeLine: lines.length > 1,
-      trailing: Icon(Icons.chevron_right, color: colors.muted),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (fare case final fare?)
+            FareLabel(key: Key('route-fare-${route.id}'), fare: fare),
+          Icon(Icons.chevron_right, color: colors.muted),
+        ],
+      ),
+    );
+  }
+}
+
+/// White pill with a fare (readable on the green sheet): "₡1.570", or
+/// "Tarifa ₡1.570" with [prefix].
+class FareLabel extends StatelessWidget {
+  const FareLabel({super.key, required this.fare, this.prefix = false});
+
+  final RouteFare fare;
+  final bool prefix;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: SmartBusColors.blanco,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        prefix ? 'Tarifa ${fare.label}' : fare.label,
+        style: const TextStyle(
+          color: SmartBusColors.verdePasajero,
+          fontWeight: FontWeight.w600,
+          fontSize: 13,
+        ),
+      ),
     );
   }
 }
@@ -258,7 +303,19 @@ class SelectedRoutePanel extends StatelessWidget {
     this.tappedStop,
     this.liveBuses,
     this.favorites,
+    this.fare,
+    this.schedules,
+    this.timetableLoading = false,
   });
+
+  /// Today's fare of the route; `null` while loading or without one.
+  final RouteFare? fare;
+
+  /// Weekly departures of [pattern]; `null` while not loaded.
+  final List<RouteSchedule>? schedules;
+
+  /// The timetable of [pattern] is being requested.
+  final bool timetableLoading;
 
   /// For the favorite star; defaults to [FavoritesController.shared].
   final FavoritesController? favorites;
@@ -350,10 +407,22 @@ class SelectedRoutePanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          Text(
-            _summary(pattern),
-            key: const Key('route-summary'),
-            style: TextStyle(color: colors.muted, fontSize: 13),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _summary(pattern),
+                  key: const Key('route-summary'),
+                  style: TextStyle(color: colors.muted, fontSize: 13),
+                ),
+              ),
+              if (fare case final fare?)
+                FareLabel(
+                  key: const Key('selected-route-fare'),
+                  fare: fare,
+                  prefix: true,
+                ),
+            ],
           ),
           if (!pattern.hasGeometry && pattern.locatedStops.length >= 2) ...[
             const SizedBox(height: 4),
@@ -375,6 +444,14 @@ class SelectedRoutePanel extends StatelessWidget {
             const SizedBox(height: 12),
             _StopDetails(colors: colors, pattern: pattern, stop: stop),
           ],
+          const SizedBox(height: 16),
+          ScheduleSection(
+            key: ValueKey('schedule-${pattern.id}'),
+            colors: colors,
+            schedules: schedules,
+            loading: timetableLoading,
+            now: now,
+          ),
           if (liveBuses case final live?) ...[
             const SizedBox(height: 16),
             LiveBusesSection(
@@ -406,6 +483,237 @@ class SelectedRoutePanel extends StatelessWidget {
       if (distance != null) formatDistance(distance),
       if (duration != null) '~${(duration / 60).round()} min',
     ].join(' · ');
+  }
+}
+
+/// "Horario" of the selected direction: the next departure, today's
+/// departures (the ones already gone crossed out) and, on demand, the next
+/// six days.
+class ScheduleSection extends StatefulWidget {
+  const ScheduleSection({
+    super.key,
+    required this.colors,
+    required this.schedules,
+    required this.loading,
+    required this.now,
+  });
+
+  final MapOverlayColors colors;
+
+  /// Weekly departures; `null` while loading or when they could not be loaded.
+  final List<RouteSchedule>? schedules;
+  final bool loading;
+  final DateTime now;
+
+  @override
+  State<ScheduleSection> createState() => _ScheduleSectionState();
+}
+
+class _ScheduleSectionState extends State<ScheduleSection> {
+  bool _showWeek = false;
+
+  static const _weekdays = [
+    'Lunes',
+    'Martes',
+    'Miércoles',
+    'Jueves',
+    'Viernes',
+    'Sábado',
+    'Domingo',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = widget.colors;
+    final weekly = widget.schedules;
+    final muted = TextStyle(color: colors.muted, fontSize: 13);
+
+    return Column(
+      key: const Key('schedule-section'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.schedule, size: 20, color: colors.accent),
+            const SizedBox(width: 8),
+            Text(
+              'Horario',
+              style: TextStyle(
+                color: colors.onSurface,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (widget.loading) ...[
+              const SizedBox(width: 10),
+              SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: colors.accent,
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 6),
+        if (weekly == null && !widget.loading)
+          Text(
+            'No se pudo cargar el horario.',
+            key: const Key('schedule-unavailable'),
+            style: muted,
+          )
+        else if (weekly != null && weekly.isEmpty)
+          Text(
+            'Este sentido no tiene horario publicado.',
+            key: const Key('schedule-empty'),
+            style: muted,
+          )
+        else if (weekly != null) ...[
+          ..._today(weekly, muted),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const Key('schedule-week-toggle'),
+              style: TextButton.styleFrom(
+                foregroundColor: colors.onSurface,
+                padding: EdgeInsets.zero,
+              ),
+              onPressed: () => setState(() => _showWeek = !_showWeek),
+              icon: Icon(_showWeek ? Icons.expand_less : Icons.expand_more),
+              label: Text(
+                _showWeek ? 'Ocultar la semana' : 'Ver horario de la semana',
+              ),
+            ),
+          ),
+          if (_showWeek) ..._week(weekly, muted),
+        ],
+      ],
+    );
+  }
+
+  /// "Próxima salida: 10:30" and today's departures as chips.
+  List<Widget> _today(List<RouteSchedule> weekly, TextStyle muted) {
+    final now = widget.now;
+    final today = departuresOn(weekly, now);
+    if (today.isEmpty) {
+      return [
+        Text(
+          'Hoy no hay salidas en este sentido.',
+          key: const Key('next-departure'),
+          style: muted,
+        ),
+      ];
+    }
+    final minutesNow = now.hour * 60 + now.minute;
+    final next = today.where((d) => d.minutesOfDay >= minutesNow).firstOrNull;
+    return [
+      Text(
+        next == null
+            ? 'Ya no hay más salidas hoy'
+            : 'Próxima salida: ${next.label}',
+        key: const Key('next-departure'),
+        style: TextStyle(
+          color: widget.colors.onSurface,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      const SizedBox(height: 6),
+      Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final departure in today)
+            _DepartureChip(
+              label: departure.label,
+              gone: departure.minutesOfDay < minutesNow,
+              next: identical(departure, next),
+            ),
+        ],
+      ),
+    ];
+  }
+
+  /// One line per day after today: "Lunes 16 · 05:30, 06:00…".
+  List<Widget> _week(List<RouteSchedule> weekly, TextStyle muted) {
+    final now = widget.now;
+    return [
+      for (var i = 1; i <= 6; i++)
+        Builder(
+          builder: (_) {
+            final day = DateTime(now.year, now.month, now.day + i);
+            final departures = departuresOn(weekly, day);
+            final name = i == 1
+                ? 'Mañana'
+                : '${_weekdays[day.weekday - 1]} ${day.day}';
+            return Padding(
+              key: Key('schedule-day-$i'),
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 104,
+                    child: Text(
+                      name,
+                      style: TextStyle(
+                        color: widget.colors.onSurface,
+                        fontWeight: FontWeight.w500,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      departures.isEmpty
+                          ? 'Sin salidas'
+                          : departures.map((d) => d.label).join(' · '),
+                      style: muted,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+    ];
+  }
+}
+
+class _DepartureChip extends StatelessWidget {
+  const _DepartureChip({
+    required this.label,
+    required this.gone,
+    required this.next,
+  });
+
+  final String label;
+  final bool gone;
+  final bool next;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: next
+            ? SmartBusColors.blanco
+            : SmartBusColors.blanco.withValues(alpha: gone ? 0.12 : 0.22),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: next ? FontWeight.bold : FontWeight.w500,
+          color: next
+              ? SmartBusColors.verdePasajero
+              : SmartBusColors.blanco.withValues(alpha: gone ? 0.55 : 1),
+          decoration: gone ? TextDecoration.lineThrough : null,
+          decorationColor: SmartBusColors.blanco,
+        ),
+      ),
+    );
   }
 }
 
