@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../../../core/network/api_exception.dart';
+import '../models/trip_arrival_estimate.dart';
 import '../models/trip_tracking.dart';
 import 'gps_location_service.dart';
 import 'trip_live_feed.dart';
@@ -36,6 +37,7 @@ class LiveTripState {
     this.position,
     this.positionSeenAt,
     this.realtime = false,
+    this.arrivals = const {},
     this.error,
   });
 
@@ -51,6 +53,9 @@ class LiveTripState {
 
   /// The real-time connection is up (positions arrive by themselves).
   final bool realtime;
+
+  /// Estimated arrival predictions keyed by stopId and occurrenceId.
+  final Map<String, TripArrivalEstimate> arrivals;
 
   /// Message of the last failed request, or `null`.
   final String? error;
@@ -69,6 +74,7 @@ class LiveTripState {
     BusPosition? position,
     DateTime? positionSeenAt,
     bool? realtime,
+    Map<String, TripArrivalEstimate>? arrivals,
     String? error,
     bool clearError = false,
   }) => LiveTripState(
@@ -77,6 +83,7 @@ class LiveTripState {
     position: position ?? this.position,
     positionSeenAt: positionSeenAt ?? this.positionSeenAt,
     realtime: realtime ?? this.realtime,
+    arrivals: arrivals ?? this.arrivals,
     error: clearError ? null : (error ?? this.error),
   );
 }
@@ -150,7 +157,12 @@ class LiveTripTracker {
     const LiveTripState(),
   );
 
+  /// Estimated arrival predictions, keyed by stopId and occurrenceId.
+  final ValueNotifier<Map<String, TripArrivalEstimate>> arrivals =
+      ValueNotifier(const {});
+
   StreamSubscription<BusLocationUpdate>? _locationSub;
+  StreamSubscription<Map<String, TripArrivalEstimate>>? _arrivalsSub;
   StreamSubscription<Object>? _rejectionSub;
   Timer? _pollTimer;
   DateTime? _lastRequestAt;
@@ -218,6 +230,7 @@ class LiveTripTracker {
   void dispose() {
     _stopFollowing();
     _disposed = true;
+    arrivals.dispose();
     state.dispose();
   }
 
@@ -229,6 +242,7 @@ class LiveTripTracker {
     final feed = this.feed;
     if (feed != null) {
       _locationSub = feed.locations.listen(_onLive);
+      _arrivalsSub = feed.arrivals.listen(_onArrivals);
       _rejectionSub = feed.rejections.listen((_) => unawaited(refresh()));
       feed.connected.addListener(_onConnection);
       _wasConnected = feed.connected.value;
@@ -257,6 +271,8 @@ class LiveTripTracker {
     _pollTimer = null;
     _locationSub?.cancel();
     _locationSub = null;
+    _arrivalsSub?.cancel();
+    _arrivalsSub = null;
     _rejectionSub?.cancel();
     _rejectionSub = null;
     final feed = this.feed;
@@ -302,6 +318,25 @@ class LiveTripTracker {
         clearError: true,
       ),
     );
+  }
+
+  void _onArrivals(Map<String, TripArrivalEstimate> estimates) {
+    if (_disposed) return;
+    arrivals.value = estimates;
+    _set(state.value.copyWith(arrivals: estimates));
+  }
+
+  /// Manually update or inject arrivals from an event payload or API response.
+  void updateArrivals(dynamic data) {
+    final parsed = parseArrivals(data);
+    _onArrivals(parsed);
+  }
+
+  /// Handles incoming events on `private-trip.{tripId}` such as 'TripArrivalsUpdated'.
+  void handleEvent(String eventName, dynamic data) {
+    if (eventName == 'TripArrivalsUpdated') {
+      updateArrivals(data);
+    }
   }
 
   void _apply(TripTracking tracking) {

@@ -9,6 +9,7 @@ import 'package:smartbus_drivers/features/operations/models/operations_models.da
 import 'package:smartbus_drivers/features/passenger/bus_tracking_screen.dart';
 import 'package:smartbus_drivers/features/passenger/map/passenger_map.dart';
 import 'package:smartbus_drivers/features/trip_tracking/models/gps_fix.dart';
+import 'package:smartbus_drivers/features/trip_tracking/models/trip_arrival_estimate.dart';
 import 'package:smartbus_drivers/features/trip_tracking/models/trip_tracking.dart';
 import 'package:smartbus_drivers/features/trip_tracking/services/gps_location_service.dart';
 import 'package:smartbus_drivers/features/trip_tracking/services/live_trip_tracker.dart';
@@ -118,10 +119,15 @@ class _FakeGps implements GpsLocationService {
 class _FakeFeed implements TripLiveFeed {
   final StreamController<BusLocationUpdate> _locations =
       StreamController.broadcast(sync: true);
+  final StreamController<Map<String, TripArrivalEstimate>> _arrivals =
+      StreamController.broadcast(sync: true);
   final ValueNotifier<bool> _connected = ValueNotifier(true);
 
   @override
   Stream<BusLocationUpdate> get locations => _locations.stream;
+
+  @override
+  Stream<Map<String, TripArrivalEstimate>> get arrivals => _arrivals.stream;
 
   @override
   ValueListenable<bool> get connected => _connected;
@@ -138,6 +144,8 @@ class _FakeFeed implements TripLiveFeed {
   void push(BusPosition position) => _locations.add(
     BusLocationUpdate(tripId: _tripId, busId: 'bus', position: position),
   );
+
+  void pushArrivals(dynamic data) => _arrivals.add(parseArrivals(data));
 }
 
 class _FakeLocation extends LocationService {
@@ -465,6 +473,97 @@ void main() {
       expect(map.route, isNull);
       expect(find.byKey(const Key('show-route-button')), findsNothing);
       expect(map.buses.last, isNotNull);
+    });
+
+    testWidgets('shows ETA badge when live arrival estimate is present for next stop', (
+      tester,
+    ) async {
+      final operations = withRoute();
+      await pump(
+        tester,
+        _FakeGps(_tracking(TripStatus.inProgress, position: _position())),
+        operations: operations,
+      );
+      await tester.pump();
+
+      // Next stop is "Centro" (stop-Centro).
+      feed.pushArrivals({
+        'arrivals': [
+          {
+            'stop_occurrence_id': 'occ-centro',
+            'stop_id': 'stop-Centro',
+            'stop_sequence': 2,
+            'eta_seconds': 180,
+            'method': 'ml',
+          },
+        ],
+      });
+      await tester.pump();
+
+      expect(find.byKey(const Key('next-stop-card')), findsOneWidget);
+      expect(find.byKey(const Key('next-stop-eta-badge')), findsOneWidget);
+      expect(find.text('Llegada en 3 min (En vivo)'), findsOneWidget);
+    });
+
+    testWidgets('shows itinerary ETA badge when estimate method is scheduled', (
+      tester,
+    ) async {
+      final operations = withRoute();
+      await pump(
+        tester,
+        _FakeGps(_tracking(TripStatus.inProgress, position: _position())),
+        operations: operations,
+      );
+      await tester.pump();
+
+      feed.pushArrivals({
+        'arrivals': [
+          {
+            'stop_occurrence_id': 'occ-centro',
+            'stop_id': 'stop-Centro',
+            'stop_sequence': 2,
+            'eta_seconds': 300,
+            'method': 'scheduled_reference',
+          },
+        ],
+      });
+      await tester.pump();
+
+      expect(find.byKey(const Key('next-stop-eta-badge')), findsOneWidget);
+      expect(
+        find.text('Llegada estimada en 5 min (Itinerario)'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('displays arrival estimate in stops modal', (tester) async {
+      final operations = withRoute();
+      await pump(
+        tester,
+        _FakeGps(_tracking(TripStatus.inProgress, position: _position())),
+        operations: operations,
+      );
+      await tester.pump();
+
+      feed.pushArrivals({
+        'arrivals': [
+          {
+            'stop_occurrence_id': 'occ-centro',
+            'stop_id': 'stop-Centro',
+            'stop_sequence': 2,
+            'eta_seconds': 180,
+            'method': 'ml',
+          },
+        ],
+      });
+      await tester.pump();
+
+      // Open the stops modal via "Ver paradas" button
+      await tester.tap(find.byKey(const Key('view-stops-action')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('stops-modal')), findsOneWidget);
+      expect(find.text('en 3 min'), findsWidgets);
     });
   });
 

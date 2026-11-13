@@ -95,6 +95,9 @@ class NextStopTracker {
     return index == null || index >= stops.length ? null : stops[index];
   }
 
+  /// Alias for [next].
+  PatternStop? get nextStop => next;
+
   /// The bus reached the last stop.
   bool get finished => stops.isNotEmpty && _next == stops.length;
 

@@ -4,6 +4,7 @@ import '../../../core/theme.dart';
 import '../../operations/models/operations_models.dart';
 import '../../operations/models/route_timetable.dart';
 import '../../operations/services/nearby_routes_filter.dart';
+import '../../trip_tracking/models/trip_arrival_estimate.dart';
 import '../../trip_tracking/models/trip_tracking.dart';
 import '../../trip_tracking/services/live_trip_tracker.dart';
 import '../../trip_tracking/services/route_live_buses.dart';
@@ -306,10 +307,14 @@ class SelectedRoutePanel extends StatelessWidget {
     this.fare,
     this.schedules,
     this.timetableLoading = false,
+    this.arrivals,
   });
 
   /// Today's fare of the route; `null` while loading or without one.
   final RouteFare? fare;
+
+  /// Arrival estimates keyed by stopId / occurrenceId.
+  final Map<String, TripArrivalEstimate>? arrivals;
 
   /// Weekly departures of [pattern]; `null` while not loaded.
   final List<RouteSchedule>? schedules;
@@ -468,6 +473,7 @@ class SelectedRoutePanel extends StatelessWidget {
               pattern: pattern,
               selected: tappedStop,
               onSelect: onStopSelected,
+              arrivals: arrivals,
             ),
           ],
         ],
@@ -727,12 +733,14 @@ class StopsTimeline extends StatelessWidget {
     required this.pattern,
     required this.onSelect,
     this.selected,
+    this.arrivals,
   });
 
   final MapOverlayColors colors;
   final RoutePattern pattern;
   final PatternStop? selected;
   final ValueChanged<PatternStop> onSelect;
+  final Map<String, TripArrivalEstimate>? arrivals;
 
   /// Same colors as the line on the map.
   static const startColor = SmartBusColors.verdeTurquesa;
@@ -768,6 +776,7 @@ class StopsTimeline extends StatelessWidget {
             key: Key('timeline-stop-$i'),
             colors: colors,
             stop: stops[i],
+            estimate: arrivals?[stops[i].stopId] ?? arrivals?[stops[i].id],
             order: i + 1,
             kind: i == 0
                 ? _StopKind.start
@@ -801,6 +810,7 @@ class _TimelineRow extends StatelessWidget {
     required this.lineBelow,
     required this.selected,
     required this.onTap,
+    this.estimate,
   });
 
   final MapOverlayColors colors;
@@ -812,15 +822,23 @@ class _TimelineRow extends StatelessWidget {
   final Color? lineBelow;
   final bool selected;
   final VoidCallback? onTap;
+  final TripArrivalEstimate? estimate;
 
   @override
   Widget build(BuildContext context) {
     final edge = kind != _StopKind.mid;
     final minutes = stop.minutesFromStart;
+    final est = estimate;
+    final String? etaText = est?.etaMinutes != null
+        ? 'en ${est!.etaMinutes} min'
+        : (est?.arrivalAt != null ? formatHour(est!.arrivalAt!) : null);
+
     final caption = switch (kind) {
-      _StopKind.start => 'Salida',
-      _StopKind.end => minutes != null ? 'Llegada · +$minutes min' : 'Llegada',
-      _StopKind.mid => minutes != null ? '+$minutes min' : null,
+      _StopKind.start => etaText != null ? 'Salida · $etaText' : 'Salida',
+      _StopKind.end => etaText != null
+          ? 'Llegada · $etaText'
+          : (minutes != null ? 'Llegada · +$minutes min' : 'Llegada'),
+      _StopKind.mid => etaText ?? (minutes != null ? '+$minutes min' : null),
     };
 
     Widget segment(Color? c) => Expanded(
@@ -903,14 +921,47 @@ class _TimelineRow extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Text(
-                        stop.name,
-                        style: TextStyle(
-                          color: colors.onSurface,
-                          fontWeight: edge || selected
-                              ? FontWeight.w600
-                              : FontWeight.w400,
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              stop.name,
+                              style: TextStyle(
+                                color: colors.onSurface,
+                                fontWeight: edge || selected
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                              ),
+                            ),
+                          ),
+                          if (est != null && est.etaMinutes != null)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 6),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: (est.isLive
+                                          ? SmartBusColors.completado
+                                          : SmartBusColors.azulPrincipal)
+                                      .withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  'en ${est.etaMinutes} min',
+                                  style: TextStyle(
+                                    color: est.isLive
+                                        ? SmartBusColors.completado
+                                        : SmartBusColors.azulPrincipal,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                       if (caption != null)
                         Text(

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smartbus_drivers/core/network/api_exception.dart';
 import 'package:smartbus_drivers/features/trip_tracking/models/gps_fix.dart';
+import 'package:smartbus_drivers/features/trip_tracking/models/trip_arrival_estimate.dart';
 import 'package:smartbus_drivers/features/trip_tracking/models/trip_tracking.dart';
 import 'package:smartbus_drivers/features/trip_tracking/services/gps_location_service.dart';
 import 'package:smartbus_drivers/features/trip_tracking/services/live_trip_tracker.dart';
@@ -38,6 +39,8 @@ class _FakeGps implements GpsLocationService {
 class _FakeFeed implements TripLiveFeed {
   final StreamController<BusLocationUpdate> _locations =
       StreamController.broadcast(sync: true);
+  final StreamController<Map<String, TripArrivalEstimate>> _arrivals =
+      StreamController.broadcast(sync: true);
   final StreamController<Object> _rejections = StreamController.broadcast(
     sync: true,
   );
@@ -47,6 +50,9 @@ class _FakeFeed implements TripLiveFeed {
 
   @override
   Stream<BusLocationUpdate> get locations => _locations.stream;
+
+  @override
+  Stream<Map<String, TripArrivalEstimate>> get arrivals => _arrivals.stream;
 
   @override
   ValueListenable<bool> get connected => _connected;
@@ -65,6 +71,8 @@ class _FakeFeed implements TripLiveFeed {
   void push(BusPosition position, {String tripId = _tripId}) => _locations.add(
     BusLocationUpdate(tripId: tripId, busId: 'bus', position: position),
   );
+
+  void pushArrivals(dynamic data) => _arrivals.add(parseArrivals(data));
 
   void reject() => _rejections.add(StateError('403'));
 }
@@ -392,6 +400,55 @@ void main() {
       expect(tracker.state.value.phase, LiveTripPhase.tracking);
       expect(tracker.state.value.position!.latitude, 9.93);
       expect(tracker.state.value.error, 'Sin conexión a Internet.');
+      tracker.dispose();
+    });
+  });
+
+  test('TripArrivalsUpdated event updates arrivals in tracker and state', () {
+    fakeAsync((async) {
+      gps.next = _tracking(position: _at(0), age: 0);
+      final tracker = build(async)..start();
+      async.flushMicrotasks();
+
+      final listenedArrivals = <Map<String, TripArrivalEstimate>>[];
+      tracker.arrivals.addListener(() {
+        listenedArrivals.add(tracker.arrivals.value);
+      });
+
+      feed.pushArrivals({
+        'arrivals': [
+          {
+            'stop_occurrence_id': 'occ-1',
+            'stop_id': 'stop-1',
+            'stop_sequence': 1,
+            'eta_seconds': 120,
+            'arrival_at': '2026-11-09T15:02:00Z',
+            'method': 'ml',
+          },
+          {
+            'stop_occurrence_id': 'occ-2',
+            'stop_id': 'stop-2',
+            'stop_sequence': 2,
+            'eta_seconds': 300,
+            'arrival_at': '2026-11-09T15:05:00Z',
+            'method': 'scheduled_reference',
+          },
+        ],
+      });
+
+      expect(tracker.arrivals.value, hasLength(4)); // 2 by stopId + 2 by occurrenceId
+      expect(tracker.state.value.arrivals, hasLength(4));
+      final estimate = tracker.arrivals.value['stop-1'];
+      expect(estimate, isNotNull);
+      expect(estimate!.etaMinutes, 2);
+      expect(estimate.isLive, isTrue);
+
+      final scheduledEstimate = tracker.arrivals.value['stop-2'];
+      expect(scheduledEstimate, isNotNull);
+      expect(scheduledEstimate!.etaMinutes, 5);
+      expect(scheduledEstimate.isLive, isFalse);
+
+      expect(listenedArrivals, hasLength(1));
       tracker.dispose();
     });
   });
