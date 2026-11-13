@@ -288,9 +288,7 @@ class _FavoriteRoutesScreenState extends State<FavoriteRoutesScreen> {
           children: [
             SmartBusHeader(
               title: 'Mis favoritos',
-              subtitle: 'Tus rutas guardadas',
               type: SmartBusUserType.passenger,
-              compact: true,
               onBack: Navigator.canPop(context)
                   ? () => Navigator.maybePop(context)
                   : null,
