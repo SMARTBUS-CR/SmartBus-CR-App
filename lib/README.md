@@ -107,6 +107,31 @@ Si `login`, `verifyEmail` o `restoreSession` reciben otro rol
 (`super-admin`, `company-admin`), se cierra la sesión en el servidor y se borra
 la local.
 
+### Recuperar contraseña (`/forgot-password`)
+
+"¿Olvidaste tu contraseña?" en el login abre `ForgotPasswordScreen` con el
+correo que ya estaba escrito (solo si parece válido). Dos pasos, sin token:
+
+1. **Correo** → `sendResetCode`: el backend envía un código de 6 dígitos
+   (vence en 15 min). Un `422` (el correo no existe) se muestra bajo el campo.
+2. **Código + nueva contraseña + confirmación** → `resetPassword`. La
+   contraseña tiene las reglas del registro (`PasswordRequirements`).
+   "Reenviar código" espera 60 s entre pedidos; "Usar otro correo" vuelve al
+   paso 1.
+
+| Respuesta | Qué ve el usuario |
+|---|---|
+| `200` | Vuelve al **login** con el mensaje del backend ("Contraseña actualizada correctamente.") y el correo precargado (`PasswordResetDone`) |
+| `400` código incorrecto / vencido | El mensaje del backend bajo el código, que se limpia; las contraseñas escritas se mantienen |
+| `422` | El mensaje bajo su campo (`email`, `code`, `password`; p. ej. contraseña filtrada) |
+| `429` | "Demasiados intentos. Espera un momento…" (sin Reintentar) |
+| Sin red, timeout, `5xx` | SnackBar + **Reintentar**; lo escrito se mantiene |
+
+Nota para el equipo de Auth: `password/forgot` responde `422` si el correo no
+existe, lo que permite averiguar qué correos están registrados.
+
+Tests (AC1–AC9): `test/features/auth/forgot_password_screen_test.dart`.
+
 ### Errores (`ApiException`)
 
 Todos los métodos lanzan `ApiException`. `e.message` siempre está en español y
