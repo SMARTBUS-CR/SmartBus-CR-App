@@ -2,6 +2,9 @@ import '../../../core/config/api_config.dart';
 import '../../../core/network/api_client.dart';
 import '../../trip_tracking/models/trip_tracking.dart';
 import '../models/operations_models.dart';
+import '../models/route_timetable.dart';
+
+export '../models/route_timetable.dart';
 
 /// Talks to the **Dashboard (operations) through the API Gateway** (`/ops/*`).
 ///
@@ -10,10 +13,29 @@ import '../models/operations_models.dart';
 ///   the Dashboard only lets the assigned driver act on a trip.
 ///
 /// Errors arrive as `ApiException`, like every other service.
+///
+/// **Cache.** Each Dashboard request takes ~2.5–4 s, and the public
+/// catalogue (routes, directions, fares, timetables) rarely changes, so it is
+/// kept in memory for [catalogueTtl] and shared by every screen: opening a
+/// route again, or going back to the map, is instant. Two screens asking for
+/// the same thing at once share one request. Live data (driver trips, buses
+/// running, a trip's status) is never cached. A service built with its own
+/// [client] (tests) gets a private cache.
 class OperationsService {
-  OperationsService({ApiClient? client}) : _client = client ?? ApiClient();
+  OperationsService({ApiClient? client})
+    : _client = client ?? ApiClient(),
+      _cache = client == null ? _sharedCache : _MemoryCache();
 
   final ApiClient _client;
+  final _MemoryCache _cache;
+
+  static final _MemoryCache _sharedCache = _MemoryCache();
+
+  /// How long the public catalogue is reused before asking again.
+  static const catalogueTtl = Duration(minutes: 10);
+
+  /// Forgets the shared catalogue (e.g. pull to refresh the whole app).
+  static void clearCache() => _sharedCache.clear();
 
   // --- Driver ------------------------------------------------------------------
 
@@ -71,13 +93,13 @@ class OperationsService {
 
   // --- Passenger (public catalogue) -------------------------------------------
 
-  /// `GET ops/routes` — active routes, sorted by code.
-  Future<List<TransitRoute>> routes() async {
+  /// `GET ops/routes` — active routes, sorted by code (cached).
+  Future<List<TransitRoute>> routes() => _cache.get('routes', () async {
     final body = await _client.get(
       ApiConfig.opsRoutes({'sort': 'code', 'page[size]': '100'}),
     );
     return _resources(body).map(TransitRoute.fromJsonApi).toList();
-  }
+  });
 
   /// Results per page of [searchRoutes].
   static const searchPageSize = 20;
@@ -85,8 +107,6 @@ class OperationsService {
   /// Catalogue page size (the Dashboard maximum) and a safety cap of pages.
   static const _cataloguePageSize = 100;
   static const _maxCataloguePages = 50;
-
-  Future<List<TransitRoute>>? _catalogue;
 
   /// Route search by **name, number or destination**, ignoring case and
   /// accents ("jose" finds "José", "pena" finds "Peña").
@@ -136,22 +156,11 @@ class OperationsService {
   }
 
   /// `GET ops/routes?include=company,patterns` — every route of the public
-  /// catalogue with its company and destinations, all pages. Downloaded once
-  /// per service; a failure is not kept, so the next search tries again.
-  Future<List<TransitRoute>> searchCatalogue() {
-    final cached = _catalogue;
-    if (cached != null) return cached;
-    // Searches made while it downloads share the same request.
-    final loading = _loadCatalogue();
-    _catalogue = loading;
-    loading.then<void>(
-      (_) {},
-      onError: (Object _) {
-        if (identical(_catalogue, loading)) _catalogue = null;
-      },
-    );
-    return loading;
-  }
+  /// catalogue with its company and destinations, all pages. Cached; a
+  /// failure is not kept, so the next search tries again. Searches made while
+  /// it downloads share the same request.
+  Future<List<TransitRoute>> searchCatalogue() =>
+      _cache.get('searchCatalogue', _loadCatalogue);
 
   Future<List<TransitRoute>> _loadCatalogue() async {
     final routes = <TransitRoute>[];
@@ -181,21 +190,22 @@ class OperationsService {
   /// The patterns arrive in the JSON:API `included` array. They are linked to
   /// their route by `relationships.patterns.data`, or by the pattern's
   /// `route_id` when the route has no such relationship.
-  Future<List<TransitRoute>> routesWithPatterns() async {
-    final body = await _client.get(
-      ApiConfig.opsRoutes({
-        'include': 'patterns',
-        'sort': 'code',
-        'page[size]': '100',
-      }),
-    );
+  Future<List<TransitRoute>> routesWithPatterns() =>
+      _cache.get('routesWithPatterns', () async {
+        final body = await _client.get(
+          ApiConfig.opsRoutes({
+            'include': 'patterns',
+            'sort': 'code',
+            'page[size]': '100',
+          }),
+        );
 
-    final patterns = _patternsById(body);
-    return [
-      for (final resource in _resources(body))
-        _withPatterns(resource, patterns),
-    ];
-  }
+        final patterns = _patternsById(body);
+        return [
+          for (final resource in _resources(body))
+            _withPatterns(resource, patterns),
+        ];
+      });
 
   /// The `route-patterns` of the document's `included` array, by id.
   static Map<String, RoutePattern> _patternsById(Map<String, dynamic> body) => {
@@ -223,18 +233,22 @@ class OperationsService {
     );
   }
 
-  /// `GET ops/routes/{id}/patterns` — directions of a route with their stops.
-  Future<List<RoutePattern>> routePatterns(String routeId) async {
-    final body = await _client.get(ApiConfig.opsRoutePatterns(routeId));
-    return _resources(body).map(RoutePattern.fromJsonApi).toList();
-  }
+  /// `GET ops/routes/{id}/patterns` — directions of a route with their stops
+  /// (cached).
+  Future<List<RoutePattern>> routePatterns(String routeId) =>
+      _cache.get('patterns $routeId', () async {
+        final body = await _client.get(ApiConfig.opsRoutePatterns(routeId));
+        return _resources(body).map(RoutePattern.fromJsonApi).toList();
+      });
 
   /// `GET ops/route-patterns/{id}` — one pattern with its line and stops
-  /// (the driver's route when the trip has no planned snapshot).
-  Future<RoutePattern> routePattern(String patternId) async =>
-      RoutePattern.fromJsonApi(
-        _resource(await _client.get(ApiConfig.opsRoutePattern(patternId))),
-      );
+  /// (the driver's route when the trip has no planned snapshot). Cached.
+  Future<RoutePattern> routePattern(String patternId) => _cache.get(
+    'pattern $patternId',
+    () async => RoutePattern.fromJsonApi(
+      _resource(await _client.get(ApiConfig.opsRoutePattern(patternId))),
+    ),
+  );
 
   /// `GET ops/public/trips/{id}` — one trip without driver data (its
   /// `route_pattern_id`, status and bus), for the passenger's tracking map.
@@ -242,6 +256,23 @@ class OperationsService {
       LiveBusTrip.fromJsonApi(
         _resource(await _client.get(ApiConfig.opsPublicTrip(tripId))),
       );
+
+  /// `GET ops/routes/{id}/fares` — the route's fares (see [fareOn]). Cached.
+  Future<List<RouteFare>> routeFares(String routeId) =>
+      _cache.get('fares $routeId', () async {
+        final body = await _client.get(ApiConfig.opsRouteFares(routeId));
+        return _resources(body).map(RouteFare.fromJsonApi).toList();
+      });
+
+  /// `GET ops/route-patterns/{id}/schedules` — weekly departures of a
+  /// direction (see [departuresOn]). Cached.
+  Future<List<RouteSchedule>> patternSchedules(String patternId) =>
+      _cache.get('schedules $patternId', () async {
+        final body = await _client.get(
+          ApiConfig.opsPatternSchedules(patternId, {'page[size]': '100'}),
+        );
+        return _resources(body).map(RouteSchedule.fromJsonApi).toList();
+      });
 
   /// `GET ops/route-patterns/{id}/trips` — buses running now on a pattern.
   Future<List<LiveBusTrip>> ongoingTrips(String patternId) async {
@@ -300,4 +331,30 @@ class OperationsService {
     }
     return Map<String, dynamic>.from(data);
   }
+}
+
+/// In-memory cache of requests by key, for [OperationsService.catalogueTtl].
+/// Keeps the *future*, so callers asking while it loads share one request;
+/// a failed request is forgotten (the next call tries again).
+class _MemoryCache {
+  final Map<String, (DateTime, Future<Object?>)> _entries = {};
+
+  Future<T> get<T>(String key, Future<T> Function() load) {
+    final entry = _entries[key];
+    if (entry != null &&
+        DateTime.now().difference(entry.$1) < OperationsService.catalogueTtl) {
+      return entry.$2.then((value) => value as T);
+    }
+    final loading = load();
+    _entries[key] = (DateTime.now(), loading);
+    loading.then<void>(
+      (_) {},
+      onError: (Object _) {
+        if (identical(_entries[key]?.$2, loading)) _entries.remove(key);
+      },
+    );
+    return loading;
+  }
+
+  void clear() => _entries.clear();
 }
