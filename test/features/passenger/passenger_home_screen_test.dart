@@ -169,6 +169,7 @@ Future<void> _pump(
   required _FakeMap map,
   FakeOperations? operations,
   Map<String, WidgetBuilder>? routes,
+  DateTime Function()? clock,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -176,6 +177,7 @@ Future<void> _pump(
         locationService: location,
         mapBuilder: map.builder,
         operations: operations ?? FakeOperations(),
+        clock: clock ?? DateTime.now,
       ),
       routes:
           routes ??
@@ -560,6 +562,20 @@ void main() {
 
   group('Route visualization', _routeVisualizationTests);
   group('Paradas cercanas', _nearbyStopsTests);
+  group('Horario y tarifa', () {
+    setUp(() {
+      final view =
+          TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+      view.physicalSize = const Size(1236, 2745);
+      view.devicePixelRatio = 3;
+    });
+    tearDown(() {
+      TestWidgetsFlutterBinding.instance.platformDispatcher.views.first
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+    _timetableTests();
+  });
   group('Live buses on the route', () {
     setUp(() {
       final view =
@@ -1450,5 +1466,212 @@ void _nearbyStopsTests() {
     );
     expect(find.byKey(const Key('nearby-stops-panel')), findsNothing);
     expect(map.nearbyStops, isEmpty);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Horario y tarifa
+// ---------------------------------------------------------------------------
+
+/// Friday 13 Nov 2026, 10:15.
+DateTime _friday() => DateTime(2026, 11, 13, 10, 15);
+
+/// PV-RF ₡650 and DEMO-CITY ₡1.200 (SJ-PV has no fare). "Hacia Río Frío"
+/// leaves Fridays at 06:00, 10:30 and 14:00, and Saturdays at 08:00.
+FakeOperations _timetableOperations() =>
+    FakeOperations(catalogue: [_sjPv, _demo, _pvRf])
+      ..fares = {
+        'r-pvrf': [fare(650)],
+        'r-demo': [fare(1200)],
+      }
+      ..schedules = {
+        'p-rf': [
+          departure(5, 14),
+          departure(5, 6),
+          departure(5, 10, 30),
+          departure(6, 8),
+        ],
+      };
+
+void _timetableTests() {
+  testWidgets('every route of the list shows its fare', (tester) async {
+    final operations = _timetableOperations();
+    await _pump(
+      tester,
+      location: _FakeLocationService(access: LocationAccess.denied),
+      map: _FakeMap(),
+      operations: operations,
+      clock: _friday,
+    );
+
+    expect(find.text('Todas las rutas'), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(
+            find.descendant(
+              of: find.byKey(const Key('route-fare-r-pvrf')),
+              matching: find.byType(Text),
+            ),
+          )
+          .data,
+      '₡650',
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('route-fare-r-demo')),
+        matching: find.text('₡1.200'),
+      ),
+      findsOneWidget,
+    );
+    // No fare published: no price, the route is still listed.
+    expect(find.byKey(const Key('route-fare-r-sjpv')), findsNothing);
+    expect(_inList('San José - Puerto Viejo'), findsOneWidget);
+    // One request per route, the catalogue still in a single one.
+    expect(operations.calls, ['routesWithPatterns']);
+    expect(
+      operations.timetableCalls,
+      containsAll(['fares r-sjpv', 'fares r-demo', 'fares r-pvrf']),
+    );
+  });
+
+  testWidgets('the selected route shows its fare and today\'s departures, '
+      'and the week on demand', (tester) async {
+    final operations = _timetableOperations();
+    await _pump(
+      tester,
+      location: _granted(),
+      map: _FakeMap(),
+      operations: operations,
+      clock: _friday,
+    );
+    await _tapRoute(tester, _pvRf); // opens "Hacia Río Frío" (closest stop)
+
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('selected-route-fare')),
+        matching: find.text('Tarifa ₡650'),
+      ),
+      findsOneWidget,
+    );
+    final schedule = find.byKey(const Key('schedule-section'));
+    await tester.ensureVisible(schedule);
+    await tester.pumpAndSettle();
+    expect(find.text('Próxima salida: 10:30'), findsOneWidget);
+    // Today's departures in order; 06:00 already gone.
+    final chips = tester
+        .widgetList<Text>(
+          find.descendant(
+            of: schedule,
+            matching: find.textContaining(RegExp(r'^\d\d:\d\d$')),
+          ),
+        )
+        .map((t) => t.data);
+    expect(chips, ['06:00', '10:30', '14:00']);
+    final gone = tester.widget<Text>(
+      find.descendant(of: schedule, matching: find.text('06:00')),
+    );
+    expect(gone.style?.decoration, TextDecoration.lineThrough);
+
+    // The next six days.
+    expect(find.byKey(const Key('schedule-day-1')), findsNothing);
+    await _tapInSheet(tester, find.byKey(const Key('schedule-week-toggle')));
+    final tomorrow = find.byKey(const Key('schedule-day-1'));
+    expect(
+      find.descendant(of: tomorrow, matching: find.text('Mañana')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: tomorrow, matching: find.text('08:00')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('schedule-day-2')),
+        matching: find.text('Domingo 15'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('schedule-day-6')),
+        matching: find.text('Sin salidas'),
+      ),
+      findsOneWidget,
+    );
+    // The fare came with the list: not requested again.
+    expect(
+      operations.timetableCalls.where((c) => c == 'fares r-pvrf'),
+      hasLength(1),
+    );
+  });
+
+  testWidgets('another direction loads its own timetable', (tester) async {
+    final operations = _timetableOperations();
+    await _pump(
+      tester,
+      location: _granted(),
+      map: _FakeMap(),
+      operations: operations,
+      clock: _friday,
+    );
+    await _tapRoute(tester, _pvRf);
+    await _tapInSheet(tester, find.byKey(const Key('direction-p-pv')));
+
+    expect(operations.timetableCalls, contains('schedules p-pv'));
+    expect(
+      find.text('Este sentido no tiene horario publicado.'),
+      findsOneWidget,
+    );
+
+    // Back: already loaded, not requested again.
+    await _tapInSheet(tester, find.byKey(const Key('direction-p-rf')));
+    expect(find.text('Próxima salida: 10:30'), findsOneWidget);
+    expect(
+      operations.timetableCalls.where((c) => c == 'schedules p-rf'),
+      hasLength(1),
+    );
+  });
+
+  testWidgets('after the last departure, and on a day without any', (
+    tester,
+  ) async {
+    var now = DateTime(2026, 11, 13, 15); // Friday, after 14:00
+    await _pump(
+      tester,
+      location: _granted(),
+      map: _FakeMap(),
+      operations: _timetableOperations(),
+      clock: () => now,
+    );
+    await _tapRoute(tester, _pvRf);
+    expect(find.text('Ya no hay más salidas hoy'), findsOneWidget);
+
+    now = DateTime(2026, 11, 15, 9); // Sunday
+    await _tapInSheet(tester, find.byKey(const Key('direction-p-pv')));
+    await _tapInSheet(tester, find.byKey(const Key('direction-p-rf')));
+    expect(find.text('Hoy no hay salidas en este sentido.'), findsOneWidget);
+  });
+
+  testWidgets('without fares or timetable the route still works', (
+    tester,
+  ) async {
+    final operations = _timetableOperations()
+      ..timetableError = const ApiException(
+        ApiErrorType.noConnection,
+        'Sin conexión',
+      );
+    await _pump(
+      tester,
+      location: _granted(),
+      map: _FakeMap(),
+      operations: operations,
+      clock: _friday,
+    );
+
+    expect(find.byKey(const Key('route-fare-r-pvrf')), findsNothing);
+    await _tapRoute(tester, _pvRf);
+    expect(find.byKey(const Key('selected-route-fare')), findsNothing);
+    expect(find.text('No se pudo cargar el horario.'), findsOneWidget);
+    expect(find.byKey(const Key('stops-timeline')), findsOneWidget);
   });
 }
