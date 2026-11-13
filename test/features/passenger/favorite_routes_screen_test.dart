@@ -380,6 +380,32 @@ void main() {
       expect(find.textContaining('Demasiados intentos'), findsOneWidget);
     });
 
+    testWidgets('the route detail shows the code in the header and the name '
+        'below it (no subtitle: same header height as every screen)', (
+      tester,
+    ) async {
+      _setUp();
+      await _pumpRoute(tester, _heredia);
+
+      final header = find.byKey(const Key('smartbus_header'));
+      expect(
+        find.descendant(of: header, matching: find.text('400')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: header, matching: find.text('Heredia – San José')),
+        findsNothing,
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('route-name'))).data,
+        'Heredia – San José',
+      );
+      expect(
+        tester.getTopLeft(find.byKey(const Key('route-name'))).dy,
+        greaterThanOrEqualTo(tester.getBottomLeft(header).dy),
+      );
+    });
+
     testWidgets('a route already saved shows the filled star', (tester) async {
       _setUp(saved: [_heredia]);
       await _pumpRoute(tester, _heredia);
