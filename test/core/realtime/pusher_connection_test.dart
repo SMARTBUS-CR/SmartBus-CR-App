@@ -211,6 +211,145 @@ void main() {
     });
   });
 
+  group('subscription confirmed / retried', () {
+    test('a channel is "subscribed" only after the server confirms it', () {
+      fakeAsync((async) {
+        connection
+          ..subscribe(_channel)
+          ..connect();
+        async.flushMicrotasks();
+        sockets.single.establish();
+        async.flushMicrotasks();
+
+        // Socket open and pusher:subscribe sent, but not confirmed yet.
+        expect(connection.state.value, RealtimeConnectionState.connected);
+        expect(connection.subscribed.value, isEmpty);
+
+        sockets.single.serverSends(
+          'pusher_internal:subscription_succeeded',
+          {},
+          channel: _channel,
+        );
+        async.flushMicrotasks();
+        expect(connection.subscribed.value, {_channel});
+
+        // A drop forgets it: the new socket must be confirmed again.
+        sockets.single.drop();
+        async.flushMicrotasks();
+        expect(connection.subscribed.value, isEmpty);
+      });
+    });
+
+    test('a failed signature (Gateway slow / 5xx) is retried while the '
+        'socket stays open', () {
+      fakeAsync((async) {
+        var failures = 2;
+        final errors = <RealtimeSubscriptionError>[];
+        final flaky = PusherConnection(
+          uri: Uri.parse('wss://gateway.test/app/key'),
+          authorize: (socketId, channel) async {
+            authorizations.add((socketId, channel));
+            if (failures-- > 0) throw StateError('503');
+            return 'key:signature';
+          },
+          connector: (uri) async {
+            final socket = _FakeSocket();
+            sockets.add(socket);
+            return socket;
+          },
+        );
+        flaky.subscriptionErrors.listen(errors.add);
+        flaky
+          ..subscribe(_channel)
+          ..connect();
+        async.flushMicrotasks();
+        sockets.single.establish();
+        async.flushMicrotasks();
+        expect(errors, hasLength(1));
+        expect(sockets.single.sent, isEmpty);
+
+        async.elapse(const Duration(seconds: 2)); // 1st retry: fails again
+        expect(authorizations, hasLength(2));
+        expect(errors, hasLength(2));
+
+        async.elapse(const Duration(seconds: 4));
+        expect(authorizations, hasLength(2)); // 2nd wait is 5 s
+        async.elapse(const Duration(seconds: 1));
+        expect(authorizations, hasLength(3));
+        expect(sockets.single.sentEvents, ['pusher:subscribe']);
+        expect(sockets, hasLength(1)); // same socket, no reconnect
+        flaky.dispose();
+      });
+    });
+
+    test('pusher:subscription_error from the server is retried too', () {
+      fakeAsync((async) {
+        final errors = <RealtimeSubscriptionError>[];
+        connection.subscriptionErrors.listen(errors.add);
+        connection
+          ..subscribe(_channel)
+          ..connect();
+        async.flushMicrotasks();
+        sockets.single.establish();
+        async.flushMicrotasks();
+
+        sockets.single.serverSends('pusher:subscription_error', {
+          'type': 'AuthError',
+          'status': 403,
+        }, channel: _channel);
+        async.flushMicrotasks();
+        expect(errors.single.channel, _channel);
+
+        async.elapse(const Duration(seconds: 2));
+        expect(authorizations, hasLength(2));
+        expect(sockets.single.sentEvents, [
+          'pusher:subscribe',
+          'pusher:subscribe',
+        ]);
+      });
+    });
+
+    test('no retry once confirmed, after unsubscribe or dispose', () {
+      fakeAsync((async) {
+        var fail = true;
+        final retrying = PusherConnection(
+          uri: Uri.parse('wss://gateway.test/app/key'),
+          authorize: (socketId, channel) async {
+            authorizations.add((socketId, channel));
+            if (fail) throw StateError('503');
+            return 'key:signature';
+          },
+          connector: (uri) async {
+            final socket = _FakeSocket();
+            sockets.add(socket);
+            return socket;
+          },
+        );
+        retrying
+          ..subscribe(_channel)
+          ..connect();
+        async.flushMicrotasks();
+        sockets.single.establish();
+        async.flushMicrotasks();
+        expect(authorizations, hasLength(1));
+
+        // Less than the 30 s activity timeout, so the socket stays open; a
+        // retry would have come at 2 s.
+        retrying.unsubscribe(_channel);
+        async.elapse(const Duration(seconds: 20));
+        expect(authorizations, hasLength(1));
+
+        fail = true;
+        retrying.subscribe(_channel);
+        async.flushMicrotasks();
+        expect(authorizations, hasLength(2));
+        retrying.dispose();
+        async.elapse(const Duration(minutes: 1));
+        expect(authorizations, hasLength(2));
+      });
+    });
+  });
+
   test('error 4001 (wrong app key) does not reconnect', () {
     fakeAsync((async) {
       connection.connect();
