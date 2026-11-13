@@ -268,10 +268,11 @@ abrir "Rastreando tu bus"
   → GET  /gps/trips/{id}/location             estado del viaje + posición actual
   → WebSocket a Reverb (wss://<gateway>/app/<KEY>)
   → POST /gps/broadcasting/auth               el Gateway valida el token y firma
-  → suscribe private-trip.{id}
+  → suscribe private-trip.{id}  (en vivo solo cuando Reverb lo confirma;
+                                  si la firma falla, reintenta a los 2, 5, 10, 30 s)
   → GET  ops/public/trips/{id} → GET ops/route-patterns/{id}   la ruta del viaje
   → cada BusLocationUpdated: mueve el bus (solo si es más nuevo que el actual)
-  → 10 s sin posiciones: repite el GET cada 5 s  →  completed / cancelled = fin
+  → 7 s sin posiciones: repite el GET cada 5 s  →  completed / cancelled = fin
   → se cae la conexión: reconecta sola y repite el GET
   → salir de la pantalla: cierra la conexión
 ```
@@ -281,17 +282,27 @@ abrir "Rastreando tu bus"
 2. **En vivo:** cada `BusLocationUpdated` mueve el marcador. Los eventos pueden
    llegar desordenados en redes móviles: se queda siempre la posición con el
    **mayor `recorded_at`** y se ignoran las viejas o repetidas.
-3. **Las posiciones no llegan solas (regla de los 10 s):** el conductor envía
-   cada ~5 s, así que **10 s sin posiciones** ya es raro (el WebSocket se cayó,
-   o está conectado pero los eventos no llegan). Entonces la app repite el
-   `GET` **cada 5 s**, al mismo ritmo del conductor: el bus **sigue
-   moviéndose** aunque el tiempo real falle (el GPS guarda siempre la última
-   posición aceptada, aunque no la persista). Si `status` es `completed` o
+3. **"En vivo" = canal confirmado, no solo socket abierto.** Un WebSocket
+   abierto no recibe nada si la suscripción falló: la firma
+   (`broadcasting/auth`, Gateway → GPS, 2–4 s en Render) puede fallar por un
+   timeout o un 5xx, o Reverb puede responder `pusher:subscription_error`.
+   `PusherConnection` cuenta un canal como suscrito solo con
+   `pusher_internal:subscription_succeeded` (`subscribed`) y, si falla,
+   **reintenta** a los 2, 5, 10 y 30 s con el mismo socket. Mientras tanto
+   `ReverbTripFeed.connected` es `false` y la app consulta por `GET`. Antes una
+   sola firma fallida dejaba el canal mudo y "en vivo" a la vez: el pasajero
+   veía el bus cada 10–15 s.
+4. **Las posiciones no llegan solas (regla de los 7 s):** el conductor envía
+   cada ~5 s, así que **7 s sin posiciones** (una lectura perdida) ya es raro.
+   Entonces la app repite el `GET` **cada 5 s**, al mismo ritmo del conductor
+   (las condiciones se revisan cada segundo): el bus **sigue moviéndose**
+   aunque el tiempo real falle (el GPS guarda siempre la última posición
+   aceptada, aunque no la persista). Si `status` es `completed` o
    `cancelled`, muestra "Viaje finalizado" / "Viaje cancelado" y sale del
-   canal: el fin del viaje se ve en **~10–15 s**, sin aviso del Dashboard.
+   canal: el fin del viaje se ve en **~7–10 s**, sin aviso del Dashboard.
    Mientras las posiciones llegan normalmente **no se hace ninguna consulta**.
    Un viaje que aún no sale se consulta cada 15 s.
-4. **Reconexión:** si se cae el WebSocket, reconecta solo (espera 1, 2, 5, 10 y
+5. **Reconexión:** si se cae el WebSocket, reconecta solo (espera 1, 2, 5, 10 y
    30 s entre intentos) y al volver repite el `GET`, porque **Reverb no guarda
    historial**: lo enviado mientras estaba desconectado se perdió.
 5. **Sin tiempo real** (sin `REVERB_APP_KEY` o sin conexión al WebSocket): la
@@ -400,8 +411,9 @@ de -dev ya es el valor por defecto (`ApiConfig._devReverbAppKey`).
 
 | Qué | Archivo |
 |---|---|
-| Protocolo Pusher: suscripción firmada, eventos, ping, reconexión, error 4001 | `test/core/realtime/pusher_connection_test.dart` |
-| Tracker: orden de eventos, frescura, regla de 15 s, reconexión, sin tiempo real, 404 | `test/features/trip_tracking/live_trip_tracker_test.dart` |
+| Protocolo Pusher: suscripción firmada, confirmada (`subscription_succeeded`) y reintentada (firma fallida, `subscription_error`), eventos, ping, reconexión, error 4001 | `test/core/realtime/pusher_connection_test.dart` |
+| `ReverbTripFeed`: en vivo solo con el canal confirmado; tras reintentar, llegan las posiciones | `test/features/trip_tracking/trip_live_feed_test.dart` |
+| Tracker: orden de eventos, frescura, regla de 7 s, canal sin confirmar = consulta cada 5 s, reconexión, sin tiempo real, 404 | `test/features/trip_tracking/live_trip_tracker_test.dart` |
 | Lectura de `trip-trackings` y de `BusLocationUpdated` | `test/features/trip_tracking/trip_tracking_test.dart` |
 | Pantalla: cada estado y el marcador | `test/features/passenger/bus_tracking_screen_test.dart` |
 
