@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../../core/config/api_config.dart';
 import '../../../core/realtime/pusher_connection.dart';
+import '../models/trip_arrival_estimate.dart';
 import '../models/trip_tracking.dart';
 import 'gps_location_service.dart';
 
@@ -11,6 +12,9 @@ import 'gps_location_service.dart';
 abstract interface class TripLiveFeed {
   /// Positions received in real time.
   Stream<BusLocationUpdate> get locations;
+
+  /// Arrival estimates received in real time.
+  Stream<Map<String, TripArrivalEstimate>> get arrivals;
 
   /// `true` while the real-time connection is up. Events sent while it is
   /// down are lost: refresh the position when it comes back.
@@ -53,9 +57,12 @@ class ReverbTripFeed implements TripLiveFeed {
   }
 
   static const eventName = 'BusLocationUpdated';
+  static const arrivalsEventName = 'TripArrivalsUpdated';
 
   final PusherConnection _connection;
   final StreamController<BusLocationUpdate> _locations =
+      StreamController.broadcast();
+  final StreamController<Map<String, TripArrivalEstimate>> _arrivals =
       StreamController.broadcast();
   final StreamController<Object> _rejections = StreamController.broadcast();
   final ValueNotifier<bool> _connected = ValueNotifier(false);
@@ -64,6 +71,9 @@ class ReverbTripFeed implements TripLiveFeed {
 
   @override
   Stream<BusLocationUpdate> get locations => _locations.stream;
+
+  @override
+  Stream<Map<String, TripArrivalEstimate>> get arrivals => _arrivals.stream;
 
   @override
   ValueListenable<bool> get connected => _connected;
@@ -98,11 +108,24 @@ class ReverbTripFeed implements TripLiveFeed {
   }
 
   void _onEvent(RealtimeEvent event) {
-    if (event.event != eventName) return;
-    try {
-      _locations.add(BusLocationUpdate.fromJson(event.data));
-    } catch (_) {
-      // Malformed payload: ignore it, the next one will move the bus.
+    if (event.event == eventName) {
+      try {
+        _locations.add(BusLocationUpdate.fromJson(event.data));
+      } catch (_) {
+        // Malformed payload: ignore it, the next one will move the bus.
+      }
+      return;
+    }
+    if (event.event == arrivalsEventName) {
+      try {
+        final parsed = parseArrivals(event.data);
+        if (parsed.isNotEmpty) {
+          _arrivals.add(parsed);
+        }
+      } catch (_) {
+        // Malformed payload: ignore it.
+      }
+      return;
     }
   }
 
@@ -114,6 +137,7 @@ class ReverbTripFeed implements TripLiveFeed {
     await _errorSub.cancel();
     await _connection.dispose();
     await _locations.close();
+    await _arrivals.close();
     await _rejections.close();
     _connected.dispose();
   }

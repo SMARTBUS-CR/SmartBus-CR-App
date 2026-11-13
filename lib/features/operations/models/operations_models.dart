@@ -373,6 +373,9 @@ class PatternStop {
   );
 
   final String stopId;
+
+  /// Alias for [stopId].
+  String get id => stopId;
   final String name;
   final int sequence;
   final int? minutesFromStart;

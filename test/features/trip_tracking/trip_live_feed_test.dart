@@ -124,4 +124,42 @@ void main() {
       feed.dispose();
     });
   });
+
+  test('TripArrivalsUpdated event is parsed and emitted', () {
+    fakeAsync((async) {
+      final arrivals = <Map<String, dynamic>>[];
+      final feed = buildFeed()..follow(_tripId);
+      feed.arrivals.listen(arrivals.add);
+      async.flushMicrotasks();
+
+      sockets.single.serverSends('pusher:connection_established', {
+        'socket_id': '1.1',
+        'activity_timeout': 30,
+      });
+      async.flushMicrotasks();
+
+      sockets.single
+        ..serverSends(
+          'pusher_internal:subscription_succeeded',
+          {},
+          channel: _channel,
+        )
+        ..serverSends('TripArrivalsUpdated', {
+          'arrivals': [
+            {
+              'stop_occurrence_id': 'occ-1',
+              'stop_id': 'stop-1',
+              'stop_sequence': 1,
+              'eta_seconds': 120,
+              'method': 'ml',
+            }
+          ]
+        }, channel: _channel);
+      async.flushMicrotasks();
+
+      expect(arrivals, hasLength(1));
+      expect(arrivals.single['stop-1']?.etaMinutes, 2);
+      feed.dispose();
+    });
+  });
 }
