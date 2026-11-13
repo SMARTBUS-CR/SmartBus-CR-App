@@ -12,6 +12,7 @@ import '../operations/models/operations_models.dart';
 import '../operations/services/nearby_routes_filter.dart';
 import '../operations/services/nearby_stops.dart';
 import '../operations/services/operations_service.dart';
+import '../operations/services/route_proximity.dart';
 import '../trip_tracking/models/trip_tracking.dart';
 import '../trip_tracking/services/route_live_buses.dart';
 import 'map/journey_planner_panel.dart';
@@ -302,6 +303,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         _updateNearbyStops();
         _drawNearbyStops(fit: true);
       }
+      if (_plannerMode) _updatePassing();
     } on ApiException catch (e) {
       if (mounted) setState(() => _routesError = e.message);
     } finally {
@@ -501,10 +503,73 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       _plannerMode = true;
       _destination = point;
     });
+    _updatePassing();
     _map?.showDestination(point);
     _fitPlanner();
     _collapseSheet(_sheetInitial);
     unawaited(_loadJourneys());
+  }
+
+  /// Directions whose line passes near the passenger and the destination
+  /// (no stop needed), computed on the phone from the loaded catalogue.
+  List<PassingRoute> _passing = const [];
+
+  /// How far from the line (the road) the passenger may be.
+  static const _passingRadiusMeters = 1000.0;
+
+  void _updatePassing() {
+    final routes = _routes;
+    final destination = _destination;
+    final location = _location;
+    if (routes == null || destination == null || location == null) {
+      setState(() => _passing = const []);
+      return;
+    }
+    final passing = routesPassingBetween(
+      origin: GeoPoint(location.latitude, location.longitude),
+      destination: destination,
+      routes: routes,
+      radiusMeters: _passingRadiusMeters,
+    );
+    setState(() => _passing = passing);
+    // Their timetables, for "Pasa ~10:47" (cached; also used by the panel).
+    for (final p in passing) {
+      unawaited(_loadSchedules(p.pattern));
+    }
+  }
+
+  /// [_passing] as the panel shows it, without the directions the Dashboard
+  /// already offers (by stops).
+  List<PassingOption> _passingOptions() {
+    final byStops = {
+      for (final o in _journeyOptions ?? const <JourneyOption>[])
+        o.journey.patternId,
+    };
+    final now = widget.clock();
+    return [
+      for (final p in _passing)
+        if (!byStops.contains(p.pattern.id))
+          PassingOption(
+            passing: p,
+            nextPassAt: switch (_schedules[p.pattern.id]) {
+              final weekly? => p.nextPassAt(weekly, now),
+              null => null,
+            },
+            timetableLoading: _schedulesLoading.contains(p.pattern.id),
+            fare: _fares[p.route.id],
+          ),
+    ];
+  }
+
+  /// "El bus pasa cerca": draws that direction and shows where to wait.
+  void _selectPassing(PassingOption option) {
+    final p = option.passing;
+    _selectRoute(p.route, pattern: p.pattern);
+    _map?.moveTo(
+      p.origin.point.latitude,
+      p.origin.point.longitude,
+      zoom: _stopZoom,
+    );
   }
 
   Future<void> _loadJourneys() async {
@@ -550,6 +615,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     setState(() {
       _plannerMode = false;
       _destination = null;
+      _passing = const [];
       _journeyOptions = null;
       _journeysLoading = false;
       _journeysError = null;
@@ -639,15 +705,35 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     final routes = _routes;
     final location = _location;
     if (routes == null || location == null) return;
-    setState(
-      () => _nearbyStops = nearbyStops(
+    setState(() {
+      _nearbyStops = nearbyStops(
         latitude: location.latitude,
         longitude: location.longitude,
         routes: routes,
         radiusMeters: widget.routesFilter.radiusMeters,
-      ),
-    );
+      );
+      // Routes whose line (the road) passes near, with or without a stop.
+      _passingNear = routesPassingNear(
+        latitude: location.latitude,
+        longitude: location.longitude,
+        routes: routes,
+        radiusMeters: widget.routesFilter.radiusMeters,
+      );
+    });
     _drawNearbyStops();
+  }
+
+  /// "Rutas que pasan cerca de ti" (by their line, not their stops).
+  List<PassingRoute> _passingNear = const [];
+
+  /// One of them: draws that direction and goes to where it passes closest.
+  void _showPassingRoute(PassingRoute passing) {
+    _selectRoute(passing.route, pattern: passing.pattern);
+    _map?.moveTo(
+      passing.origin.point.latitude,
+      passing.origin.point.longitude,
+      zoom: _stopZoom,
+    );
   }
 
   void _drawNearbyStops({bool fit = false}) {
@@ -925,6 +1011,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           onRouteSelected: _showStopRoute,
           onRetry: _loadRoutes,
           onClose: _closeNearbyStops,
+          passingRoutes: _passingNear,
+          onPassingRouteSelected: _showPassingRoute,
           departures: _departuresOf(_nearbySelectedId),
           onDepartureSelected: _showDeparture,
           onRetryDepartures: _nearbySelectedId == null
@@ -976,6 +1064,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           onSelected: _selectJourney,
           onRetry: _loadJourneys,
           onClose: _closePlanner,
+          passing: _passingOptions(),
+          onPassingSelected: _selectPassing,
         ),
       ];
     }
