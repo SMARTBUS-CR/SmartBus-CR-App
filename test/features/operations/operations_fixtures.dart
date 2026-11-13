@@ -274,6 +274,7 @@ RoutePattern pattern(
   List<PatternStop> stops = const [],
   List<GeoPoint> geometry = const [],
   String? routeId,
+  double? drivingSeconds,
 }) => RoutePattern(
   id: id,
   name: 'Patrón $id',
@@ -282,6 +283,7 @@ RoutePattern pattern(
   routeId: routeId,
   stops: stops,
   geometry: geometry,
+  drivingDurationSeconds: drivingSeconds,
 );
 
 TransitRoute route(
