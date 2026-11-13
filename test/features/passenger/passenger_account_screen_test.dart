@@ -78,7 +78,7 @@ Future<List<http.Request>> _pumpScreen(
       routes: {
         '/login': (_) => const Scaffold(body: Text('LOGIN')),
         '/passenger/home': (_) => const Scaffold(body: Text('PASSENGER HOME')),
-        '/passenger/trips': (_) => const Scaffold(body: Text('TRIPS')),
+        '/passenger/favorites': (_) => const Scaffold(body: Text('FAVORITES')),
         '/passenger/account': (_) =>
             PassengerAccountScreen(authService: service, sessionStore: store),
         '/passenger/account/password': (_) =>
@@ -406,8 +406,10 @@ void main() {
     const deletedMessage = 'Cuenta eliminada correctamente.';
 
     /// GET /auth/user answers the profile; DELETE /auth/user answers [delete].
-    _Handler withDelete(_Handler delete) => (request) async =>
-        request.method == 'DELETE' ? delete(request) : _json(userDocument(), 200);
+    _Handler withDelete(_Handler delete) =>
+        (request) async => request.method == 'DELETE'
+        ? delete(request)
+        : _json(userDocument(), 200);
 
     /// Opens the dialog, types [pass] and taps "Eliminar".
     Future<void> confirmWith(WidgetTester tester, String pass) async {
@@ -609,8 +611,7 @@ void main() {
       await _pumpScreen(
         tester,
         withDelete(
-          (_) async =>
-              _json(jsonApiError(403, 'Forbidden', 'Forbidden.'), 403),
+          (_) async => _json(jsonApiError(403, 'Forbidden', 'Forbidden.'), 403),
         ),
       );
       await tester.pumpAndSettle();
