@@ -41,7 +41,6 @@ class SmartBusApp extends StatelessWidget {
     '/passenger/account/password': (_) => const ChangePasswordScreen(),
 
     // Driver flow (RF-13 to RF-15)
-    '/driver/home': (_) => const DriverHomeScreen(),
     '/driver/trip': (_) => const TripScreen(),
     '/driver/routes': (_) => const DriverRoutesScreen(),
     '/driver/account': (_) => const DriverAccountScreen(),
@@ -63,6 +62,12 @@ class SmartBusApp extends StatelessWidget {
           builder = (_) => args is TripScreenArgs
               ? TripScreen(trip: args.trip, autoStart: args.autoStart)
               : const TripScreen();
+        } else if (settings.name == '/driver/home') {
+          // After finishing a trip: "Iniciar viaje de vuelta" passes the next.
+          final args = settings.arguments;
+          builder = (_) => args is DriverHomeArgs
+              ? DriverHomeScreen(startTripId: args.startTripId)
+              : const DriverHomeScreen();
         } else if (settings.name == '/passenger/tracking') {
           // Needs the trip UUID (from "Buses en curso").
           final args = settings.arguments;
