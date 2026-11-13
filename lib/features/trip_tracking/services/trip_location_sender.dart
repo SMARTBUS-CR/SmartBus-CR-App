@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../../core/network/api_exception.dart';
+import '../../auth/services/session_check.dart';
 import '../models/gps_fix.dart';
 import 'gps_location_service.dart';
 
@@ -144,9 +145,14 @@ class TripLocationSender {
     GpsLocationService? service,
     this.interval = const Duration(seconds: 5),
     this.accuracy = LocationAccuracy.high,
-  }) : _service = service ?? GpsLocationService();
+    SessionExpiryCheck? sessionCheck,
+  }) : _service = service ?? GpsLocationService(),
+       _confirmSessionExpired = sessionCheck ?? confirmSessionExpired;
 
   final GpsLocationService _service;
+
+  /// Asked before treating a `401` as "session expired" (tests fake it).
+  final SessionExpiryCheck _confirmSessionExpired;
 
   /// How often a reading is sent.
   final Duration interval;
@@ -190,11 +196,13 @@ class TripLocationSender {
     }
 
     // The stream keeps a foreground notification (Android) / background updates
-    // (iOS) alive and feeds [_latest]; the timer paces the sends.
+    // (iOS) alive. Each new position is sent **as soon as it arrives** (not on
+    // the next tick: that added up to [interval] of delay for the passenger).
+    // The timer only covers a stopped bus, which gets no new positions.
     _positionSub =
         Geolocator.getPositionStream(locationSettings: _buildLocationSettings())
             .listen(
-              (position) => _latest = position,
+              _onPosition,
               onError: (Object _) => _set(
                 lastError: 'No se pudo obtener la ubicación del dispositivo.',
               ),
@@ -204,6 +212,18 @@ class TripLocationSender {
     _set(state: TripTrackingState.tracking);
     unawaited(_tick()); // first reading now, don't wait a full interval
   }
+
+  /// A new position from the OS: sent right away.
+  void _onPosition(Position position) {
+    if (_disposed || !snapshot.value.isTracking) return;
+    _latest = position;
+    _queue(position);
+    _sentSinceTick = true;
+    unawaited(_flush());
+  }
+
+  /// A reading was queued since the last tick (the bus is moving).
+  bool _sentSinceTick = false;
 
   /// Sends the bus's current position as the **end of the trip** (`final`:
   /// the GPS service stores it). Call it right before completing the trip,
@@ -262,6 +282,7 @@ class TripLocationSender {
     if (sub != null) unawaited(sub.cancel());
     _latest = null;
     _waiting = null;
+    _sentSinceTick = false;
   }
 
   /// Message for the driver when the backend refuses the readings for good, or
@@ -320,19 +341,61 @@ class TripLocationSender {
     }
   }
 
+  /// Every [interval]: when no new position arrived since the last tick (a
+  /// stopped bus, or the first reading), sends the latest one again
+  /// (re-stamped "now", see [_stamped]); otherwise just retries a failed send.
   Future<void> _tick() async {
     if (_disposed) return;
-
-    final position = _latest ?? await Geolocator.getLastKnownPosition();
-    if (position != null) {
-      _enqueue(_stamped(GpsFix.fromPosition(position, tripId: _tripId)));
-      _set(
-        lastFixAt: DateTime.now(),
-        latitude: position.latitude,
-        longitude: position.longitude,
-      );
+    if (_sentSinceTick) {
+      _sentSinceTick = false;
+      await _flush();
+      return;
     }
+
+    final position = _latest ?? await _firstPosition();
+    if (_disposed || !snapshot.value.isTracking) return;
+    // A real position may have arrived while asking for the first one.
+    if (position != null && !_sentSinceTick) _queue(position);
+    _sentSinceTick = false;
     await _flush();
+  }
+
+  /// The trip's first reading is stored as its **start**, so it must be where
+  /// the bus is now: the OS's last known position only if it is recent,
+  /// otherwise a fresh fix (at most [_firstFixTimeout]).
+  Future<Position?> _firstPosition() async {
+    try {
+      final known = await Geolocator.getLastKnownPosition();
+      if (known != null &&
+          DateTime.now().difference(known.timestamp).abs() <=
+              _maxLastKnownAge) {
+        return known;
+      }
+      return await Geolocator.getCurrentPosition(
+        locationSettings: LocationSettings(
+          accuracy: accuracy,
+          timeLimit: _firstFixTimeout,
+        ),
+      );
+    } catch (_) {
+      // No fix yet (timeout, GPS off, plugin error): the stream or the next
+      // tick will bring one.
+      return null;
+    }
+  }
+
+  /// A last known position older than this is not the bus's current one.
+  static const _maxLastKnownAge = Duration(seconds: 30);
+  static const _firstFixTimeout = Duration(seconds: 10);
+
+  /// [position] becomes the reading to send next; the map shows it.
+  void _queue(Position position) {
+    _enqueue(_stamped(GpsFix.fromPosition(position, tripId: _tripId)));
+    _set(
+      lastFixAt: DateTime.now(),
+      latitude: position.latitude,
+      longitude: position.longitude,
+    );
   }
 
   /// Time of the last reading queued, so each new one is strictly later.
@@ -394,6 +457,17 @@ class TripLocationSender {
             _set(lastError: e.message, pendingCount: _pendingCount);
             break;
           }
+          if (e.type == ApiErrorType.unauthorized &&
+              !await _sessionReallyExpired()) {
+            // The GPS service could not check the token with the Gateway
+            // (slow / down) but the token works: keep it and try again.
+            _waiting ??= fix;
+            _set(
+              lastError: 'Verificando la sesión…',
+              pendingCount: _pendingCount,
+            );
+            break;
+          }
           final rejection = _rejectionMessage(e);
           if (rejection != null) {
             // Every next fix would fail the same way: stop sending.
@@ -414,6 +488,25 @@ class TripLocationSender {
       _flushing = false;
     }
   }
+
+  /// When the Authentication Service last said the token works.
+  DateTime? _sessionConfirmedAt;
+
+  /// A `401` from the GPS service only stops sending when the Authentication
+  /// Service confirms it ([confirmSessionExpired]). While it said "valid" in
+  /// the last [_sessionRecheckAfter], it is not asked again.
+  Future<bool> _sessionReallyExpired() async {
+    final confirmed = _sessionConfirmedAt;
+    if (confirmed != null &&
+        DateTime.now().difference(confirmed) < _sessionRecheckAfter) {
+      return false;
+    }
+    final expired = await _confirmSessionExpired();
+    if (!expired) _sessionConfirmedAt = DateTime.now();
+    return expired;
+  }
+
+  static const _sessionRecheckAfter = Duration(seconds: 60);
 
   bool _isRetryable(ApiException e) {
     switch (e.type) {
