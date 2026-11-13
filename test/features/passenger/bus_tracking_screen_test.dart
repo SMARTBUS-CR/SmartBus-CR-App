@@ -404,6 +404,48 @@ void main() {
       expect(location.accessChecks, [false, true]); // asked on "Activar"
     });
 
+    testWidgets('no line from the Dashboard: "Ruta aproximada"', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        _FakeGps(_tracking(TripStatus.inProgress, position: _position())),
+        operations: withRoute(),
+      );
+      await tester.pump();
+
+      expect(map.route?.hasGeometry, isFalse);
+      expect(find.byKey(const Key('approximate-route-note')), findsOneWidget);
+    });
+
+    testWidgets('with the Dashboard line: drawn as it comes, no note', (
+      tester,
+    ) async {
+      const line = [
+        GeoPoint(9.92, -84.08),
+        GeoPoint(9.925, -84.085),
+        GeoPoint(9.94, -84.08),
+      ];
+      final operations = withRoute()
+        ..patternById = pattern(
+          patternId,
+          stops: [
+            stopAt('Terminal', 9.92, -84.08, seq: 1),
+            stopAt('Centro', 9.94, -84.08, seq: 2),
+          ],
+          geometry: line,
+        );
+      await pump(
+        tester,
+        _FakeGps(_tracking(TripStatus.inProgress, position: _position())),
+        operations: operations,
+      );
+      await tester.pump();
+
+      expect(map.route?.path, line);
+      expect(find.byKey(const Key('approximate-route-note')), findsNothing);
+    });
+
     testWidgets('no route available: bus only, no "Ver ruta"', (tester) async {
       await pump(
         tester,

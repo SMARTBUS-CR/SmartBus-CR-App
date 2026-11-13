@@ -389,7 +389,7 @@ teléfono, si la reporta) y `recorded_at`.
 | Respuesta del GPS | Qué hace la app |
 |---|---|
 | `201` guardada / `202` (`broadcast_only`, `duplicate`, `stale`) | Cuenta como enviada |
-| Sin red, timeout, 5xx, 429 | La deja en cola y reintenta en el siguiente envío |
+| Sin red, timeout (8 s), 5xx, 429 | La reintenta en el siguiente envío, salvo que ya haya una más nueva (se envía esa) |
 | `409` el viaje no está en curso | **Deja de enviar**: "El viaje no está en curso: todavía no se ha iniciado o ya terminó." |
 | `403` no es el conductor asignado | **Deja de enviar**: "No eres el conductor asignado a este viaje." |
 | `404` el viaje no existe | **Deja de enviar**: "No se encontró el viaje." |
@@ -402,6 +402,37 @@ pantalla muestra el motivo (`TripTrackingState.rejected`) y un botón
 `401` otra vez, así que (`snapshot.sessionExpired`) Recorrido borra la sesión y
 manda al **Login** con "Tu sesión expiró…".
 
+**Siempre la más nueva, sin cola.** El pasajero necesita dónde está el bus
+**ahora**, y el GPS ignora una lectura más vieja que la posición actual. Por
+eso hay como mucho **una** petición en curso y **una** lectura esperando: cada
+lectura nueva reemplaza a la que espera. Si el servidor tarda, no se acumulan
+posiciones viejas que muestren al bus atrasado (antes había una cola de hasta
+120 en orden). "Pendientes" es 0 o 1. Cada envío espera como mucho 15 s
+(`ApiConfig.gpsSendTimeout`; por Render una lectura tarda ~2–5 s); el resto de
+la app sigue con 60 s.
+
+**Se envía apenas llega.** Cada posición nueva del teléfono se envía en el
+momento (y se ve en el mapa del conductor), no en el siguiente tick: antes eso
+sumaba hasta 5 s de atraso al pasajero. El tick de 5 s solo reenvía cuando no
+llegó ninguna posición nueva (bus detenido).
+
+**Primera lectura = inicio del viaje.** La última posición conocida del
+teléfono solo se usa si tiene menos de 30 s; si no, se pide una nueva
+(`getCurrentPosition`, hasta 10 s). Antes podía enviarse una posición vieja (de
+otro lugar) o ninguna, y el GPS guardaba ese punto como el inicio.
+
+**Bus detenido.** Con el bus quieto el teléfono no da posiciones nuevas
+(filtro de 10 m) y llegaba la misma lectura cada 5 s; el GPS la ignoraba como
+duplicada y el pasajero veía "Señal débil" en cada parada. Ahora la lectura
+repetida sale con la hora actual: el bus "sigue aquí ahora".
+
+**Qué guarda el GPS.** Se **transmite** cada lectura, pero en `gps_locations`
+solo quedan el **inicio** (la primera lectura del viaje) y el **fin**: al tocar
+**Finalizar recorrido**, antes de completar el viaje, la app envía la posición
+actual con `final: true` (`TripLocationSender.sendFinal`, una vez por viaje,
+sin bloquear si falla). Requiere la rama `feature/gps-live-broadcast-trip-edges`
+del servicio GPS.
+
 **Pantalla Recorrido (mapa).** Con el viaje en curso, el mapa ocupa la mayor
 parte de la pantalla:
 
@@ -411,6 +442,17 @@ parte de la pantalla:
   `GET ops/route-patterns/{id}` (`OperationsService.routePattern`). Sin ninguna
   de las dos, solo se ve el bus con una nota. Se dibuja igual que en el mapa
   del pasajero (línea con degradado, flechas, paradas numeradas).
+- **La línea es la del Dashboard, tal como viene** (`route_geometry`, la que
+  calcula "Calculate Route" con OSRM en el panel admin). Si el viaje se
+  planificó **antes** de calcularla, su copia trae paradas pero no línea: se
+  pide el recorrido actual y se usa **su línea con las paradas y horas del
+  viaje** (`RoutePattern.withGeometry`).
+- **Sin línea en el Dashboard** (`route_geometry: null`, como hoy en -dev
+  para PV-RF, PV-GUA y SJ-PV): se unen las paradas en orden con rectas y se
+  muestra la nota **"Ruta aproximada: une las paradas en orden."**
+  (`ApproximateRouteNote`), igual en "Rastreando tu bus" y en la ficha de la
+  ruta del inicio. Para que se vea por calles hay que calcular la ruta en el
+  Dashboard; la app no la inventa.
 - **El bus:** la posición de cada lectura del GPS (`snapshot.latitude` /
   `longitude`); la cámara lo sigue. Botones: **Ver ruta completa** (deja de
   seguir) y **Centrar en el bus**. Arriba, una etiqueta con destino, hora real
@@ -496,6 +538,19 @@ recorrido, fecha y hora). El conductor solo inicia uno ya programado.
    orden con la hora programada de cada una (salida + `minutes_from_start`),
    sacadas de la ruta planificada del viaje (`planned_route_snapshot`, sin otra
    petición). Si el viaje no trae paradas, no aparece.
+   Cada viaje muestra la **tarifa** de su ruta ("Tarifa ₡1.570",
+   `GET ops/routes/{id}/fares`, la vigente hoy; una petición por ruta, sin
+   bloquear la lista).
+   **Varios viajes al día** (ida, vuelta, otras horas): salen todos, en orden.
+   Con uno en curso los demás esperan; al finalizarlo se pueden iniciar. Una
+   ruta hecha **ida y vuelta todo el día** es una salida (y un viaje) por cada
+   hora y sentido: se van alternando.
+   Al final de la lista, **"Horario de hoy · PV-GUA"** (plegado) por cada ruta
+   de sus viajes: las salidas de hoy de **los dos sentidos** de la ruta
+   (`routePatterns` + `patternSchedules`), la próxima destacada. Es el mismo
+   `DeparturesToday` (`lib/widgets/`) que ve el pasajero.
+   Los viajes del día los crea el Dashboard (asignaciones fijas + tarea
+   diaria); la app solo los lee.
 2. **Iniciar recorrido** — solo en viajes `scheduled` y solo si **no hay otro
    en curso** (en ese caso los demás dicen "Finaliza el recorrido en curso para
    iniciar este viaje."):
@@ -524,6 +579,13 @@ recorrido, fecha y hora). El conductor solo inicia uno ya programado.
       GPS** y se muestra "Recorrido finalizado" con **"Llegada: HH:MM"**: la
       hora del backend en hora local, no la del teléfono. Si ya estaba
       completado (otro dispositivo), el backend responde `200` igual.
+   4. **Siguiente viaje:** se piden los viajes de hoy todavía `scheduled` y,
+      si hay, se muestra el primero ("Siguiente viaje · sentido contrario"
+      cuando es la misma ruta en el otro sentido, con su hora de salida) con
+      **Iniciar viaje hacia {destino}** (sirve en los dos sentidos: en una ruta
+      ida y vuelta todo el día se alterna cada vez). Abre Inicio con
+      `DriverHomeArgs(startTripId)`, que muestra directo la confirmación de
+      inicio de ese viaje (con el mismo chequeo de permiso y GPS).
 
 Errores al finalizar:
 
@@ -602,10 +664,20 @@ Errores al iniciar (SnackBar en Inicio; el GPS no se enciende):
 
 ### Pasajero
 
-Chip **"Buses en curso"** → lista de rutas → la ruta muestra cada recorrido
-(sentido) con:
+Chip **"Buses en curso"** → lista de rutas → la ruta (`RouteBusesScreen`,
+también desde la búsqueda) muestra arriba la **tarifa** ("Tarifa ₡1.570") y
+cada recorrido (sentido) con:
+- su **horario de hoy** (`GET ops/route-patterns/{id}/schedules`):
+  "Próxima salida: 10:30" y todas las salidas del día; las que ya pasaron en
+  gris. Respeta el día de la semana (`day_of_week`: 0 = domingo), la vigencia
+  y los días suspendidos (feriados). Sin salidas hoy: "Hoy no hay salidas en
+  este sentido.". Un sentido sin horario publicado no muestra nada;
 - sus **buses en curso** (unidad, placa, hora de salida) → **Ver en vivo** abre
-  "Rastreando tu bus" con ese viaje;
+  "Rastreando tu bus" con ese viaje. Cada bus muestra además su **estado**
+  ("En vivo · hace 5 s", "Señal débil", "Esperando ubicación") y **dónde va**
+  ("Próxima parada: Centro", calculada con `NextStopTracker` desde su
+  posición). Usa `RouteLiveBuses` por sentido, igual que "Buses en vivo" del
+  inicio: la lista se renueva cada 30 s y un viaje terminado desaparece;
 - **Ver ruta**: vuelve al mapa del inicio con esa ruta y ese sentido dibujados
   (§10);
 - **Ver paradas**: las paradas en orden con los minutos desde el inicio, aunque
@@ -626,7 +698,7 @@ Un viaje terminado desaparece de la lista (el Dashboard solo devuelve los
 | Tabla de estados (`TripStatusInfo`), `refreshedWith` y badge de Inicio con ícono y semántica | `test/features/driver/trip_status_badge_test.dart` |
 | Mis rutas: historial agrupado por día con estado y datos (horario, real y duración, bus), Continuar recorrido, filtros por estado, Cargar más (y su error), vacío, cargando, error + reintentar, deslizar, 401, 320 × 568 | `test/features/driver/driver_routes_screen_test.dart` |
 | Próxima parada: inicio, avance, retomar a mitad, saltar paradas, fin | `test/features/driver/next_stop_tracker_test.dart` |
-| Buses en curso: ruta → buses → en vivo, sin buses, ver paradas, ver ruta en el mapa, reintentar | `test/features/passenger/buses_in_progress_screen_test.dart` |
+| Buses en curso: ruta → buses → en vivo, estado y próxima parada de cada bus, bus sin posición, viaje terminado oculto, sin buses, ver paradas, ver ruta en el mapa, reintentar | `test/features/passenger/buses_in_progress_screen_test.dart` |
 
 ## 10. Rutas en el mapa del pasajero
 
@@ -922,3 +994,30 @@ Dashboard que busque nombre, código y `headsign` **sin tildes** (PostgreSQL
 | Catálogo (todas las páginas, una sola descarga, reintento si falla), con o sin tilde, por número / nombre / destino, orden, páginas de 20 | `test/features/operations/route_search_service_test.dart` |
 | AC1–AC9: teclado, espera de 400 ms, mínimo 2 caracteres, respuestas viejas, resultados, resaltado, cargar más, abrir ruta, sin resultados, borrar, errores + reintentar, pantalla 320 × 568 | `test/features/passenger/route_search_screen_test.dart` |
 | La barra del inicio abre "Buscar ruta" | `test/features/passenger/passenger_home_screen_test.dart` |
+
+## 13. Rendimiento
+
+Medido contra `-dev` (Render): **cada petición tarda ~2,5–4 s en el
+servidor**; la conexión y el TLS solo ~0,07 s. Lo lento es el backend, así
+que la app pide lo menos posible y nunca en fila:
+
+- **Una conexión HTTP para toda la app** (`ApiClient._sharedHttp`): las
+  pantallas reutilizan la conexión TLS en vez de abrir una nueva cada vez.
+- **Caché del catálogo** (`OperationsService`, 10 min, en memoria y
+  compartida): rutas, recorridos, tarifas y horarios. Volver a una ruta o al
+  mapa es instantáneo; dos pantallas que piden lo mismo comparten la petición;
+  un error no se guarda. **Nunca** se cachean datos en vivo: viajes del
+  conductor, buses en curso, estado de un viaje.
+  `OperationsService.clearCache()` la vacía.
+- **En paralelo**: tarifa + recorridos + horarios (inicio del conductor y
+  ficha de la ruta) se piden a la vez.
+- **Carga previa**: el splash descarga el catálogo mientras verifica la
+  sesión; el mapa del pasajero abre con las rutas listas.
+- **Sin redibujar el mapa de más**: el widget del mapa se construye una vez
+  (inicio, "Rastreando tu bus", Recorrido); los contadores de cada segundo y
+  la ubicación no lo tocan. Arrastrar el panel del inicio solo mueve los
+  botones (`ValueNotifier`), no reconstruye la pantalla en cada cuadro.
+
+**Probar la fluidez en `--release` (o `--profile`)**, nunca en debug: en debug
+Flutter es varias veces más lento a propósito (JIT, comprobaciones) y el mapa
+nativo se nota trabado.

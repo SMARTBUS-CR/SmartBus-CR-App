@@ -7,6 +7,8 @@ import 'package:smartbus_drivers/core/location/location_service.dart';
 import 'package:smartbus_drivers/core/network/api_exception.dart';
 import 'package:smartbus_drivers/core/storage/secure_session_store.dart';
 import 'package:smartbus_drivers/core/theme.dart';
+import 'package:smartbus_drivers/features/driver/driver_home_screen.dart'
+    show DriverHomeArgs;
 import 'package:smartbus_drivers/features/driver/trip_screen.dart';
 import 'package:smartbus_drivers/features/driver/widgets/trip_status_badge.dart';
 import 'package:smartbus_drivers/features/operations/models/operations_models.dart';
@@ -20,6 +22,13 @@ import '../operations/operations_fixtures.dart';
 class _FakeSender extends TripLocationSender {
   final List<String> started = [];
   int stops = 0;
+
+  /// [sendFinal] calls, with the state the sender was in (must be tracking:
+  /// the trip still in progress).
+  final List<TripTrackingState> finals = [];
+
+  @override
+  Future<void> sendFinal() async => finals.add(snapshot.value.state);
 
   @override
   Future<void> start({required String tripId}) async {
@@ -127,6 +136,8 @@ Future<_FakeMap> _pumpTrip(
   String? status,
   DriverTrip? trip,
   bool autoStart = false,
+  NavigatorObserver? observer,
+  bool sessionReallyExpired = true,
 }) async {
   final map = _FakeMap();
   final opened = trip ?? (status == null ? null : driverTrip(status: status));
@@ -134,6 +145,7 @@ Future<_FakeMap> _pumpTrip(
   operations.knownTrip ??= opened;
   await tester.pumpWidget(
     MaterialApp(
+      navigatorObservers: [?observer],
       home: TripScreen(
         trip: opened,
         autoStart: autoStart,
@@ -141,6 +153,7 @@ Future<_FakeMap> _pumpTrip(
         sender: sender,
         sessionStore: SecureSessionStore(),
         mapBuilder: map.builder,
+        sessionCheck: () async => sessionReallyExpired,
       ),
       routes: {
         '/driver/home': (_) => const Scaffold(body: Text('home')),
@@ -152,6 +165,19 @@ Future<_FakeMap> _pumpTrip(
   await tester.pump();
   await tester.pump();
   return map;
+}
+
+/// Records the last route pushed or replaced (to check its arguments).
+class _RouteRecorder extends NavigatorObserver {
+  Route<dynamic>? last;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      last = route;
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) =>
+      last = newRoute;
 }
 
 /// The "Enviando ubicación · hace …" status line (rich text).
@@ -346,6 +372,91 @@ void main() {
       expect(map.route?.stops.map((s) => s.name), ['A', 'B']);
     });
 
+    DriverTrip tripWithoutLine() => driverTrip(
+      status: 'in_progress',
+      actualDepartureAt: '2026-11-11T13:00:00.000000Z',
+      snapshot: {...plannedSnapshot, 'route_geometry': null},
+    );
+
+    const dashboardLine = [
+      GeoPoint(10.460, -84.000),
+      GeoPoint(10.465, -84.004),
+      GeoPoint(10.470, -84.000),
+      GeoPoint(10.480, -84.000),
+    ];
+
+    testWidgets('trip planned without a line: takes the line of the current '
+        'pattern, keeping the trip\'s stops and times', (tester) async {
+      final operations = FakeOperations()
+        ..patternById = pattern(
+          patternId,
+          stops: [stopAt('Otra', 10.0, -84.0, seq: 1)],
+          geometry: dashboardLine,
+        );
+      final map = await _pumpTrip(
+        tester,
+        operations: operations,
+        sender: _FakeSender(),
+        trip: tripWithoutLine(),
+        autoStart: true,
+      );
+      await tester.pump();
+
+      expect(operations.calls, contains('pattern $patternId'));
+      expect(map.route?.geometry, dashboardLine);
+      expect(map.route?.stops.map((s) => s.name), [
+        'Terminal',
+        'Centro',
+        'Muelle',
+      ]);
+      expect(find.byKey(const Key('approximate-route-note')), findsNothing);
+    });
+
+    testWidgets('no line in the trip nor in the Dashboard: stops joined in '
+        'order, with "Ruta aproximada"', (tester) async {
+      final operations = FakeOperations()
+        ..patternById = pattern(
+          patternId,
+          stops: [
+            stopAt('A', 10.46, -84.0, seq: 1),
+            stopAt('B', 10.47, -84.0, seq: 2),
+          ],
+        );
+      final map = await _pumpTrip(
+        tester,
+        operations: operations,
+        sender: _FakeSender(),
+        trip: tripWithoutLine(),
+        autoStart: true,
+      );
+      await tester.pump();
+
+      // The trip's stops, joined in order (no line from the Dashboard).
+      expect(map.route?.hasGeometry, isFalse);
+      expect(map.route?.stops.map((s) => s.name), [
+        'Terminal',
+        'Centro',
+        'Muelle',
+      ]);
+      expect(map.route?.path, hasLength(3));
+      expect(find.byKey(const Key('approximate-route-note')), findsOneWidget);
+      expect(
+        find.text('Ruta aproximada: une las paradas en orden.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a trip with its line: no "Ruta aproximada"', (tester) async {
+      await _pumpTrip(
+        tester,
+        operations: FakeOperations(),
+        sender: _FakeSender(),
+        trip: plannedTrip(),
+        autoStart: true,
+      );
+      expect(find.byKey(const Key('approximate-route-note')), findsNothing);
+    });
+
     testWidgets('no route anywhere: only the bus, with a note', (tester) async {
       final map = await _pumpTrip(
         tester,
@@ -441,6 +552,32 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('login'), findsOneWidget);
+    });
+
+    testWidgets('401 but the Authentication Service says the token works '
+        '(the Gateway was slow): stays, the GPS goes on', (tester) async {
+      final sender = _FakeSender();
+      await _pumpTrip(
+        tester,
+        operations: FakeOperations(completeError: ApiException.fromStatus(401)),
+        sender: sender,
+        status: 'in_progress',
+        autoStart: true,
+        sessionReallyExpired: false,
+      );
+
+      await tester.tap(find.text('Finalizar recorrido'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Finalizar'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('login'), findsNothing);
+      expect(
+        find.textContaining('No se pudo verificar la conexión'),
+        findsOneWidget,
+      );
+      expect(sender.stops, 0);
+      expect(await SecureSessionStore().readToken(), 'tok');
     });
   });
 
@@ -639,12 +776,97 @@ void main() {
 
       await finish(tester);
 
-      expect(operations.calls.last, 'complete $tripId');
+      // Then the trips left today (the way back), see below.
+      expect(operations.calls, contains('complete $tripId'));
       expect(sender.stops, 1);
       expect(find.text('Recorrido finalizado'), findsOneWidget);
       final arrival = DateTime.parse(completedArrivalAt);
       expect(find.text('Llegada: ${formatHour(arrival)}'), findsOneWidget);
       expect(find.byKey(const Key('trip-map')), findsNothing);
+    });
+
+    /// The way back: same route, other direction, later today.
+    DriverTrip wayBack({String departure = '2026-11-11T15:00:00.000000Z'}) {
+      final resource = tripResource(id: 't-back');
+      final attributes = resource['attributes'] as Map<String, dynamic>;
+      attributes['route_pattern_id'] = 'p-back';
+      attributes['scheduled_departure_at'] = departure;
+      attributes['planned_route_snapshot'] = {
+        'route_code': 'PV-RF',
+        'route_name': 'Puerto Viejo',
+        'headsign': 'Río Frío',
+      };
+      return DriverTrip.fromJsonApi(resource);
+    }
+
+    testWidgets('after finishing: offers to start the way back, which opens '
+        'Home with that trip', (tester) async {
+      final operations = FakeOperations(
+        trips: [
+          wayBack(departure: '2026-11-11T18:00:00.000000Z'),
+          wayBack(),
+        ],
+      );
+      final observer = _RouteRecorder();
+      await _pumpTrip(
+        tester,
+        operations: operations,
+        sender: _FakeSender(),
+        status: 'in_progress',
+        autoStart: true,
+        observer: observer,
+      );
+
+      await finish(tester);
+
+      expect(find.text('Recorrido finalizado'), findsOneWidget);
+      final card = find.byKey(const Key('next-trip'));
+      expect(card, findsOneWidget);
+      expect(
+        find.descendant(
+          of: card,
+          matching: find.text('Siguiente viaje · sentido contrario'),
+        ),
+        findsOneWidget,
+      );
+      // The earliest scheduled one (15:00 UTC, not 18:00).
+      final at = DateTime.utc(2026, 11, 11, 15).toLocal();
+      expect(find.text('Sale a las ${formatHour(at)}'), findsOneWidget);
+      expect(find.text('Iniciar viaje hacia Río Frío'), findsOneWidget);
+      expect(operations.lastStatusFilter, TripStatus.scheduled);
+
+      await tester.tap(find.byKey(const Key('start-next-trip')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('home'), findsOneWidget);
+      final args = observer.last?.settings.arguments;
+      expect(args, isA<DriverHomeArgs>());
+      expect((args! as DriverHomeArgs).startTripId, 't-back');
+    });
+
+    testWidgets('after finishing with no more trips today: only "Volver a '
+        'Inicio"', (tester) async {
+      final (_, _) = await pumpRunning(tester);
+      await finish(tester);
+
+      expect(find.byKey(const Key('next-trip')), findsNothing);
+      expect(find.text('Volver a Inicio'), findsOneWidget);
+    });
+
+    testWidgets('sends the end position (final) once, while the trip is still '
+        'in progress, before completing it', (tester) async {
+      final (operations, sender) = await pumpRunning(tester);
+
+      await tester.tap(find.byKey(const Key('finish-trip')));
+      await tester.pumpAndSettle();
+      expect(sender.finals, isEmpty, reason: 'nothing before confirming');
+      await tester.tap(find.byKey(const Key('finish-trip-confirm')));
+      await tester.pumpAndSettle();
+
+      // Sent while the GPS was still sending (the trip in progress).
+      expect(sender.finals, [TripTrackingState.tracking]);
+      expect(completes(operations), 1);
+      expect(sender.stops, 1);
     });
 
     testWidgets('AC5 · while waiting: spinner, disabled, GPS still sending; '

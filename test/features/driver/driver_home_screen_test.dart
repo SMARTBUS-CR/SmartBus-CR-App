@@ -57,7 +57,10 @@ class _Harness {
   /// Arguments of every route pushed (the trip screen, login).
   final List<(String?, Object?)> opened = [];
 
-  Future<void> pump(WidgetTester tester) async {
+  /// What the Authentication Service says about a `401`.
+  bool sessionReallyExpired = true;
+
+  Future<void> pump(WidgetTester tester, {String? startTripId}) async {
     await tester.pumpWidget(
       MaterialApp(
         home: DriverHomeScreen(
@@ -66,6 +69,8 @@ class _Harness {
           notifications: notifications,
           sessionStore: SecureSessionStore(),
           clock: () => DateTime(2026, 11, 11, 8),
+          startTripId: startTripId,
+          sessionCheck: () async => sessionReallyExpired,
         ),
         onGenerateRoute: (settings) {
           opened.add((settings.name, settings.arguments));
@@ -124,6 +129,95 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Programado'), findsOneWidget);
+    });
+
+    testWidgets('each trip shows its route fare', (tester) async {
+      final operations =
+          FakeOperations(trips: [driverTrip(snapshot: plannedSnapshot)])
+            ..fares = {
+              routeId: [fare(1570)],
+            };
+      await _Harness(operations).pump(tester);
+
+      expect(find.byKey(const Key('trip-fare-$tripId')), findsOneWidget);
+      expect(find.text('Tarifa ₡1.570'), findsOneWidget);
+      expect(operations.timetableCalls, ['fares $routeId']);
+    });
+
+    testWidgets('ida y vuelta: every trip of the day, the way back startable '
+        'once the first one is completed', (tester) async {
+      final operations = FakeOperations(
+        trips: [
+          driverTrip(id: 'ida', status: 'completed'),
+          driverTrip(id: 'vuelta'),
+        ],
+      );
+      await _Harness(operations).pump(tester);
+
+      expect(find.byKey(const Key('trip-card-ida')), findsOneWidget);
+      expect(find.byKey(const Key('trip-card-vuelta')), findsOneWidget);
+      expect(_startButton('ida'), findsNothing);
+      expect(_startButton('vuelta'), findsOneWidget);
+    });
+
+    testWidgets('from "Iniciar viaje de vuelta": asks to start that trip '
+        'right away', (tester) async {
+      final operations = FakeOperations(
+        trips: [
+          driverTrip(id: 'ida', status: 'completed'),
+          driverTrip(id: 'vuelta'),
+        ],
+      );
+      final harness = _Harness(operations);
+      await harness.pump(tester, startTripId: 'vuelta');
+
+      expect(find.byKey(const Key('confirm-start-dialog')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('confirm-start')));
+      await tester.pumpAndSettle();
+
+      expect(operations.calls, contains('start vuelta'));
+      expect(harness.tripArgs.trip.id, 'vuelta');
+    });
+
+    testWidgets('startTripId of a trip already running or gone: no dialog', (
+      tester,
+    ) async {
+      await _Harness(
+        FakeOperations(
+          trips: [driverTrip(id: 'vuelta', status: 'completed')],
+        ),
+      ).pump(tester, startTripId: 'vuelta');
+      expect(find.byKey(const Key('confirm-start-dialog')), findsNothing);
+    });
+
+    testWidgets('the route timetable of the day: both directions, next '
+        'departure highlighted', (tester) async {
+      // Wednesday 2026-11-11 08:00 (Dashboard day 3).
+      final operations =
+          FakeOperations(
+              trips: [driverTrip(snapshot: plannedSnapshot)],
+              patterns: [
+                pattern('p-ida', headsign: 'Puerto Viejo'),
+                pattern('p-vuelta', headsign: 'Guápiles'),
+              ],
+            )
+            ..schedules = {
+              'p-ida': [departure(3, 6), departure(3, 9)],
+              'p-vuelta': [departure(3, 7, 30), departure(4, 8)],
+            };
+      await _Harness(operations).pump(tester);
+
+      final card = find.byKey(const Key('route-timetable-$routeId'));
+      await tester.scrollUntilVisible(card, 200);
+      expect(find.text('Horario de hoy · PV-RF'), findsOneWidget);
+      await tester.tap(find.text('Horario de hoy · PV-RF'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Hacia Puerto Viejo'), findsWidgets);
+      expect(find.text('Hacia Guápiles'), findsOneWidget);
+      expect(find.text('Próxima salida: 09:00'), findsOneWidget);
+      expect(find.text('Ya no hay más salidas hoy'), findsOneWidget);
+      expect(find.text('08:00'), findsNothing); // Thursday's
     });
 
     testWidgets('no trips today', (tester) async {
@@ -513,6 +607,20 @@ void main() {
 
       expect(h.opened.single.$1, '/login');
       expect(await SecureSessionStore().readToken(), isNull);
+    });
+
+    testWidgets('401 but the token works (the Gateway was slow): stays, '
+        'offers to retry, keeps the session', (tester) async {
+      final h = _Harness(_UnauthorizedOperations())
+        ..sessionReallyExpired = false;
+      await h.pump(tester);
+
+      expect(h.opened, isEmpty);
+      expect(
+        find.textContaining('No se pudo verificar la conexión'),
+        findsWidgets,
+      );
+      expect(await SecureSessionStore().readToken(), 'tok');
     });
 
     for (final error in [

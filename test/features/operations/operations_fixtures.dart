@@ -497,4 +497,29 @@ class FakeOperations extends OperationsService {
     calls.add('buses $patternId');
     return buses[patternId] ?? const [];
   }
+
+  /// Fares by route id, and weekly departures by pattern id. Their requests
+  /// go to [timetableCalls] (not [calls], whose order other tests check).
+  Map<String, List<RouteFare>> fares = const {};
+  Map<String, List<RouteSchedule>> schedules = const {};
+  final List<String> timetableCalls = [];
+
+  @override
+  Future<List<RouteFare>> routeFares(String routeId) async {
+    timetableCalls.add('fares $routeId');
+    return fares[routeId] ?? const [];
+  }
+
+  @override
+  Future<List<RouteSchedule>> patternSchedules(String patternId) async {
+    timetableCalls.add('schedules $patternId');
+    return schedules[patternId] ?? const [];
+  }
 }
+
+/// A fare of ₡[amount] with no validity limits.
+RouteFare fare(double amount) => RouteFare(amount: amount, currency: 'CRC');
+
+/// A departure every [dayOfWeek] (0 = Sunday) at [hour]:[minute].
+RouteSchedule departure(int dayOfWeek, int hour, [int minute = 0]) =>
+    RouteSchedule(dayOfWeek: dayOfWeek, hour: hour, minute: minute);

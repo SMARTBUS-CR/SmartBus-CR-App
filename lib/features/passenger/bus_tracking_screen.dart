@@ -98,6 +98,9 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
 
   String get _tripId => widget.tripId;
 
+  /// The map widget, built once (see build).
+  Widget? _mapWidget;
+
   @override
   void initState() {
     super.initState();
@@ -403,8 +406,10 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
           Expanded(
             child: Stack(
               children: [
+                // Built once: the screen redraws every second ("hace N s"),
+                // the same instance makes Flutter skip the map.
                 Positioned.fill(
-                  child: widget.mapBuilder(
+                  child: _mapWidget ??= widget.mapBuilder(
                     context,
                     PassengerMapOptions(
                       mode: MapMode.streets,
@@ -418,6 +423,16 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
                   bottom: 6,
                   child: MapAttribution(mode: MapMode.streets),
                 ),
+                if (_route case final route? when !route.hasGeometry)
+                  const Positioned(
+                    left: 12,
+                    top: 12,
+                    right: 12,
+                    child: Align(
+                      alignment: Alignment.topLeft,
+                      child: ApproximateRouteNote(),
+                    ),
+                  ),
                 Positioned(
                   right: 16,
                   bottom: 24,

@@ -94,7 +94,11 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   DeviceLocation? _location;
   StreamSubscription<DeviceLocation>? _locationSub;
   String? _firstName;
-  double _sheetExtent = _sheetInitial;
+
+  /// Height of the sheet (0–1). A notifier, not state: dragging the sheet
+  /// only moves the buttons above it, it does not rebuild the whole screen
+  /// (map included) on every frame.
+  final ValueNotifier<double> _sheetExtent = ValueNotifier(_sheetInitial);
   MapMode _mapMode = MapMode.streets;
 
   /// Every route with its patterns; `null` until loaded.
@@ -140,6 +144,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     _locationSub?.cancel();
     _stopLiveBuses();
     _sheetController.dispose();
+    _sheetExtent.dispose();
     super.dispose();
   }
 
@@ -548,6 +553,30 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     ];
   }
 
+  Widget? _mapWidget;
+  MapMode? _mapBuiltFor;
+
+  /// The map widget, built again only when its mode changes: the same
+  /// instance makes Flutter skip it when the screen rebuilds (location,
+  /// live buses, the list), so the native map is not touched for nothing.
+  Widget _mapView(BuildContext context, double topInset) {
+    if (_mapWidget == null || _mapBuiltFor != _mapMode) {
+      _mapBuiltFor = _mapMode;
+      _mapWidget = widget.mapBuilder(
+        context,
+        PassengerMapOptions(
+          mode: _mapMode,
+          onReady: _onMapReady,
+          onStopTap: _onStopTap,
+          onBusTap: _openLiveTracking,
+          // Below the search bar and the chips.
+          compassTopMargin: topInset + 128,
+        ),
+      );
+    }
+    return _mapWidget!;
+  }
+
   @override
   Widget build(BuildContext context) {
     // SmartBus map design: dark cards over a light map, in any phone theme.
@@ -573,19 +602,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
             _bodyHeight = height;
             return Stack(
               children: [
-                Positioned.fill(
-                  child: widget.mapBuilder(
-                    context,
-                    PassengerMapOptions(
-                      mode: _mapMode,
-                      onReady: _onMapReady,
-                      onStopTap: _onStopTap,
-                      onBusTap: _openLiveTracking,
-                      // Below the search bar and the chips.
-                      compassTopMargin: topInset + 128,
-                    ),
-                  ),
-                ),
+                Positioned.fill(child: _mapView(context, topInset)),
 
                 // Search bar (opens "Buscar ruta"), chips and location notice.
                 Positioned(
@@ -622,41 +639,51 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
                   ),
                 ),
 
-                // License attribution: its own line, right above the sheet.
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: height * _sheetExtent + 6,
-                  child: MapAttribution(mode: _mapMode),
-                ),
-
-                // Map mode + "my location": against the right edge, above the
-                // attribution line (never on top of it).
-                Positioned(
-                  right: 16,
-                  bottom: height * _sheetExtent + 24,
-                  child: Column(
-                    key: const Key('map-buttons'),
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      MapModeButton(
-                        colors: colors,
-                        mode: _mapMode,
-                        onPressed: _toggleMapMode,
-                      ),
-                      const SizedBox(height: 10),
-                      MyLocationButton(
-                        colors: colors,
-                        active: _hasLocation,
-                        onPressed: _onMyLocationPressed,
-                      ),
-                    ],
+                // License attribution (its own line, right above the sheet)
+                // and the map buttons above it. Only this part follows the
+                // sheet while it is dragged.
+                Positioned.fill(
+                  child: ValueListenableBuilder<double>(
+                    valueListenable: _sheetExtent,
+                    builder: (context, extent, _) => Stack(
+                      children: [
+                        Positioned(
+                          left: 12,
+                          right: 12,
+                          bottom: height * extent + 6,
+                          child: MapAttribution(mode: _mapMode),
+                        ),
+                        // Map mode + "my location": against the right edge,
+                        // above the attribution line (never on top of it).
+                        Positioned(
+                          right: 16,
+                          bottom: height * extent + 24,
+                          child: Column(
+                            key: const Key('map-buttons'),
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              MapModeButton(
+                                colors: colors,
+                                mode: _mapMode,
+                                onPressed: _toggleMapMode,
+                              ),
+                              const SizedBox(height: 10),
+                              MyLocationButton(
+                                colors: colors,
+                                active: _hasLocation,
+                                onPressed: _onMyLocationPressed,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
 
                 NotificationListener<DraggableScrollableNotification>(
                   onNotification: (notification) {
-                    setState(() => _sheetExtent = notification.extent);
+                    _sheetExtent.value = notification.extent;
                     return false;
                   },
                   child: DraggableScrollableSheet(

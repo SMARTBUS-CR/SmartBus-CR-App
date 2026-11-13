@@ -12,7 +12,13 @@ class GpsFix {
     required this.recordedAt,
     this.speedKmh,
     this.accuracyMeters,
+    this.isFinal = false,
   });
+
+  /// Last reading of the trip (sent right before "Finalizar recorrido"): the
+  /// GPS service stores it as the trip's end. Only the first reading (start)
+  /// and this one are stored; the others are only broadcast live.
+  final bool isFinal;
 
   /// UUID of the trip this reading belongs to.
   final String tripId;
@@ -56,6 +62,7 @@ class GpsFix {
         if (speedKmh != null) 'speed_kmh': speedKmh,
         if (accuracyMeters != null) 'accuracy_meters': accuracyMeters,
         'recorded_at': recordedAt.toIso8601String(),
+        if (isFinal) 'final': true,
       },
     },
   };

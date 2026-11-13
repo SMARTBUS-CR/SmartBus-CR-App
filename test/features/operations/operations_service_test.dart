@@ -346,6 +346,54 @@ void main() {
     });
   });
 
+  group('cache (each Dashboard request takes seconds)', () {
+    test('the catalogue is asked once: later calls reuse it', () async {
+      final h = _Harness({
+        'data': [routeResource()],
+      });
+
+      await h.service.routes();
+      await h.service.routes();
+      await h.service.routePatterns(routeId);
+      await h.service.routePatterns(routeId);
+      await h.service.routeFares(routeId);
+      await h.service.routeFares(routeId);
+
+      expect(h.requests, hasLength(3));
+    });
+
+    test('two screens asking at once share one request', () async {
+      final h = _Harness({'data': <Object>[]});
+
+      await Future.wait([
+        h.service.patternSchedules(patternId),
+        h.service.patternSchedules(patternId),
+      ]);
+
+      expect(h.requests, hasLength(1));
+    });
+
+    test('a failed request is not kept: the next call asks again', () async {
+      final h = _Harness({'message': 'down'}, status: 503);
+
+      await expectLater(h.service.routes(), throwsA(isA<ApiException>()));
+      await expectLater(h.service.routes(), throwsA(isA<ApiException>()));
+
+      expect(h.requests, hasLength(2));
+    });
+
+    test('live data is never cached (driver trips, buses running)', () async {
+      final h = _Harness({'data': <Object>[]});
+
+      await h.service.driverTrips();
+      await h.service.driverTrips();
+      await h.service.ongoingTrips(patternId);
+      await h.service.ongoingTrips(patternId);
+
+      expect(h.requests, hasLength(4));
+    });
+  });
+
   group('passenger catalogue', () {
     test('routes', () async {
       final h = _Harness({
