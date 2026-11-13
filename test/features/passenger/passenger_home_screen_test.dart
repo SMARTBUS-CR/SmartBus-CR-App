@@ -88,10 +88,25 @@ class _FakeMap implements PassengerMapHandle {
   Map<String, dynamic> get drawn =>
       routeFeatureCollection(route, selected: highlighted);
 
+  /// "Paradas cercanas" drawn right now, and the selected one.
+  List<NearbyStop> nearbyStops = const [];
+  String? nearbySelected;
+  ValueChanged<String>? onNearbyStopTap;
+
+  @override
+  Future<void> showNearbyStops(
+    List<NearbyStop> stops, {
+    String? selectedId,
+  }) async {
+    nearbyStops = stops;
+    nearbySelected = selectedId;
+  }
+
   PassengerMapBuilder get builder => (context, options) {
     mode = options.mode;
     onStopTap = options.onStopTap;
     onBusTap = options.onBusTap;
+    onNearbyStopTap = options.onNearbyStopTap;
     return _FakeMapWidget(onReady: () => options.onReady(this));
   };
 }
@@ -211,8 +226,17 @@ void main() {
     expect(find.text('¿A dónde vas?'), findsOneWidget);
     expect(find.text('Paradas cercanas'), findsOneWidget);
     expect(find.text('Buses en curso'), findsOneWidget);
-    expect(find.text('Mis viajes'), findsOneWidget); // bottom nav tab
+    // "Favoritos" is a tab of the bottom bar now, not a chip; "Mis viajes"
+    // is gone.
+    expect(
+      find.descendant(
+        of: find.byType(NavigationBar),
+        matching: find.text('Favoritos'),
+      ),
+      findsOneWidget,
+    );
     expect(find.text('Favoritos'), findsOneWidget);
+    expect(find.text('Mis viajes'), findsNothing);
     expect(find.text('Hola, Keyna'), findsOneWidget);
     expect(find.byKey(const Key('my-location-button')), findsOneWidget);
     expect(find.text(MapConfig.streetsAttribution), findsOneWidget);
@@ -357,23 +381,7 @@ void main() {
     expect(find.text(MapConfig.streetsAttribution), findsOneWidget);
   });
 
-  testWidgets('AC5 · a quick-access chip shows "próximamente"', (tester) async {
-    await _pump(
-      tester,
-      location: _FakeLocationService(
-        access: LocationAccess.granted,
-        location: _user,
-      ),
-      map: _FakeMap(),
-    );
-
-    await tester.tap(find.text('Paradas cercanas'));
-    await tester.pump();
-
-    expect(find.text('Paradas cercanas: próximamente.'), findsOneWidget);
-  });
-
-  testWidgets('Favorites AC1 · "Favoritos" chip opens "Mis favoritos"', (
+  testWidgets('Favorites AC1 · the "Favoritos" tab opens "Mis favoritos"', (
     tester,
   ) async {
     await _pump(
@@ -385,7 +393,12 @@ void main() {
       map: _FakeMap(),
     );
 
-    await tester.tap(find.text('Favoritos'));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(NavigationBar),
+        matching: find.text('Favoritos'),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('favorites-screen'), findsOneWidget);
@@ -546,6 +559,7 @@ void main() {
   }
 
   group('Route visualization', _routeVisualizationTests);
+  group('Paradas cercanas', _nearbyStopsTests);
   group('Live buses on the route', () {
     setUp(() {
       final view =
@@ -1250,4 +1264,191 @@ class _SlowOperations extends FakeOperations {
     await gate.future;
     return super.routesWithPatterns();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Paradas cercanas
+// ---------------------------------------------------------------------------
+
+/// Another route that also stops at "Centro" (same stop id as PV-RF's).
+final _shared = route(
+  'r-shared',
+  code: 'AB-CD',
+  name: 'Ruta compartida',
+  patterns: [
+    pattern(
+      'p-shared',
+      headsign: 'Alajuela',
+      stops: [stopAt('Centro', _north(200), _user.longitude, seq: 1)],
+    ),
+  ],
+);
+
+Finder _nearbyStop(String name) =>
+    find.byKey(Key('nearby-stop-${stopAt(name, 0, 0, seq: 0).stopId}'));
+
+Future<_FakeMap> _openNearby(
+  WidgetTester tester, {
+  List<TransitRoute>? catalogue,
+}) async {
+  final map = _FakeMap();
+  await _pump(
+    tester,
+    location: _granted(),
+    map: map,
+    operations: FakeOperations(catalogue: catalogue ?? [_sjPv, _demo, _pvRf]),
+  );
+  await tester.tap(find.text('Paradas cercanas'));
+  await tester.pumpAndSettle();
+  return map;
+}
+
+void _nearbyStopsTests() {
+  setUp(() {
+    final view =
+        TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+    view.physicalSize = const Size(1236, 2745);
+    view.devicePixelRatio = 3;
+  });
+  tearDown(() {
+    TestWidgetsFlutterBinding.instance.platformDispatcher.views.first
+      ..resetPhysicalSize()
+      ..resetDevicePixelRatio();
+  });
+
+  testWidgets('the chip shows the stops within 1 km, closest first, on the '
+      'map and in the sheet', (tester) async {
+    final map = await _openNearby(tester);
+
+    expect(find.byKey(const Key('nearby-stops-panel')), findsOneWidget);
+    expect(find.text('A menos de 1 km de ti'), findsOneWidget);
+    expect(find.textContaining('próximamente'), findsNothing);
+    // 200 m, 450 m, 600 m, 800 m, ~960 m; "Lejana" (5 km) and Río Frío
+    // (9 km) are left out.
+    expect(map.nearbyStops.map((s) => s.name), [
+      'Centro',
+      'Demo Terminal',
+      'Terminal',
+      'Escuela',
+      'Demo Plaza',
+    ]);
+    expect(find.text('200 m'), findsOneWidget);
+    // The camera shows every stop and the passenger.
+    expect(map.fits.last.points, hasLength(6));
+    // Each stop lists the routes that stop there.
+    expect(
+      find.descendant(
+        of: _nearbyStop('Centro'),
+        matching: find.text('PV-RF · Río Frío'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a stop of several routes appears once, with all of them', (
+    tester,
+  ) async {
+    final map = await _openNearby(tester, catalogue: [_pvRf, _shared]);
+
+    expect(map.nearbyStops.where((s) => s.name == 'Centro'), hasLength(1));
+    for (final label in ['AB-CD · Alajuela', 'PV-RF · Río Frío']) {
+      expect(
+        find.descendant(of: _nearbyStop('Centro'), matching: find.text(label)),
+        findsOneWidget,
+      );
+    }
+  });
+
+  testWidgets('tapping a stop (list or map) centers it and marks it', (
+    tester,
+  ) async {
+    final map = await _openNearby(tester);
+
+    // On its name (the middle of the card has the route buttons).
+    await _tapInSheet(
+      tester,
+      find.descendant(
+        of: _nearbyStop('Terminal'),
+        matching: find.text('Terminal'),
+      ),
+    );
+    expect(map.moves.last, (
+      lat: _north(600),
+      lng: _user.longitude,
+      zoom: 16.5,
+    ));
+    expect(map.nearbySelected, stopAt('Terminal', 0, 0, seq: 0).stopId);
+
+    map.onNearbyStopTap!(stopAt('Escuela', 0, 0, seq: 0).stopId);
+    await tester.pumpAndSettle();
+    expect(map.moves.last.lat, _north(800));
+    expect(map.nearbySelected, stopAt('Escuela', 0, 0, seq: 0).stopId);
+  });
+
+  testWidgets('a route of a stop draws that direction with the stop '
+      'highlighted, and leaves "Paradas cercanas"', (tester) async {
+    final map = await _openNearby(tester);
+
+    await _tapInSheet(
+      tester,
+      find.byKey(
+        Key('nearby-stop-route-${stopAt('Centro', 0, 0, seq: 0).stopId}-p-rf'),
+      ),
+    );
+
+    expect(map.route?.id, 'p-rf');
+    expect(map.highlighted?.name, 'Centro');
+    expect(map.nearbyStops, isEmpty);
+    expect(find.byKey(const Key('nearby-stops-panel')), findsNothing);
+  });
+
+  testWidgets('"X" and Android back leave it and go back to the passenger', (
+    tester,
+  ) async {
+    final map = await _openNearby(tester);
+
+    await _tapInSheet(tester, find.byKey(const Key('nearby-stops-close')));
+    expect(map.nearbyStops, isEmpty);
+    expect(find.text('Rutas cercanas'), findsOneWidget);
+    expect(map.moves.last.lat, _user.latitude);
+
+    await tester.tap(find.text('Paradas cercanas'));
+    await tester.pumpAndSettle();
+    expect(map.nearbyStops, isNotEmpty);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(map.nearbyStops, isEmpty);
+    expect(find.byKey(const Key('nearby-stops-panel')), findsNothing);
+  });
+
+  testWidgets('nothing within 1 km: says so', (tester) async {
+    await _openNearby(tester, catalogue: [_sjPv]);
+
+    expect(
+      find.textContaining('No hay paradas a menos de 1 km'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('without location: asks to turn it on, nothing is shown', (
+    tester,
+  ) async {
+    final map = _FakeMap();
+    await _pump(
+      tester,
+      location: _FakeLocationService(access: LocationAccess.denied),
+      map: map,
+      operations: FakeOperations(catalogue: [_pvRf]),
+    );
+
+    await tester.tap(find.text('Paradas cercanas'));
+    await tester.pump();
+
+    expect(
+      find.text('Activa tu ubicación para ver las paradas cercanas.'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('nearby-stops-panel')), findsNothing);
+    expect(map.nearbyStops, isEmpty);
+  });
 }
