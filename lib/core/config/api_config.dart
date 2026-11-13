@@ -71,9 +71,10 @@ class ApiConfig {
     defaultValue: 5,
   );
 
-  /// Max wait for one GPS reading to be accepted. Short on purpose: a newer
-  /// reading replaces it a few seconds later (see `TripLocationSender`).
-  static const Duration gpsSendTimeout = Duration(seconds: 8);
+  /// Max wait for one GPS reading to be accepted (see `TripLocationSender`).
+  /// Through Render a reading takes ~2–5 s (Gateway → GPS → database), with
+  /// spikes: 8 s cut off readings that were about to arrive.
+  static const Duration gpsSendTimeout = Duration(seconds: 15);
 
   // --- Real time (GPS service, Laravel Reverb — Pusher protocol) -----------
   //
@@ -241,6 +242,15 @@ class ApiConfig {
   /// GET — one pattern (public) with its line and ordered stops.
   static Uri opsRoutePattern(String patternId) =>
       _opsUri('route-patterns/$patternId');
+
+  /// GET — fares of a route (public).
+  static Uri opsRouteFares(String routeId) => _opsUri('routes/$routeId/fares');
+
+  /// GET — weekly departures of a pattern (public), with suspended dates.
+  static Uri opsPatternSchedules(
+    String patternId, [
+    Map<String, dynamic>? query,
+  ]) => _opsUri('route-patterns/$patternId/schedules', query);
 
   /// GET — buses running now on a pattern (public, no driver data).
   static Uri opsPatternTrips(String patternId, [Map<String, dynamic>? query]) =>
