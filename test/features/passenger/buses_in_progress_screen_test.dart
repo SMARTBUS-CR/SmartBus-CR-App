@@ -143,6 +143,77 @@ void main() {
     );
   });
 
+  testWidgets('route detail: fare and today\'s departures, the next one '
+      'highlighted', (tester) async {
+    // Thursday 2026-11-12, 09:15 (Dashboard day 4).
+    final operations = _withRoute()
+      ..fares = {
+        routeId: [fare(1570)],
+      }
+      ..schedules = {
+        patternId: [
+          departure(4, 6),
+          departure(4, 9),
+          departure(4, 10, 30),
+          departure(5, 7), // Friday: not today
+        ],
+      };
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RouteBusesScreen(
+          route: TransitRoute.fromJsonApi(routeResource()),
+          operations: operations,
+          clock: () => DateTime(2026, 11, 12, 9, 15),
+          liveBusesFactory: (id) => RouteLiveBuses(
+            patternId: id,
+            operations: operations,
+            trackerFactory: FakeTrackers(FakeGps()).call,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Tarifa ₡1.570'), findsOneWidget);
+    expect(find.text('Próxima salida: 10:30'), findsOneWidget);
+    expect(find.text('06:00'), findsOneWidget);
+    expect(find.text('09:00'), findsOneWidget);
+    expect(find.text('07:00'), findsNothing); // Friday's
+    expect(operations.timetableCalls, [
+      'fares $routeId',
+      'schedules $patternId',
+    ]);
+  });
+
+  testWidgets('no departures today / no fare: says so, no fare chip', (
+    tester,
+  ) async {
+    final operations = _withRoute()
+      ..schedules = {
+        patternId: [departure(5, 7)],
+      };
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RouteBusesScreen(
+          route: TransitRoute.fromJsonApi(routeResource()),
+          operations: operations,
+          clock: () => DateTime(2026, 11, 12, 9, 15),
+          liveBusesFactory: (id) => RouteLiveBuses(
+            patternId: id,
+            operations: operations,
+            trackerFactory: FakeTrackers(FakeGps()).call,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('route-fare')), findsNothing);
+    expect(find.text('Hoy no hay salidas en este sentido.'), findsOneWidget);
+  });
+
   testWidgets('no buses running: says so, and the route can still be seen', (
     tester,
   ) async {
