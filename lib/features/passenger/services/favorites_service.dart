@@ -50,6 +50,11 @@ class FavoritesService {
     }
   }
 
+  /// `PATCH ops/favorites/{route_id} {label}` — the alias of a favorite
+  /// ("Casa", "Trabajo"); `null` removes it. Max 50 characters.
+  Future<void> renameFavorite(String routeId, String? label) =>
+      _client.patch(ApiConfig.opsFavorite(routeId), body: {'label': label});
+
   /// `DELETE ops/favorites/{route_id}`. A 404 means it was already removed,
   /// which is what the passenger wanted.
   Future<void> removeFavorite(String routeId) async {

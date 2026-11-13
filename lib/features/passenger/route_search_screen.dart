@@ -199,7 +199,6 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
           SmartBusHeader(
             title: 'Buscar ruta',
             type: SmartBusUserType.passenger,
-            compact: true,
             onBack: _back,
           ),
           Padding(

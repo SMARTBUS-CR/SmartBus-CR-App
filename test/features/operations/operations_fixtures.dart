@@ -274,6 +274,7 @@ RoutePattern pattern(
   List<PatternStop> stops = const [],
   List<GeoPoint> geometry = const [],
   String? routeId,
+  double? drivingSeconds,
 }) => RoutePattern(
   id: id,
   name: 'Patrón $id',
@@ -282,6 +283,7 @@ RoutePattern pattern(
   routeId: routeId,
   stops: stops,
   geometry: geometry,
+  drivingDurationSeconds: drivingSeconds,
 );
 
 TransitRoute route(
@@ -504,6 +506,9 @@ class FakeOperations extends OperationsService {
   Map<String, List<RouteSchedule>> schedules = const {};
   final List<String> timetableCalls = [];
 
+  /// "Próximas salidas" and "¿Cómo llego?".
+  final FakePlanning planning = FakePlanning();
+
   /// When set, [routeFares] and [patternSchedules] fail with it.
   ApiException? timetableError;
 
@@ -515,11 +520,55 @@ class FakeOperations extends OperationsService {
   }
 
   @override
+  Future<List<StopDeparture>> stopDepartures(
+    String stopId, {
+    DateTime? from,
+    Duration window = const Duration(hours: 2),
+  }) async {
+    planning.calls.add('departures $stopId');
+    if (planning.error != null) throw planning.error!;
+    return planning.departures[stopId] ?? const [];
+  }
+
+  @override
+  Future<List<Journey>> journeys({
+    required double originLatitude,
+    required double originLongitude,
+    required double destinationLatitude,
+    required double destinationLongitude,
+    int walkingRadiusMeters = 800,
+    DateTime? departureAt,
+  }) async {
+    planning.calls.add('journeys $destinationLatitude,$destinationLongitude');
+    await planning.journeysGate?.future;
+    if (planning.error != null) throw planning.error!;
+    return planning.journeys;
+  }
+
+  @override
   Future<List<RouteSchedule>> patternSchedules(String patternId) async {
     timetableCalls.add('schedules $patternId');
     if (timetableError != null) throw timetableError!;
     return schedules[patternId] ?? const [];
   }
+}
+
+/// Answers of "Próximas salidas" / "¿Cómo llego?" for [FakeOperations].
+class FakePlanning {
+  /// Departures by stop id.
+  Map<String, List<StopDeparture>> departures = {};
+
+  /// Answer of `journeys`.
+  List<Journey> journeys = const [];
+
+  /// When set, both fail with it.
+  ApiException? error;
+
+  /// While not null, `journeys` waits for it.
+  Completer<void>? journeysGate;
+
+  /// Requests, in order: `departures STOP`, `journeys LAT,LNG`.
+  final List<String> calls = [];
 }
 
 /// A fare of ₡[amount] with no validity limits.

@@ -260,6 +260,16 @@ class ApiConfig {
   /// (token; the backend takes the user from it).
   static Uri opsFavorites() => _opsUri('favorites');
 
-  /// DELETE — removes [routeId] from the passenger's favorites (token).
+  /// PATCH (alias) / DELETE — one of the passenger's favorites (token).
   static Uri opsFavorite(String routeId) => _opsUri('favorites/$routeId');
+
+  /// GET — upcoming planned departures from a stop (public), every route
+  /// that stops there, within `window_minutes` of `departure_at`.
+  static Uri opsStopDepartures(String stopId, [Map<String, dynamic>? query]) =>
+      _opsUri('stops/$stopId/departures', query);
+
+  /// GET — direct journeys (one bus, no transfers) between two points
+  /// (public): where to board, where to get off, times and fare.
+  static Uri opsJourneys(Map<String, dynamic> query) =>
+      _opsUri('journeys', query);
 }

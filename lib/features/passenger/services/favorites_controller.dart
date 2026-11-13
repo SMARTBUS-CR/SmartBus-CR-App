@@ -150,6 +150,48 @@ class FavoritesController extends ChangeNotifier {
     }
   }
 
+  /// Longest alias the Dashboard accepts.
+  static const maxLabelLength = 50;
+
+  /// Gives [routeId] the alias [label] (trimmed; empty removes it). The list
+  /// changes at once and goes back if the server fails. Returns `false` when
+  /// nothing was sent (not a favorite, a change in flight, or the same
+  /// alias). Throws the [ApiException] after restoring the previous alias.
+  Future<bool> rename(String routeId, String? label) async {
+    final current = _favorites;
+    final index = current?.indexWhere((f) => f.routeId == routeId) ?? -1;
+    if (isBusy(routeId) || current == null || index < 0) return false;
+    final trimmed = label?.trim() ?? '';
+    final wanted = trimmed.isEmpty
+        ? null
+        : (trimmed.length > maxLabelLength
+              ? trimmed.substring(0, maxLabelLength)
+              : trimmed);
+    final previous = current[index];
+    if (previous.label == wanted) return false;
+
+    _busy.add(routeId);
+    _replace(routeId, previous.withLabel(wanted));
+    notifyListeners();
+    try {
+      await _service.renameFavorite(routeId, wanted);
+      return true;
+    } on ApiException {
+      _replace(routeId, previous);
+      rethrow;
+    } finally {
+      _busy.remove(routeId);
+      notifyListeners();
+    }
+  }
+
+  void _replace(String routeId, FavoriteRoute favorite) {
+    _favorites = [
+      for (final f in _favorites ?? const <FavoriteRoute>[])
+        f.routeId == routeId ? favorite : f,
+    ];
+  }
+
   /// Requests sent at the same time by [removeMany] / [restore] (there is no
   /// bulk endpoint: one request per route).
   static const maxParallelRequests = 4;

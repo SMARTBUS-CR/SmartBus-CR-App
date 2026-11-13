@@ -110,6 +110,9 @@ class _FakeMap implements PassengerMapHandle {
     String? selectedId,
   }) async {}
 
+  @override
+  Future<void> showDestination(GeoPoint? point) async {}
+
   PassengerMapBuilder get builder =>
       (context, options) =>
           _FakeMapWidget(onReady: () => options.onReady(this));
@@ -461,6 +464,23 @@ void main() {
         autoStart: true,
       );
       expect(find.byKey(const Key('approximate-route-note')), findsNothing);
+    });
+
+    testWidgets('the driver does not see the sent / pending counters', (
+      tester,
+    ) async {
+      await _pumpTrip(
+        tester,
+        operations: FakeOperations(),
+        sender: _FakeSender(),
+        trip: plannedTrip(),
+        autoStart: true,
+      );
+      await tester.pump();
+
+      expect(find.text('Ubicaciones'), findsOneWidget);
+      expect(find.byKey(const Key('sent-count')), findsNothing);
+      expect(find.byKey(const Key('pending-count')), findsNothing);
     });
 
     testWidgets('no route anywhere: only the bus, with a note', (tester) async {

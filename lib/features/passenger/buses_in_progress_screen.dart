@@ -82,9 +82,7 @@ class _BusesInProgressScreenState extends State<BusesInProgressScreen> {
         children: [
           SmartBusHeader(
             title: 'Buses en curso',
-            subtitle: 'Elige una ruta',
             type: SmartBusUserType.passenger,
-            compact: true,
             onBack: Navigator.canPop(context)
                 ? () => Navigator.pop(context)
                 : null,
@@ -318,11 +316,25 @@ class _RouteBusesScreenState extends State<RouteBusesScreen> {
         children: [
           SmartBusHeader(
             title: route.code,
-            subtitle: route.name,
             type: SmartBusUserType.passenger,
-            compact: true,
             onBack: () => Navigator.pop(context),
           ),
+          // The route name, under the header (all passenger headers have the
+          // same height, without a subtitle).
+          if (route.name.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+              child: Text(
+                route.name,
+                key: const Key('route-name'),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: SmartBusColors.grisOscuro,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.only(left: 16, right: 8),
             child: Row(

@@ -872,6 +872,73 @@ nombre, distancia y las rutas que paran ahí ("PV-RF · Río Frío").
   publicado: "Este sentido no tiene horario publicado."; si falla: "No se pudo
   cargar el horario." (se reintenta al volver a abrir la ruta).
 
+### Próximas salidas de una parada
+
+En "Paradas cercanas", al tocar una parada aparece **"Próximas salidas"**
+(`StopDeparturesView`): las salidas de **todas las rutas** que pasan por ahí en
+las próximas 2 horas, con código, sentido, hora en esa parada, cuánto falta
+("10:30 · en 15 min") y tarifa.
+
+- `GET ops/stops/{id}/departures?window_minutes=120&departure_at=…`
+  (`OperationsService.stopDepartures`). La hora ya es la de **la parada**
+  (salida de la terminal + minutos hasta ella), calculada por el Dashboard.
+- **Sin caché** en el servicio (depende de la hora); la pantalla reutiliza la
+  respuesta de una parada durante 1 minuto.
+- Tocar una salida dibuja ese sentido con la parada resaltada. Se muestran 6
+  y "y N más". Sin salidas: "No hay salidas en las próximas 2 horas."; si
+  falla: el mensaje y "Reintentar".
+
+### ¿Cómo llego?
+
+Chip **"¿Cómo llego?"** o **mantener presionado el mapa** en el destino
+(`PassengerMapOptions.onLongPress`): un pin azul marca el destino
+(`showDestination`) y la hoja (`JourneyPlannerPanel`) lista los **buses
+directos** (sin transbordos) desde la ubicación del pasajero:
+
+> **PV-RF · Hacia Río Frío** — Sale 10:30 · en 15 min — ₡650
+> 🚶 Camina 200 m (~3 min) a Centro
+> 🚌 Bájate en Río Frío · llega 11:10 · 40 min · 1 parada
+> 🏁 Camina 150 m a tu destino
+> Después: 12:00
+
+- `GET ops/journeys?origin_lat&origin_lng&destination_lat&destination_lng&walking_radius_m=800&departure_at=…`
+  (`OperationsService.journeys`): el Dashboard busca paradas a ≤ 800 m del
+  origen y del destino, y salidas en las próximas 24 h.
+- La respuesta trae una fila por salida y par de paradas; `journeyOptions` las
+  agrupa: **por sentido, el par con menos caminata**, con sus siguientes
+  salidas; las opciones de la que sale antes a la que sale después (máx. 5).
+- Tocar una opción dibuja ese sentido con la parada donde subir resaltada (el
+  pin del destino sigue); cerrar la ruta vuelve a las opciones.
+- Necesita la ubicación (es el origen): sin ella, un aviso ofrece activarla.
+  Marcar otro destino ignora la respuesta del anterior. "X", atrás de Android
+  o abrir "Paradas cercanas" quitan el destino.
+- Sin bus directo: "No encontramos un bus directo que te lleve ahí…".
+
+### Rutas que pasan cerca (por la carretera, sin parada)
+
+El catálogo tiene pocas paradas (casi solo terminales) y en zonas rurales el
+bus para donde le hacen la seña. Por eso la app también busca rutas cuya
+**línea** (`route_geometry`, la que se dibuja) pasa cerca, aunque no haya
+parada (`services/route_proximity.dart`, en el teléfono, sin peticiones):
+
+- `closestOnPath`: punto de la línea más cercano a un lugar, su distancia y
+  cuántos metros lleva desde el inicio del recorrido.
+- **Paradas cercanas** → sección **"Rutas que pasan cerca de ti"**
+  (`routesPassingNear`, ≤ 1 km de la línea): "PV-GUA · Hacia Guápiles — Pasa
+  a 220 m de ti". Tocarla dibuja el sentido y lleva el mapa al punto de la
+  carretera más cercano. Si no hay paradas pero sí rutas: "No hay paradas
+  oficiales…, pero estas rutas pasan cerca: puedes esperar el bus en la
+  carretera."
+- **¿Cómo llego?** → sección **"El bus pasa cerca"** (`routesPassingBetween`):
+  la línea pasa a ≤ 1 km del pasajero **y**, más adelante en el sentido de
+  viaje, del destino. Muestra dónde esperar ("Camina 220 m hasta la
+  carretera"), cuándo pasaría ("Pasa ~11:10 · en 55 min": salida de la
+  terminal + minutos hasta ese punto, por distancia con
+  `driving_duration_seconds`), el viaje y la caminata final. **Horas
+  aproximadas**. No repite un sentido que el Dashboard ya ofrece por paradas.
+- Sin `route_geometry` un sentido no se usa (la línea recta entre terminales
+  no es la carretera).
+
 ### Tests
 
 | Qué | Archivo |
@@ -879,6 +946,11 @@ nombre, distancia y las rutas que paran ahí ("PV-RF · Río Frío").
 | Paradas cercanas: radio, orden, una vez por parada con todas sus rutas, límite, sin coordenadas | `test/features/operations/nearby_stops_test.dart` |
 | Paradas cercanas en el inicio: mapa + hoja, parada compartida, tocar parada / punto, abrir una ruta, cerrar y atrás, nada cerca, sin ubicación | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Paradas cercanas*) |
 | Horario y tarifa: tarifa en la lista, tarifa + salidas de hoy + semana en la ruta elegida, otro sentido, sin más salidas / día sin salidas, errores | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Horario y tarifa*) |
+| Salidas por parada y "¿Cómo llego?": JSON → modelo (horas locales, tarifa), agrupación de opciones, textos ("en 1 h 20 min"), parámetros de las peticiones, sin caché | `test/features/operations/trip_planning_test.dart` |
+| Rutas que pasan cerca: punto más cercano de la línea, distancia y avance, radio, sentido de viaje, sin trazo, minutos y próxima pasada | `test/features/operations/route_proximity_test.dart` |
+| "Rutas que pasan cerca de ti" y "El bus pasa cerca" en el inicio: lista, abrir donde pasa, pasos y hora aprox., destino detrás, sin repetir lo del Dashboard | `test/features/passenger/passenger_home_screen_test.dart` (grupos *Paradas cercanas* y *El bus pasa cerca*) |
+| Próximas salidas en el inicio: lista, tocar una salida, vacío, reutilizar 1 min, error y reintentar | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Próximas salidas de una parada*) |
+| ¿Cómo llego?: instrucciones, pulsación larga, pasos y tarifa, abrir y cerrar una opción, vacío / error, destino nuevo, cerrar, sin ubicación | `test/features/passenger/passenger_home_screen_test.dart` (grupo *¿Cómo llego?*) |
 | Filtro: dentro, fuera, justo en el radio, orden, lista vacía, varios sentidos, paradas sin coordenadas | `test/features/operations/nearby_routes_filter_test.dart` |
 | `include=patterns`: enlace por relación y por `route_id`, con y sin trazo, `directionLabel` | `test/features/operations/operations_service_test.dart` |
 | GeoJSON dibujado: línea real / aproximada, ids, números y tipo de parada (salida, intermedia, llegada), parada resaltada | `test/features/passenger/route_features_test.dart` |
@@ -906,14 +978,28 @@ backend toma el usuario del token.
 |---|---|---|---|
 | GET | `/ops/favorites` | — | 200 `favorite-routes` (más reciente primero) con `route` y su `company` en `included` |
 | POST | `/ops/favorites` | `{ "route_id": "<uuid>" }` | 201 favorito creado · **409** si ya era favorito |
+| PATCH | `/ops/favorites/{route_id}` | `{ "label": "Casa" }` (o `null`) | 200 favorito con el alias nuevo |
 | DELETE | `/ops/favorites/{route_id}` | — | 204 · 404 si no era favorito |
 
 - 409 al guardar y 404 al quitar **no son errores** para la app: la ruta ya
   quedó como el pasajero quería (otro teléfono, doble toque).
 - 422: la ruta no existe o su empresa no está activa. 401: sesión vencida.
-- El backend también acepta `label` (alias, máx. 50) y `PATCH
-  /ops/favorites/{route_id}` para cambiarlo. La app muestra el alias si existe,
-  pero todavía no permite editarlo.
+
+### Nombre de la ruta (alias)
+
+El lápiz de cada favorito (o mantenerlo presionado) abre **"Nombre de la
+ruta"**: el pasajero le pone un nombre propio ("Casa", "Trabajo", "U"), de
+máximo 50 caracteres (`FavoritesController.maxLabelLength`, el límite del
+Dashboard).
+
+- Con alias, el **alias es el título** (en negrita) y el nombre de la ruta
+  pasa a la línea de abajo, con la empresa.
+- "Quitar nombre" lo borra (`label: null`); "Cancelar" o guardar el mismo
+  nombre no envían nada.
+- Optimista como la estrella (`FavoritesController.rename`): cambia al
+  instante y vuelve al nombre anterior si el servidor falla, con "No se pudo
+  guardar el nombre. …". Un 401 cierra la sesión.
+- En modo edición (seleccionar para eliminar) no aparece el lápiz.
 
 ### Piezas
 
@@ -955,7 +1041,7 @@ backend toma el usuario del token.
 | Error (sin red, timeout, 5xx) | Mensaje + **Reintentar** |
 | Error al refrescar con lista | Se mantiene la lista + SnackBar con el error |
 
-Cada fila: código, nombre (máximo 2 líneas), alias y empresa. El backend no
+Cada fila: código, alias o nombre (máximo 2 líneas), nombre y empresa. El backend no
 devuelve origen y destino del favorito (no incluye los recorridos), así que se
 usa el nombre de la ruta, que ya los suele traer ("Heredia – San José").
 
@@ -1004,6 +1090,7 @@ Si el Dashboard agrega un borrado múltiple (p. ej. `DELETE ops/favorites` con
 | La pestaña "Favoritos" abre "Mis favoritos" | `test/features/passenger/passenger_home_screen_test.dart` |
 | Como pestaña: barra inferior con "Favoritos" seleccionado; "Ver ruta" abre el inicio con la ruta | `test/features/passenger/favorite_routes_screen_test.dart` (grupo *"Favoritos" tab*) |
 | Eliminar varias / todas (AC1–AC9): modo edición, selección, confirmación, máx. 4 a la vez, fallo parcial + reintentar, deshacer en orden y con alias, sin duplicados, 401, 320 × 568 | `test/features/passenger/delete_favorite_routes_test.dart` |
+| Alias: lápiz y pulsación larga, título / subtítulo, quitar, cancelar o mismo nombre sin petición, máx. 50, fallo que revierte, sin lápiz en modo edición; `PATCH` con `{label}` | `favorite_routes_screen_test.dart` (grupo *Nombre de la ruta*), `favorites_service_test.dart` |
 
 ## 12. Búsqueda de rutas (pasajero)
 

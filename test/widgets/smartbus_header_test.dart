@@ -225,6 +225,51 @@ void main() {
       );
     });
 
+    testWidgets('passenger: every screen has the "Mi Cuenta" drawing, same '
+        'size and place; a subtitle only adds room on top', (tester) async {
+      // Pin position measured from the bottom edge, and header height.
+      Future<(double, double)> measure(SmartBusHeader header) async {
+        await _pump(tester, header);
+        final bottom = tester.getBottomLeft(_header).dy;
+        return (
+          bottom - tester.getTopLeft(_pin).dy,
+          tester.getSize(_header).height,
+        );
+      }
+
+      final (cuentaPin, cuentaHeight) = await measure(
+        SmartBusHeader(
+          title: 'Mi Cuenta',
+          type: SmartBusUserType.passenger,
+          onBack: () {},
+        ),
+      );
+      final (compactPin, compactHeight) = await measure(
+        const SmartBusHeader(
+          title: 'Buscar ruta',
+          type: SmartBusUserType.passenger,
+          compact: true,
+        ),
+      );
+      final (subtitlePin, subtitleHeight) = await measure(
+        SmartBusHeader(
+          title: 'PV-GUA',
+          subtitle: 'Puerto Viejo de Sarapiquí - Guápiles',
+          type: SmartBusUserType.passenger,
+          compact: true,
+          onBack: () {},
+        ),
+      );
+
+      expect(compactPin, cuentaPin);
+      expect(subtitlePin, cuentaPin);
+      expect(compactHeight, cuentaHeight);
+      expect(
+        subtitleHeight,
+        cuentaHeight + SmartBusHeader.passengerSubtitleExtra,
+      );
+    });
+
     testWidgets('uses light status bar icons', (tester) async {
       await _pump(
         tester,

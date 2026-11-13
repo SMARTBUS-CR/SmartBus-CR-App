@@ -70,6 +70,18 @@ class FavoriteRoute {
   /// When it was saved; the list shows the most recent first.
   final DateTime? savedAt;
 
+  /// Copy with another alias (`null` = none).
+  FavoriteRoute withLabel(String? newLabel) => FavoriteRoute(
+    id: id,
+    route: route,
+    label: newLabel,
+    companyName: companyName,
+    savedAt: savedAt,
+  );
+
+  /// What the list shows as the title: the alias, else the route name.
+  String get title => label ?? (route.name.isEmpty ? 'Ruta' : route.name);
+
   /// Copy with the route details the app already had (the server may not
   /// include them in the POST answer).
   FavoriteRoute withRoute(TransitRoute known) => FavoriteRoute(

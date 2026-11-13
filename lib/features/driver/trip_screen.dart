@@ -1262,6 +1262,10 @@ class _SendingLine extends StatelessWidget {
 
   final TripTrackingSnapshot snap;
 
+  /// The sent / pending counters are hidden from the driver; developers can
+  /// show them with `--dart-define=SHOW_GPS_COUNTERS=true`.
+  static const showCounters = bool.fromEnvironment('SHOW_GPS_COUNTERS');
+
   @override
   Widget build(BuildContext context) {
     final pending = snap.pendingCount > 0;
@@ -1284,20 +1288,22 @@ class _SendingLine extends StatelessWidget {
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
           ),
         ),
-        _Counter(
-          key: const Key('sent-count'),
-          icon: Icons.cloud_done_outlined,
-          value: snap.sentCount,
-          tooltip: 'Enviadas',
-        ),
-        const SizedBox(width: 6),
-        _Counter(
-          key: const Key('pending-count'),
-          icon: Icons.sync,
-          value: snap.pendingCount,
-          tooltip: 'Pendientes',
-          highlight: pending,
-        ),
+        if (showCounters) ...[
+          _Counter(
+            key: const Key('sent-count'),
+            icon: Icons.cloud_done_outlined,
+            value: snap.sentCount,
+            tooltip: 'Enviadas',
+          ),
+          const SizedBox(width: 6),
+          _Counter(
+            key: const Key('pending-count'),
+            icon: Icons.sync,
+            value: snap.pendingCount,
+            tooltip: 'Pendientes',
+            highlight: pending,
+          ),
+        ],
       ],
     );
   }

@@ -55,7 +55,26 @@ abstract interface class PassengerMapHandle {
   /// on one reports its [NearbyStop.stopId]
   /// ([PassengerMapOptions.onNearbyStopTap]).
   Future<void> showNearbyStops(List<NearbyStop> stops, {String? selectedId});
+
+  /// Draws the destination pin of "¿Cómo llego?"; `null` hides it.
+  Future<void> showDestination(GeoPoint? point);
 }
+
+/// The destination pin as a GeoJSON FeatureCollection (empty without one).
+Map<String, dynamic> destinationFeatureCollection(GeoPoint? point) => {
+  'type': 'FeatureCollection',
+  'features': [
+    if (point != null)
+      {
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [point.longitude, point.latitude],
+        },
+        'properties': <String, dynamic>{},
+      },
+  ],
+};
 
 /// The stops of "Paradas cercanas" as one GeoJSON FeatureCollection: `id` =
 /// `nearby-<stopId>`, `properties.selected` = it is [selectedId]. Kept apart
@@ -187,7 +206,11 @@ class PassengerMapOptions {
     this.onStopTap,
     this.onBusTap,
     this.onNearbyStopTap,
+    this.onLongPress,
   });
+
+  /// The passenger kept a finger on the map: that point ("¿Cómo llego?").
+  final ValueChanged<GeoPoint>? onLongPress;
 
   /// The passenger tapped a bus pin drawn with [PassengerMapHandle.showBuses];
   /// receives its [BusMarker.id].
@@ -251,6 +274,13 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
   static const _nearbySource = 'smartbus-nearby-stops';
   static const _nearbyHaloLayer = 'smartbus-nearby-stops-halo';
   static const _nearbyLayer = 'smartbus-nearby-stops-dots';
+  static const _destinationSource = 'smartbus-destination';
+  static const _destinationHaloLayer = 'smartbus-destination-halo';
+  static const _destinationLayer = 'smartbus-destination-dot';
+
+  /// Destination pin: `SmartBusColors.azulPrincipal`, apart from the green
+  /// user dot and the turquoise stops.
+  static const _destinationColor = '#1565C0';
 
   /// `SmartBusColors.verdePasajero`.
   static const _brandColor = '#01856D';
@@ -273,6 +303,7 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
   PatternStop? _selectedStop;
   List<NearbyStop> _nearby = const [];
   String? _nearbySelected;
+  GeoPoint? _destination;
 
   @override
   void dispose() {
@@ -303,6 +334,9 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
         controller.onFeatureTapped.add(_onFeatureTapped);
       },
       onStyleLoadedCallback: _onStyleLoaded,
+      onMapLongClick: (_, coordinates) => widget.options.onLongPress?.call(
+        GeoPoint(coordinates.latitude, coordinates.longitude),
+      ),
       // Native compass: hidden while facing north, tap resets the bearing.
       compassEnabled: true,
       compassViewPosition: CompassViewPosition.topRight,
@@ -322,6 +356,8 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
     await _addRouteLayers(controller, ratio);
     if (!mounted) return;
     await _addNearbyLayers(controller);
+    if (!mounted) return;
+    await _addDestinationLayers(controller);
     if (!mounted) return;
 
     await controller.addGeoJsonSource(_userSource, _featureCollection(null));
@@ -396,6 +432,7 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
     if (_buses.isNotEmpty) await _drawBuses();
     if (_route != null) await _drawRoute();
     if (_nearby.isNotEmpty) await _drawNearby();
+    if (_destination != null) await _drawDestination();
 
     if (!_readyNotified && mounted) {
       _readyNotified = true;
@@ -673,6 +710,47 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
   Future<void> _drawNearby() => _controller!.setGeoJsonSource(
     _nearbySource,
     nearbyStopsFeatureCollection(_nearby, selectedId: _nearbySelected),
+  );
+
+  /// A blue dot with a soft halo for the destination of "¿Cómo llego?".
+  Future<void> _addDestinationLayers(MapLibreMapController controller) async {
+    await controller.addGeoJsonSource(
+      _destinationSource,
+      destinationFeatureCollection(null),
+    );
+    await controller.addCircleLayer(
+      _destinationSource,
+      _destinationHaloLayer,
+      const CircleLayerProperties(
+        circleRadius: 22,
+        circleColor: _destinationColor,
+        circleOpacity: 0.2,
+      ),
+      enableInteraction: false,
+    );
+    await controller.addCircleLayer(
+      _destinationSource,
+      _destinationLayer,
+      const CircleLayerProperties(
+        circleRadius: 9,
+        circleColor: _destinationColor,
+        circleStrokeColor: '#FFFFFF',
+        circleStrokeWidth: 3,
+      ),
+      enableInteraction: false,
+    );
+  }
+
+  @override
+  Future<void> showDestination(GeoPoint? point) async {
+    if (point == _destination) return;
+    _destination = point;
+    if (_styleReady) await _drawDestination();
+  }
+
+  Future<void> _drawDestination() => _controller!.setGeoJsonSource(
+    _destinationSource,
+    destinationFeatureCollection(_destination),
   );
 
   /// PNG of the direction chevron drawn along the line (white with a soft
