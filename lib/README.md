@@ -23,23 +23,44 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 | Pantalla | Requerimientos cubiertos |
 |---|---|
 | `auth/login_screen.dart` | RF-07 (login pasajero), base para RF-13 conductor |
+| `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register`, auto-login → `/passenger/home` |
+| `auth/verify_email_screen.dart` | Verificación del correo con código de 6 dígitos: ruta `/verify-email` (`VerifyEmailArgs`), reenvío con espera de 60 s; al verificar inicia sesión → home del rol |
+| `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register` → `/verify-email` (sin sesión hasta verificar el correo) |
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal), RF-09 (búsqueda) |
 | `passenger/route_search_screen.dart` | RF-09 |
+| `passenger/favorite_routes_screen.dart` | "Mis favoritos" (`/passenger/favorites`, pestaña **Favoritos** de la barra inferior): rutas guardadas; quitar una (estrella o deslizar), varias ("Editar" → "Eliminar (N)") o todas, con confirmación y "Deshacer" (sección 11) |
+| `passenger/passenger_home_screen.dart` | RF-08 (mapa principal); la barra "¿A dónde vas?" abre la búsqueda |
+| `passenger/route_search_screen.dart` | RF-09: "Buscar ruta" por nombre, número o destino (sección 12) |
+| `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar". Entradas "Editar perfil" y "Cambiar contraseña". Botón "Eliminar cuenta" con confirmación (solo UI: aún no llama al backend) |
+| `passenger/edit_profile_screen.dart` | Editar nombre y correo (`updateProfile`): solo envía lo que cambió; cambiar el correo pide la contraseña actual y luego verificar el nuevo correo con código |
+| `passenger/change_password_screen.dart` | Cambiar contraseña (`changePassword`): actual + nueva (requisitos en vivo) + confirmación |
+| `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar". "Eliminar cuenta" (soft delete): confirmación con la contraseña actual → `deleteAccount()` → login sin poder volver atrás |
+| `widgets/delete_account_dialog.dart` | Diálogo "¿Eliminar tu cuenta?": pide la contraseña, envía la solicitud y se queda abierto si la contraseña es incorrecta, hay 429 o no hay red; 401 → login, 403 → "Acción no permitida" |
 | `passenger/bus_tracking_screen.dart` | RF-10 (ubicación en vivo), RF-11 (ETA), RF-12 (alertas) |
 | `driver/driver_home_screen.dart` | RF-13 (ruta asignada del día) |
-| `driver/trip_screen.dart` | RF-14 (inicio/fin de recorrido), RF-15 (envío GPS) |
+| `driver/driver_account_screen.dart` | Perfil del conductor ("Mi Cuenta"), solo lectura: aviso "contacta al administrador"; misma carga/401/"Reintentar" que el pasajero |
+| `widgets/profile_details.dart` | Vista de perfil compartida (pasajero y conductor): datos guardados + `fetchCurrentUser()`, 401 → login, "Reintentar" |
+| `widgets/smartbus_header.dart` | Header de todas las pantallas internas: degradado del tema por rol (`SmartBusUserType`), ola, ruta, pin y bus dibujados en código; variante `compact` para pantallas con mapa |
+| `driver/trip_screen.dart` | RF-14 + RF-15: inicia el viaje en el Dashboard, envía el GPS y al finalizar lo completa (secciones 8 y 9). Desde la pestaña, sin viaje, busca el que está en curso |
 
 ## 3. Qué es placeholder vs. qué ya está "conectable"
-- **Placeholder puro** (solo UI, sin lógica): mapas (`Container` gris),
-  listas de rutas, ETA fijo, estado del bus.
+- **Placeholder puro** (solo UI, sin lógica): listas de rutas, ETA.
+- **Mapa del pasajero (real):** inicio del pasajero con MapLibre + OpenFreeMap
+  (ver la sección 6).
+- **Seguimiento del bus en vivo (real):** "Rastreando tu bus" con la posición
+  del bus en tiempo real (ver la sección 7). Se abre desde el chip
+  **"Buses en curso"** del inicio, eligiendo ruta y bus (sección 9).
+- **Viajes reales del Dashboard (real):** el conductor ve e inicia sus viajes
+  del día; el pasajero elige un bus en curso (sección 9). Sin `DEMO_TRIP_ID`.
 - **Autenticación real (ya conectada al API Gateway):**
   - `core/config/api_config.dart` — URL única del Gateway (`--dart-define`).
   - `core/network/api_client.dart` — cliente HTTP reutilizable; adjunta el
     token `Bearer` automáticamente y traduce errores a `ApiException`.
   - `core/storage/secure_session_store.dart` — token + usuario en
     `flutter_secure_storage` (nunca la contraseña).
-  - `features/auth/services/auth_service.dart` — `login` / `fetchCurrentUser`
-    (`GET /auth/user`) / `restoreSession` / `logout`.
+  - `features/auth/services/auth_service.dart` — `login` / `registerPassenger`
+    / `sendResetCode` / `resetPassword` / `fetchCurrentUser` / `restoreSession`
+    / `logout` (ver el contrato en la sección 5).
   - `features/auth/models/` — `AuthUser` + `AuthRole` (parseo JSON:API).
   - `features/auth/role_home.dart` — rol del backend → ruta de inicio.
 
@@ -48,9 +69,10 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
   Al reabrir la app, `SplashScreen` llama `restoreSession()`.
 
 ## 4. Siguientes pasos sugeridos
-1. Sustituir los `Container` grises por `flutter_map` + tiles de OpenStreetMap
-   (paquete `flutter_map` + `latlong2`), como está definido en el documento
-   de arquitectura (OSM + OpenRouteService).
+1. Dibujar el trazo de la ruta y sus paradas sobre el mapa: los datos ya
+   llegan en `RoutePattern.geometry` y `RoutePattern.stops` (sección 9).
+2. Conectar el ETA (RF-16).
+1. Dibujar rutas, paradas y buses sobre el mapa del pasajero (sección 6).
 2. Conectar `bus_tracking_screen.dart` a WebSockets (Laravel Reverb + Laravel
    Echo) para las posiciones en tiempo real, y al microservicio de IA para el
    ETA (RF-16).
@@ -58,3 +80,1109 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
    las pantallas — con `setState` alcanza solo para esta etapa.
 4. Agregar los nuevos microservicios en `ApiConfig` (`trips`, `gps`, `eta`, …)
    reutilizando el mismo `ApiClient`.
+
+## 5. Contrato de `AuthService`
+
+Las pantallas **solo** llaman a estos métodos: las rutas, el parseo JSON:API,
+el token y la traducción de errores ya están resueltos. Todo pasa por el API
+Gateway (`/auth/*`).
+
+| Método | Endpoint (Gateway) | Devuelve |
+|---|---|---|
+| `login({email, password})` | `POST /auth/login?include=roles` | `AuthSession` (guarda token + usuario) |
+| `registerPassenger({name, email, password, passwordConfirmation})` | `POST /auth/register/passenger?include=roles` | `PendingVerification` (`email`, `message`). **No inicia sesión**: el backend envía un código de 6 dígitos al correo → seguir con `verifyEmail` |
+| `verifyEmail({email, code})` | `POST /auth/email/verify?include=roles` | `AuthSession` (guarda token + usuario, igual que `login`) |
+| `resendVerificationCode(email)` | `POST /auth/email/resend` | `String`: mensaje del backend (siempre el mismo, exista o no el correo). Máx. 3 por minuto |
+| `sendResetCode(email)` | `POST /auth/password/forgot` | `String`: mensaje del backend para mostrar |
+| `resetPassword({email, code, password, passwordConfirmation})` | `POST /auth/password/reset` | `String`: mensaje del backend. Cierra la sesión en todos los dispositivos → volver a login |
+| `fetchCurrentUser()` | `GET /auth/user?include=roles` | `AuthUser` actualizado (también lo guarda) |
+| `updateProfile({name?, email?, currentPassword?})` | `PATCH /auth/user?include=roles` | `ProfileUpdate`. Solo pasajeros; enviar solo lo que cambió (`currentPassword` obligatorio si cambia el correo). Solo nombre → guarda el usuario. Correo → el backend lo deja sin verificar: **borra la sesión local** y `requiresEmailVerification = true` → ir a `/verify-email` (`resendOnOpen: true`). Máx. 5 por minuto |
+| `changePassword({currentPassword, password, passwordConfirmation})` | `PUT /auth/user/password` | `String`: mensaje del backend. Solo pasajeros; sigue la sesión en este dispositivo, el backend cierra las demás. Máx. 5 por minuto |
+| `restoreSession()` | `GET /auth/user?include=roles` | `AuthUser?`: `null` si no hay sesión, el token venció o el rol no está permitido. Sin red devuelve el usuario guardado |
+| `logout()` | `POST /auth/logout` | — Siempre borra la sesión local, aunque falle el servidor |
+| `deleteAccount({currentPassword})` | `DELETE /auth/user` (body `current_password`, `confirm_deletion: true`) | `String`: mensaje del backend. Soft delete solo para pasajeros: el backend revoca todos los tokens y la app borra la sesión local. 422 → `fieldErrors['current_password']`; 401 también borra la sesión; 403 si la cuenta no es solo de pasajero o el correo no está verificado |
+
+**Roles permitidos:** solo `passenger` y `driver` (`AuthUser.isAllowedInApp`).
+Si `login`, `verifyEmail` o `restoreSession` reciben otro rol
+(`super-admin`, `company-admin`), se cierra la sesión en el servidor y se borra
+la local.
+
+### Recuperar contraseña (`/forgot-password`)
+
+"¿Olvidaste tu contraseña?" en el login abre `ForgotPasswordScreen` con el
+correo que ya estaba escrito (solo si parece válido). Dos pasos, sin token:
+
+1. **Correo** → `sendResetCode`: el backend envía un código de 6 dígitos
+   (vence en 15 min). Un `422` (el correo no existe) se muestra bajo el campo.
+2. **Código + nueva contraseña + confirmación** → `resetPassword`. La
+   contraseña tiene las reglas del registro (`PasswordRequirements`).
+   "Reenviar código" espera 60 s entre pedidos; "Usar otro correo" vuelve al
+   paso 1.
+
+| Respuesta | Qué ve el usuario |
+|---|---|
+| `200` | Vuelve al **login** con el mensaje del backend ("Contraseña actualizada correctamente.") y el correo precargado (`PasswordResetDone`) |
+| `400` código incorrecto / vencido | El mensaje del backend bajo el código, que se limpia; las contraseñas escritas se mantienen |
+| `422` | El mensaje bajo su campo (`email`, `code`, `password`; p. ej. contraseña filtrada) |
+| `429` | "Demasiados intentos. Espera un momento…" (sin Reintentar) |
+| Sin red, timeout, `5xx` | SnackBar + **Reintentar**; lo escrito se mantiene |
+
+Nota para el equipo de Auth: `password/forgot` responde `422` si el correo no
+existe, lo que permite averiguar qué correos están registrados.
+
+Tests (AC1–AC9): `test/features/auth/forgot_password_screen_test.dart`.
+
+### Errores (`ApiException`)
+
+Todos los métodos lanzan `ApiException`. `e.message` siempre está en español y
+listo para mostrar.
+
+| `e.type` | Cuándo | Qué hacer en la pantalla |
+|---|---|---|
+| `badCredentials` | `login` con correo o contraseña incorrectos | Mostrar `e.message` |
+| `emailNotVerified` | 403 `email_not_verified`: `login` con contraseña correcta pero correo sin verificar | Ofrecer verificar: `resendVerificationCode` + pantalla `/verify-email` (`VerifyEmailArgs(email, resendOnOpen: true)`) |
+| `roleNotAllowed` | La cuenta no es de pasajero ni conductor | Mostrar `e.message` ("Esta aplicación es solo para pasajeros y conductores.") |
+| `validation` | 422: datos inválidos (`registerPassenger`, `verifyEmail`, `sendResetCode`, `resetPassword`) | Mostrar `e.fieldErrors['email']`, `['password']`, `['name']`, `['code']` debajo de cada campo |
+| `badRequest` | 400: código (de recuperación o de verificación) incorrecto, vencido o con demasiados intentos | Mostrar `e.message` (viene del backend) |
+| `tooManyRequests` | 429: demasiados intentos (Auth: 5 por minuto en login/forgot/reset) | Pedir que espere |
+| `unauthorized` | 401: el token venció | Volver a login |
+| `noConnection` / `timeout` | Sin red o la respuesta tardó demasiado | Ofrecer reintentar |
+| `serviceUnavailable` / `serverError` / `unknown` | Falla del backend o del Gateway | Mostrar `e.message` |
+
+Ejemplo (registro):
+
+```dart
+try {
+  final pending = await AuthService().registerPassenger(
+    name: name,
+    email: email,
+    password: password,
+    passwordConfirmation: confirmation,
+  );
+  // Sin sesión todavía: verificar el correo con el código enviado.
+  Navigator.pushReplacementNamed(
+    context,
+    '/verify-email',
+    arguments: VerifyEmailArgs(email: pending.email, message: pending.message),
+  );
+} on ApiException catch (e) {
+  if (e.type == ApiErrorType.validation) {
+    setState(() {
+      emailError = e.fieldErrors['email']?.first;
+      passwordError = e.fieldErrors['password']?.first;
+    });
+  } else {
+    showError(e.message);
+  }
+}
+```
+
+## 6. Mapa del pasajero (MapLibre + OpenFreeMap)
+
+`PassengerHomeScreen` muestra un mapa interactivo a pantalla completa, con una
+distribución inspirada en Google Maps y la identidad de SmartBus.
+
+| Pieza | Archivo |
+|---|---|
+| Configuración (estilos, centro por defecto, atribución) | `core/config/map_config.dart` |
+| Ubicación del dispositivo (permiso, posición, ajustes) | `core/location/location_service.dart` |
+| Mapa nativo (MapLibre) + marcador del usuario | `features/passenger/map/passenger_map.dart` |
+| Búsqueda, resultados, accesos rápidos, aviso de ubicación, botones, panel inferior | `features/passenger/map/map_overlay.dart` |
+
+**Proveedores:**
+
+| Modo | Proveedor | Por defecto | Notas |
+|---|---|---|---|
+| Calles (`MapMode.streets`) | [OpenFreeMap](https://openfreemap.org), estilo Liberty | `https://tiles.openfreemap.org/styles/liberty` | Gratis, sin API key, sin límite de uso, **apto para producción**. Incluye lugares, negocios y zonas |
+| Satélite (`MapMode.satellite`) | Esri World Imagery | `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}` | Alta resolución (casas y calles, hasta zoom 19), sin API key. ⚠️ **Solo desarrollo / demo** |
+
+> ⚠️ **Satélite antes de producción:** la imagen de Esri está bajo el *Esri Master
+> License Agreement*, que pide una cuenta de ArcGIS para apps en producción.
+> Opciones (solo `--dart-define`, sin cambiar código):
+> - Crear una cuenta (plan gratis) de ArcGIS Location Platform y usar su URL con token.
+> - O usar la capa **gratis y legal para producción** de EOX (Sentinel-2 2016, CC BY 4.0),
+>   de menor resolución (se ven barrios, no casas):
+>   `--dart-define=MAP_SATELLITE_TILES_URL=https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg --dart-define=MAP_SATELLITE_MAX_ZOOM=14 "--dart-define=MAP_SATELLITE_ATTRIBUTION=Sentinel-2 cloudless 2016 por EOX IT Services GmbH"`
+
+- **Diseño:** el mapa es **siempre claro** (Liberty, con lugares y negocios) y
+  la barra de búsqueda es **blanca** (`MapOverlayColors.searchBar`); los
+  accesos rápidos y los botones de satélite / mi ubicación usan el **verde del
+  header de pasajero** (`MapOverlayColors.smartBus`); el panel inferior
+  ("Hola, \<nombre\>") es **blanco** (`MapOverlayColors.sheet`). Los botones
+  van pegados a la derecha, encima de la línea de la licencia. No cambia si el teléfono está en modo
+  claro u oscuro. No se usa el estilo oscuro de
+  OpenFreeMap porque no muestra lugares ni negocios.
+- **Si se usa EOX para el satélite:** solo sirve la capa de **2016**. Las de 2018
+  en adelante prohíben el uso comercial (CC BY-NC-SA) y la de 2017 no tiene
+  imagen de Costa Rica a zoom alto.
+- **Búsqueda:** "¿A dónde vas?" es un botón: abre la pantalla "Buscar ruta"
+  (`/passenger/search`, sección 12) con el teclado listo.
+
+Se pueden cambiar sin tocar código (por ejemplo, otro estilo o un OpenFreeMap
+propio, ya que el servicio público no tiene SLA):
+
+```
+flutter run \
+  --dart-define=MAP_STYLE_URL=https://tiles.openfreemap.org/styles/bright \
+  --dart-define=MAP_SATELLITE_TILES_URL=https://.../{z}/{y}/{x}.jpg
+```
+
+**Reglas:**
+- La atribución (`MapConfig.attributionFor(mode)`) es obligatoria (licencias de
+  OpenStreetMap / OpenMapTiles y de EOX, CC BY 4.0). Está **siempre visible**,
+  discreta (texto pequeño, sin fondo). **No eliminarla.**
+- Sin permiso de ubicación (o con el GPS apagado) el mapa abre en San José y
+  muestra un aviso; el botón "mi ubicación" vuelve a pedir el permiso o abre los
+  ajustes.
+- Para agregar rutas, paradas o buses, usar `PassengerMapHandle` (no depender
+  de MapLibre desde la pantalla), así los tests siguen usando un mapa falso.
+
+**Tests:** el mapa nativo no corre en tests de widgets; `PassengerHomeScreen`
+recibe un `mapBuilder` y un `LocationService` falsos
+(`test/features/passenger/passenger_home_screen_test.dart`). El mapa real se
+verifica a mano en un dispositivo.
+
+## 7. Seguimiento del bus en vivo (pasajero)
+
+"Rastreando tu bus" (`passenger/bus_tracking_screen.dart`, ruta
+`/passenger/tracking`, argumento obligatorio: el UUID del viaje, que llega desde
+"Buses en curso") muestra el bus de
+un viaje moviéndose en el mapa, sin recargar.
+
+### Piezas
+
+| Pieza | Archivo |
+|---|---|
+| Pantalla: mapa, bus, ubicación del pasajero, panel de estado | `features/passenger/bus_tracking_screen.dart` |
+| Pin del bus en el mapa (`showBus`, `BusMarker`; ícono dibujado en la app, sin assets) | `features/passenger/map/passenger_map.dart` |
+| Lógica: GET + eventos + frescura + reconexión | `features/trip_tracking/services/live_trip_tracker.dart` |
+| Canal del viaje (`private-trip.{id}`, evento `BusLocationUpdated`) | `features/trip_tracking/services/trip_live_feed.dart` |
+| Cliente WebSocket (protocolo Pusher de Reverb) | `core/realtime/pusher_connection.dart` |
+| Modelos: `TripTracking`, `BusPosition`, `BusLocationUpdate`, `TripStatus`, `TrackingFreshness` | `features/trip_tracking/models/trip_tracking.dart` |
+| Llamadas HTTP (`latestForTrip`, `authorizeChannel`) | `features/trip_tracking/services/gps_location_service.dart` |
+
+### Cómo funciona
+
+```
+abrir "Rastreando tu bus"
+  → GET  /gps/trips/{id}/location             estado del viaje + posición actual
+  → WebSocket a Reverb (wss://<gateway>/app/<KEY>)
+  → POST /gps/broadcasting/auth               el Gateway valida el token y firma
+  → suscribe private-trip.{id}  (en vivo solo cuando Reverb lo confirma;
+                                  si la firma falla, reintenta a los 2, 5, 10, 30 s)
+  → GET  ops/public/trips/{id} → GET ops/route-patterns/{id}   la ruta del viaje
+  → cada BusLocationUpdated: mueve el bus (solo si es más nuevo que el actual)
+  → 7 s sin posiciones: repite el GET cada 5 s  →  completed / cancelled = fin
+  → se cae la conexión: reconecta sola y repite el GET
+  → salir de la pantalla: cierra la conexión
+```
+
+1. **Al abrir**, `GET /gps/trips/{id}/location` trae el estado del viaje y la
+   última posición, para mostrar el bus antes del primer evento.
+2. **En vivo:** cada `BusLocationUpdated` mueve el marcador. Los eventos pueden
+   llegar desordenados en redes móviles: se queda siempre la posición con el
+   **mayor `recorded_at`** y se ignoran las viejas o repetidas.
+3. **"En vivo" = canal confirmado, no solo socket abierto.** Un WebSocket
+   abierto no recibe nada si la suscripción falló: la firma
+   (`broadcasting/auth`, Gateway → GPS, 2–4 s en Render) puede fallar por un
+   timeout o un 5xx, o Reverb puede responder `pusher:subscription_error`.
+   `PusherConnection` cuenta un canal como suscrito solo con
+   `pusher_internal:subscription_succeeded` (`subscribed`) y, si falla,
+   **reintenta** a los 2, 5, 10 y 30 s con el mismo socket. Mientras tanto
+   `ReverbTripFeed.connected` es `false` y la app consulta por `GET`. Antes una
+   sola firma fallida dejaba el canal mudo y "en vivo" a la vez: el pasajero
+   veía el bus cada 10–15 s.
+4. **Las posiciones no llegan solas (regla de los 7 s):** el conductor envía
+   cada ~5 s, así que **7 s sin posiciones** (una lectura perdida) ya es raro.
+   Entonces la app repite el `GET` **cada 5 s**, al mismo ritmo del conductor
+   (las condiciones se revisan cada segundo): el bus **sigue moviéndose**
+   aunque el tiempo real falle (el GPS guarda siempre la última posición
+   aceptada, aunque no la persista). Si `status` es `completed` o
+   `cancelled`, muestra "Viaje finalizado" / "Viaje cancelado" y sale del
+   canal: el fin del viaje se ve en **~7–10 s**, sin aviso del Dashboard.
+   Mientras las posiciones llegan normalmente **no se hace ninguna consulta**.
+   Un viaje que aún no sale se consulta cada 15 s.
+5. **Reconexión:** si se cae el WebSocket, reconecta solo (espera 1, 2, 5, 10 y
+   30 s entre intentos) y al volver repite el `GET`, porque **Reverb no guarda
+   historial**: lo enviado mientras estaba desconectado se perdió.
+5. **Sin tiempo real** (sin `REVERB_APP_KEY` o sin conexión al WebSocket): la
+   pantalla igual funciona consultando la posición cada 5 s.
+6. **La ruta:** con el `route_pattern_id` del viaje (`GET ops/public/trips/{id}`)
+   pide la línea y las paradas (`GET ops/route-patterns/{id}`) y las dibuja como
+   en el mapa del inicio. La primera vista muestra **la ruta completa con el
+   bus**, que se mueve dentro de ella. **Ver el bus** centra y **sigue** al bus
+   (la cámara se mueve con cada posición nueva); **Ver ruta** vuelve a la ruta
+   completa. Sin ruta disponible, la cámara sigue al bus.
+7. **Tu parada (dónde tomar el bus):** con la ubicación del pasajero, el panel
+   muestra la parada **más cercana a él de las que el bus todavía no pasó**
+   (`boardingStopFor` + `NextStopTracker`, en
+   `features/operations/services/next_stop_tracker.dart`): nombre, distancia y
+   minutos caminando (~80 m/min), y cuántas paradas le faltan al bus para
+   llegar ("Es la próxima parada del bus", "Al bus le faltan 2 paradas…"). La
+   parada se resalta en el mapa y **Cómo llegar** encuadra al pasajero, su
+   parada y el bus. Se recalcula cuando se mueve el bus o el pasajero. Si el
+   bus ya pasó todas, lo dice. La pantalla no pide el permiso al abrir: sin
+   ubicación ofrece **Activar** (o **Ajustes** si ya no se puede pedir).
+
+La frescura se calcula con el **reloj de este teléfono** (desde que se recibió
+la posición), no con el `recorded_at` del teléfono del conductor, que puede
+tener la hora desfasada. `recorded_at` solo se usa para ordenar.
+
+### Qué ve el pasajero
+
+| Estado | Texto | Marcador |
+|---|---|---|
+| Cargando | "Buscando tu bus…" | — |
+| Viaje programado | "El viaje aún no inicia" | — |
+| En curso, sin ninguna posición todavía | "Esperando la ubicación del bus" | — |
+| Posición de los últimos 30 s | "En vivo · Actualizado hace 4 s · 38 km/h" | verde |
+| Posición de hace 30 s – 5 min | "Señal débil · Última ubicación hace 2 min" | gris |
+| Posición de hace más de 5 min | "Sin señal del bus" | gris |
+| Terminado / cancelado | "Viaje finalizado" / "Viaje cancelado" | — |
+| No existe (404) | "No encontramos este viaje" | — |
+
+**En el mapa:** el bus es un **pin con ícono de bus** (verde en vivo, gris con
+señal débil o sin señal) cuya **punta** marca su posición. El pasajero se ve
+como su **punto verde con halo de precisión**, igual que en el inicio. Si están
+en el mismo lugar, el punto queda justo en la punta del pin: se distinguen los
+dos. La ubicación del pasajero solo se muestra si ya dio el permiso (lo pide el
+inicio); esta pantalla no lo vuelve a pedir y sin él muestra solo el bus.
+| Falla la primera carga | "No se pudo cargar el viaje" + **Reintentar** | — |
+| Sin tiempo real | aviso "Conectando en tiempo real…" | (se actualiza cada 15 s) |
+
+Los umbrales de 30 s y 5 min son los mismos del servicio GPS
+(`TrackingFreshness.liveSeconds` / `staleSeconds`).
+
+### Por qué WebSocket
+
+- **El bus se mueve solo:** con HTTP la app tendría que preguntar una y otra vez
+  "¿dónde está el bus?". Con el WebSocket la conexión queda abierta y el
+  servidor **empuja** cada posición apenas el conductor la envía.
+- **Costo:** 100 pasajeros preguntando cada 5 s serían 1 200 peticiones por
+  minuto al Gateway, al GPS y a la base de datos (el Gateway limita a 60 por
+  minuto y Render gratis no aguanta eso). Con WebSocket cada posición se envía
+  **una vez** y Reverb la reparte a todos.
+- **Seguridad:** el canal es **privado**. Para suscribirse, la app pide la firma
+  a `POST /gps/broadcasting/auth` por el Gateway, que valida el token. El GPS
+  solo autoriza viajes programados o en curso.
+- **Por qué también el `GET`:** Reverb no guarda historial. El `GET` cubre la
+  posición inicial, lo perdido al reconectar y la detección del fin del viaje.
+
+### Por qué un cliente WebSocket propio
+
+Reverb (Laravel) habla el **protocolo de Pusher**. El paquete
+`pusher_channels_flutter` está hecho para el servicio comercial de Pusher y no
+permite apuntar a un servidor propio como Reverb. El protocolo es chico
+(conectar, autorizar el canal, suscribirse, responder `ping`, reconectar), así
+que `PusherConnection` lo implementa con el `WebSocket` que ya trae Dart
+(`dart:io`), **sin paquetes nuevos**.
+
+### Por qué el Dashboard no avisa "viaje terminado"
+
+El Dashboard es el dueño de `trips` y es quien inicia y termina el viaje. Se
+evaluó que emitiera un evento `TripTrackingEnded` por el WebSocket, pero se
+**descartó**: obligaba al Dashboard a conectarse al Reverb del GPS y compartir
+sus credenciales. La regla de los 15 s da el mismo resultado (con ~15–20 s de
+demora) sin tocar el Dashboard ni el GPS.
+
+- **Inicio del viaje:** no necesita aviso. La primera posición que llega por el
+  canal ya pasa la pantalla de "El viaje aún no inicia" a "En vivo".
+- **Si algún día se necesita el aviso instantáneo:** que la app del conductor,
+  después de terminar el viaje en el Dashboard, llame a un endpoint del GPS que
+  verifique en la base que el viaje terminó y emita el evento. La pantalla del
+  pasajero ya sabe reaccionar a un viaje terminado.
+
+**Conexión lenta:** abrir el WebSocket espera como máximo
+`PusherConnection.connectTimeout` (10 s); después cuenta como intento fallido y
+se programa la reconexión. Si el intento viejo abre tarde, se cierra.
+
+**Ruta sin argumentos:** `/passenger/tracking` sin el id del viaje (o cualquier
+ruta desconocida) abre el splash (`onUnknownRoute` en `main.dart`), que lleva al
+inicio del rol, en vez de lanzar una excepción.
+
+### Configuración
+
+`REVERB_APP_KEY`, `REVERB_HOST`, `REVERB_PORT` y `REVERB_SCHEME` (ver la
+tabla de `--dart-define` y la sección 5.7 del
+[README raíz](../README.md)). En Render solo hace falta `REVERB_APP_KEY`, y la
+de -dev ya es el valor por defecto (`ApiConfig._devReverbAppKey`).
+
+### Tests
+
+| Qué | Archivo |
+|---|---|
+| Protocolo Pusher: suscripción firmada, confirmada (`subscription_succeeded`) y reintentada (firma fallida, `subscription_error`), eventos, ping, reconexión, error 4001 | `test/core/realtime/pusher_connection_test.dart` |
+| `ReverbTripFeed`: en vivo solo con el canal confirmado; tras reintentar, llegan las posiciones | `test/features/trip_tracking/trip_live_feed_test.dart` |
+| Tracker: orden de eventos, frescura, regla de 7 s, canal sin confirmar = consulta cada 5 s, reconexión, sin tiempo real, 404 | `test/features/trip_tracking/live_trip_tracker_test.dart` |
+| Lectura de `trip-trackings` y de `BusLocationUpdated` | `test/features/trip_tracking/trip_tracking_test.dart` |
+| Pantalla: cada estado y el marcador | `test/features/passenger/bus_tracking_screen_test.dart` |
+
+## 8. Envío de GPS del conductor (Recorrido)
+
+`TripLocationSender` envía la posición cada `GPS_INTERVAL_SECONDS` (5 s) con
+`latitude`, `longitude`, `speed_kmh`, `accuracy_meters` (precisión del GPS del
+teléfono, si la reporta) y `recorded_at`.
+
+| Respuesta del GPS | Qué hace la app |
+|---|---|
+| `201` guardada / `202` (`broadcast_only`, `duplicate`, `stale`) | Cuenta como enviada |
+| Sin red, timeout (8 s), 5xx, 429 | La reintenta en el siguiente envío, salvo que ya haya una más nueva (se envía esa) |
+| `409` el viaje no está en curso | **Deja de enviar**: "El viaje no está en curso: todavía no se ha iniciado o ya terminó." |
+| `403` no es el conductor asignado | **Deja de enviar**: "No eres el conductor asignado a este viaje." |
+| `404` el viaje no existe | **Deja de enviar**: "No se encontró el viaje." |
+| `401` sesión vencida | **Deja de enviar**: "Tu sesión expiró. Inicia sesión nuevamente." |
+| Otro 4xx (datos inválidos) | Descarta esa lectura y sigue |
+
+En los casos que **dejan de enviar**, reintentar cada 5 s no sirve de nada: la
+pantalla muestra el motivo (`TripTrackingState.rejected`) y un botón
+**Reintentar** para cuando se corrija. El `401` es distinto: reintentar daría
+`401` otra vez, así que (`snapshot.sessionExpired`) Recorrido borra la sesión y
+manda al **Login** con "Tu sesión expiró…".
+
+**Siempre la más nueva, sin cola.** El pasajero necesita dónde está el bus
+**ahora**, y el GPS ignora una lectura más vieja que la posición actual. Por
+eso hay como mucho **una** petición en curso y **una** lectura esperando: cada
+lectura nueva reemplaza a la que espera. Si el servidor tarda, no se acumulan
+posiciones viejas que muestren al bus atrasado (antes había una cola de hasta
+120 en orden). "Pendientes" es 0 o 1. Cada envío espera como mucho 15 s
+(`ApiConfig.gpsSendTimeout`; por Render una lectura tarda ~2–5 s); el resto de
+la app sigue con 60 s.
+
+**Se envía apenas llega.** Cada posición nueva del teléfono se envía en el
+momento (y se ve en el mapa del conductor), no en el siguiente tick: antes eso
+sumaba hasta 5 s de atraso al pasajero. El tick de 5 s solo reenvía cuando no
+llegó ninguna posición nueva (bus detenido).
+
+**Primera lectura = inicio del viaje.** La última posición conocida del
+teléfono solo se usa si tiene menos de 30 s; si no, se pide una nueva
+(`getCurrentPosition`, hasta 10 s). Antes podía enviarse una posición vieja (de
+otro lugar) o ninguna, y el GPS guardaba ese punto como el inicio.
+
+**Bus detenido.** Con el bus quieto el teléfono no da posiciones nuevas
+(filtro de 10 m) y llegaba la misma lectura cada 5 s; el GPS la ignoraba como
+duplicada y el pasajero veía "Señal débil" en cada parada. Ahora la lectura
+repetida sale con la hora actual: el bus "sigue aquí ahora".
+
+**Qué guarda el GPS.** Se **transmite** cada lectura, pero en `gps_locations`
+solo quedan el **inicio** (la primera lectura del viaje) y el **fin**: al tocar
+**Finalizar recorrido**, antes de completar el viaje, la app envía la posición
+actual con `final: true` (`TripLocationSender.sendFinal`, una vez por viaje,
+sin bloquear si falla). Requiere la rama `feature/gps-live-broadcast-trip-edges`
+del servicio GPS.
+
+**Pantalla Recorrido (mapa).** Con el viaje en curso, el mapa ocupa la mayor
+parte de la pantalla:
+
+- **La ruta a seguir:** la del propio viaje (`planned_route_snapshot`:
+  `route_geometry` + `occurrences`, congelada al planificarlo →
+  `DriverTrip.plannedPattern`, sin otra petición). Si el viaje no la trae:
+  `GET ops/route-patterns/{id}` (`OperationsService.routePattern`). Sin ninguna
+  de las dos, solo se ve el bus con una nota. Se dibuja igual que en el mapa
+  del pasajero (línea con degradado, flechas, paradas numeradas).
+- **La línea es la del Dashboard, tal como viene** (`route_geometry`, la que
+  calcula "Calculate Route" con OSRM en el panel admin). Si el viaje se
+  planificó **antes** de calcularla, su copia trae paradas pero no línea: se
+  pide el recorrido actual y se usa **su línea con las paradas y horas del
+  viaje** (`RoutePattern.withGeometry`).
+- **Sin línea en el Dashboard** (`route_geometry: null`, como hoy en -dev
+  para PV-RF, PV-GUA y SJ-PV): se unen las paradas en orden con rectas y se
+  muestra la nota **"Ruta aproximada: une las paradas en orden."**
+  (`ApproximateRouteNote`), igual en "Rastreando tu bus" y en la ficha de la
+  ruta del inicio. Para que se vea por calles hay que calcular la ruta en el
+  Dashboard; la app no la inventa.
+- **El bus:** la posición de cada lectura del GPS (`snapshot.latitude` /
+  `longitude`); la cámara lo sigue. Botones: **Ver ruta completa** (deja de
+  seguir) y **Centrar en el bus**. Arriba, una etiqueta con destino, hora real
+  de salida y placa.
+- **Próxima parada** (`NextStopTracker`, `features/driver/next_stop_tracker.dart`):
+  una parada cuenta como pasada a 60 m; si el bus llega a una posterior, las
+  anteriores se saltan; al retomar a mitad del viaje se calcula desde la parada
+  más cercana. Muestra nombre, "Parada N de M" y la hora programada (salida +
+  `minutes_from_start`); al final, "Llegaste a la última parada". La parada
+  siguiente se resalta en el mapa.
+
+Debajo, un panel **compacto** (~190 px en un teléfono de 360×640): estado del
+envío ("Enviando ubicación · hace 3 s") con contadores pequeños de enviadas y
+pendientes, la próxima parada, el aviso de una línea "No cierres SmartBus…"
+(al tocarlo explica por qué) y **Finalizar recorrido**. Si el GPS no está
+enviando (permiso, ubicación apagada, rechazo), el mismo panel dice por qué y
+ofrece la acción.
+
+**El GPS no depende de la pantalla.** Las pestañas del conductor se reemplazan
+(`pushReplacementNamed`), así que Recorrido se destruye al ir a Inicio, Mis
+rutas o Mi cuenta. El envío vive en `ActiveTripTracking.sender`
+(`features/trip_tracking/services/active_trip_tracking.dart`), uno para toda la
+sesión de la app: cambiar de pestaña **no** apaga el GPS (los pasajeros no ven
+"sin señal") y al volver a Recorrido se ve enviando. Solo se detiene con
+**Finalizar recorrido**, **Cerrar sesión** (`ProfileDetails.onSignOut`) o una
+sesión expirada.
+
+**Fuera de la app:** con la app en segundo plano o la pantalla bloqueada sigue
+enviando (servicio en primer plano con la notificación "SmartBus · recorrido
+activo" en Android; `UIBackgroundModes: location` en iOS). Si el conductor
+**cierra la app desde recientes**, Android detiene el envío; por eso la
+confirmación de inicio y la pantalla Recorrido muestran el aviso
+`KeepAppOpenNotice` ("No cierres SmartBus durante el recorrido"). En Huawei /
+Honor conviene además permitir "Ejecutar en segundo plano" en los ajustes de
+batería.
+
+**Notificaciones (Android 13+):** la notificación del servicio solo se ve con
+el permiso `POST_NOTIFICATIONS` (declarado en el manifest). Se pide al iniciar
+un viaje, después del permiso de ubicación (`NotificationPermission`, canal
+`smartbus/notifications` en `MainActivity.kt`, sin paquetes extra). Negarlo
+**no** bloquea el viaje: el GPS se envía igual.
+
+"Iniciar recorrido" (en Inicio) primero inicia el viaje en el Dashboard y
+"Finalizar recorrido" lo completa (sección 9), así el GPS ya no responde `409`
+por un viaje sin iniciar. Al finalizar, el GPS sigue enviando hasta que el
+Dashboard confirma; recién entonces se detiene.
+
+Tests: `test/features/trip_tracking/trip_location_sender_test.dart`.
+
+## 9. Viajes reales del Dashboard (`ops`)
+
+La app llega al Dashboard por el Gateway con el prefijo **`ops`**
+(`ApiConfig.opsBaseUrl`, `--dart-define=OPS_GATEWAY_URL=...`; por defecto el
+mismo Gateway). Todo pasa por `OperationsService`
+(`features/operations/services/operations_service.dart`); los modelos están en
+`features/operations/models/operations_models.dart`.
+
+| Método | Endpoint (Gateway) | Token | Quién |
+|---|---|---|---|
+| `driverTrips({serviceDate, status})` | `GET ops/driver/trips?include=pattern,bus&sort=scheduled_departure_at` | Sí | Conductor |
+| `driverTripHistory({page, status})` | `GET ops/driver/trips?include=pattern,bus&sort=-scheduled_departure_at&page[size]=20&page[number]=N` (todos los días, más reciente primero) | Sí | Conductor ("Mis rutas") |
+| `startTrip(id)` | `POST ops/trips/{id}/start` | Sí | Conductor asignado |
+| `completeTrip(id)` | `POST ops/trips/{id}/complete` (idempotente; devuelve `actual_arrival_at`) | Sí | Conductor asignado |
+| `trip(id)` | `GET ops/trips/{id}` (estado actual del viaje: al abrir Recorrido, al deslizar, cada 60 s y tras un `409` al finalizar) | Sí | Conductor asignado |
+| `routes()` | `GET ops/routes` | No | Pasajero |
+| `searchRoutes(query, {page})` | `GET ops/routes?include=company,patterns` (catálogo completo, se busca en el teléfono) | No | Pasajero (sección 12) |
+| `routesWithPatterns()` | `GET ops/routes?include=patterns` (rutas + sentidos + paradas en **una** petición; ver §10) | No | Pasajero |
+| `routePatterns(routeId)` | `GET ops/routes/{id}/patterns` (trazo + paradas) | No | Pasajero |
+| `ongoingTrips(patternId)` | `GET ops/route-patterns/{id}/trips` (solo `in_progress`, sin datos del conductor) | No | Pasajero |
+| `FavoritesService.fetchFavorites()` / `addFavorite(routeId)` / `removeFavorite(routeId)` | `GET` / `POST ops/favorites` · `DELETE ops/favorites/{route_id}` | Sí | Pasajero (sección 11) |
+
+### Conductor
+
+La app **no crea viajes**: se planifican en el Dashboard (conductor, bus,
+recorrido, fecha y hora). El conductor solo inicia uno ya programado.
+
+1. **Inicio** (`DriverHomeScreen`) muestra los viajes de hoy ordenados por
+   salida: ruta (código · nombre), destino, **placa y unidad del bus**
+   (`include=bus`), horas programadas y estado. Arriba va cualquier viaje de
+   otro día que siga **en curso** (cruzó la medianoche o nadie lo finalizó).
+   Sin viajes: "No tienes viajes asignados para hoy.".
+   **Ver paradas (N)** despliega, antes de iniciar, las paradas del viaje en
+   orden con la hora programada de cada una (salida + `minutes_from_start`),
+   sacadas de la ruta planificada del viaje (`planned_route_snapshot`, sin otra
+   petición). Si el viaje no trae paradas, no aparece.
+   Cada viaje muestra la **tarifa** de su ruta ("Tarifa ₡1.570",
+   `GET ops/routes/{id}/fares`, la vigente hoy; una petición por ruta, sin
+   bloquear la lista).
+   **Varios viajes al día** (ida, vuelta, otras horas): salen todos, en orden.
+   Con uno en curso los demás esperan; al finalizarlo se pueden iniciar. Una
+   ruta hecha **ida y vuelta todo el día** es una salida (y un viaje) por cada
+   hora y sentido: se van alternando.
+   Al final de la lista, **"Horario de hoy · PV-GUA"** (plegado) por cada ruta
+   de sus viajes: las salidas de hoy de **los dos sentidos** de la ruta
+   (`routePatterns` + `patternSchedules`), la próxima destacada. Es el mismo
+   `DeparturesToday` (`lib/widgets/`) que ve el pasajero.
+   Los viajes del día los crea el Dashboard (asignaciones fijas + tarea
+   diaria); la app solo los lee.
+2. **Iniciar recorrido** — solo en viajes `scheduled` y solo si **no hay otro
+   en curso** (en ese caso los demás dicen "Finaliza el recorrido en curso para
+   iniciar este viaje."):
+   1. diálogo de **confirmación**;
+   2. **permiso y GPS del teléfono**: si faltan, el viaje **no se inicia** y un
+      SnackBar ofrece Permitir / Ajustes / Activar. Así nunca queda un viaje
+      "en curso" para los pasajeros sin posición del bus;
+   3. `startTrip` con **spinner** en el botón (deshabilitado: no hay doble
+      inicio);
+   4. con `200` (`in_progress` + `actual_departure_at`) abre **Recorrido**
+      (`TripScreen`) con ese viaje, que empieza a enviar el GPS con su id.
+3. **Continuar recorrido** (viaje ya `in_progress`, p. ej. se cerró la app):
+   abre Recorrido y reanuda el GPS sin volver a llamar `start`. Muestra
+   "Inició a las HH:MM" con la hora **del backend** en hora local. La pestaña
+   **Recorrido** sin viaje busca el que está en curso. `TripScreen` nunca
+   inicia un viaje `scheduled` (manda a Inicio).
+4. **Finalizar recorrido** (en el panel de Recorrido mientras el viaje está
+   `in_progress`; también si el GPS está pausado, como enlace bajo
+   "Continuar recorrido"):
+   1. diálogo **"¿Finalizar el recorrido?"**: "Cancelar" o tocar afuera no
+      envía nada y el GPS sigue;
+   2. `completeTrip` con **spinner** en el botón ("Finalizando…",
+      deshabilitado). Mientras espera, **el GPS sigue enviando** y el mapa se
+      mantiene;
+   3. con `200` (`completed` + `actual_arrival_at`) **recién ahí se detiene el
+      GPS** y se muestra "Recorrido finalizado" con **"Llegada: HH:MM"**: la
+      hora del backend en hora local, no la del teléfono. Si ya estaba
+      completado (otro dispositivo), el backend responde `200` igual.
+   4. **Siguiente viaje:** se piden los viajes de hoy todavía `scheduled` y,
+      si hay, se muestra el primero ("Siguiente viaje · sentido contrario"
+      cuando es la misma ruta en el otro sentido, con su hora de salida) con
+      **Iniciar viaje hacia {destino}** (sirve en los dos sentidos: en una ruta
+      ida y vuelta todo el día se alterna cada vez). Abre Inicio con
+      `DriverHomeArgs(startTripId)`, que muestra directo la confirmación de
+      inicio de ese viaje (con el mismo chequeo de permiso y GPS).
+
+Errores al finalizar:
+
+| Respuesta | Qué ve el conductor | GPS |
+|---|---|---|
+| `409` no está en curso | Mensaje del backend ("Solo se pueden completar viajes en curso.") y se consulta `GET ops/trips/{id}`: si está cancelado / completado / programado se muestra ese estado | Se detiene si el viaje ya no está en curso; si sigue en curso, sigue |
+| `403` / `404` | "No puedes finalizar este viaje." + pantalla con "Ir a Inicio" | Se detiene |
+| `401` | Se borra la sesión → Login con "Tu sesión expiró. Inicia sesión nuevamente." | Se detiene |
+| Sin red, timeout, `429`, `5xx` | SnackBar con el mensaje + **Reintentar** (vuelve a llamar `complete`, sin diálogo); el viaje sigue en curso | Sigue enviando (las ubicaciones pendientes quedan en cola) |
+
+#### Estado del viaje en Recorrido
+
+Bajo el encabezado de **Recorrido** hay una franja con el **estado del viaje**
+(`TripStatusBadge`, el mismo texto y color que en la lista de Inicio, con
+ícono y etiqueta de accesibilidad "Estado del viaje: …"). Combina el estado
+del Dashboard con el envío de GPS de este teléfono (`TripStatusInfo`):
+
+| Dashboard | GPS (app) | Badge | Color | Mensaje |
+|---|---|---|---|---|
+| `scheduled` | — | Programado | Azul | "Listo para iniciar" |
+| `in_progress` | enviando | En curso | Verde | "Enviando ubicación · última hace Ns" |
+| `in_progress` | detenido (salió, reabrió la app, sin permiso…) | En curso · ubicación detenida | Naranja | "No se está enviando tu ubicación" (+ **Continuar recorrido** en el panel) |
+| `in_progress` | rechazado (`403` / `409` del servicio GPS) | En curso · ubicación rechazada | Rojo | El motivo (+ **Reintentar** en el panel) |
+| `completed` | — | Finalizado | Verde (`completado`, como en Inicio) | "Recorrido finalizado · llegada HH:MM" |
+| `cancelled` | — | Cancelado | Rojo | "Este viaje fue cancelado" |
+
+No existe un estado "pausado" en el Dashboard: "pausado" es *en curso con la
+ubicación detenida*.
+
+**Se actualiza** (`GET ops/trips/{id}`) al abrir la pantalla, al **deslizar
+hacia abajo** (sobre el panel o la vista de estado) o con el botón ⟳, y **cada
+60 s** mientras la app está en primer plano (en segundo plano se pausa y, al
+volver, se actualiza enseguida). Como ese `GET` no trae `include`, se toma del
+servidor solo el estado y las horas; el bus, el destino y la ruta que ya se
+mostraban se conservan (`DriverTrip.refreshedWith`). Una respuesta que llega
+después de "Finalizar" se descarta.
+
+Si el administrador **cancela o finaliza** el viaje desde el panel, en menos de
+60 s (o al deslizar) el badge cambia, **se detiene el GPS** y un SnackBar lo
+explica ("El viaje fue cancelado desde el panel de administración. Se dejó de
+enviar tu ubicación.").
+
+| Error al actualizar | Qué ve el conductor | GPS |
+|---|---|---|
+| Sin red, timeout, `429`, `5xx` | Sigue el último estado conocido + "No se pudo actualizar el estado." con **Reintentar** | Sigue |
+| `401` | Se borra la sesión → Login con "Tu sesión expiró…" | Se detiene |
+| `403` / `404` | "Este viaje ya no está disponible" + **Ir a Inicio** | Se detiene |
+
+#### Mis rutas (historial)
+
+La pestaña **Mis rutas** (`DriverRoutesScreen`) muestra **todos los viajes
+asignados al conductor**, de cualquier día, del más reciente al más antiguo y
+agrupados por día ("Hoy", "Ayer", "mié 11 nov", con el año si no es el
+actual). Cada viaje muestra:
+- ruta (código · nombre) y **estado** con el mismo badge de Inicio y Recorrido;
+- destino y bus (placa · unidad);
+- **Horario** programado (salida → llegada) y **Real** (salida → llegada del
+  backend + duración, o "Salió HH:MM" si sigue en curso);
+- "Pendiente de iniciar" / "Este viaje fue cancelado" según el estado;
+- **Continuar recorrido** si está en curso (abre Recorrido con ese viaje).
+
+Chips **Todos / Programados / En curso / Finalizados / Cancelados** filtran en
+el servidor (`filter[status]`). **Cargar más** pide la página siguiente (si
+falla, la lista se mantiene y un SnackBar ofrece Reintentar). Deslizar hacia
+abajo recarga. `401` → Login; otros errores → mensaje + Reintentar.
+
+Errores al iniciar (SnackBar en Inicio; el GPS no se enciende):
+
+| Respuesta | Qué ve el conductor |
+|---|---|
+| `409` no está programado | Mensaje del backend ("Only scheduled trips can be started.") + se recarga la lista |
+| `422` regla de negocio (bus/conductor no disponible, salida suspendida, otro viaje en curso) | Mensaje del backend + se recarga la lista |
+| `403` / `404` | "No puedes iniciar este viaje." + se recarga la lista |
+| `401` | Se borra la sesión → Login con "Tu sesión expiró. Inicia sesión nuevamente." (también al cargar la lista) |
+| Sin red, timeout, `429`, `5xx` | Mensaje + **Reintentar**; el viaje sigue programado |
+
+### Pasajero
+
+Chip **"Buses en curso"** → lista de rutas → la ruta (`RouteBusesScreen`,
+también desde la búsqueda) muestra arriba la **tarifa** ("Tarifa ₡1.570") y
+cada recorrido (sentido) con:
+- su **horario de hoy** (`GET ops/route-patterns/{id}/schedules`):
+  "Próxima salida: 10:30" y todas las salidas del día; las que ya pasaron en
+  gris. Respeta el día de la semana (`day_of_week`: 0 = domingo), la vigencia
+  y los días suspendidos (feriados). Sin salidas hoy: "Hoy no hay salidas en
+  este sentido.". Un sentido sin horario publicado no muestra nada;
+- sus **buses en curso** (unidad, placa, hora de salida) → **Ver en vivo** abre
+  "Rastreando tu bus" con ese viaje. Cada bus muestra además su **estado**
+  ("En vivo · hace 5 s", "Señal débil", "Esperando ubicación") y **dónde va**
+  ("Próxima parada: Centro", calculada con `NextStopTracker` desde su
+  posición). Usa `RouteLiveBuses` por sentido, igual que "Buses en vivo" del
+  inicio: la lista se renueva cada 30 s y un viaje terminado desaparece;
+- **Ver ruta**: vuelve al mapa del inicio con esa ruta y ese sentido dibujados
+  (§10);
+- **Ver paradas**: las paradas en orden con los minutos desde el inicio, aunque
+  no haya buses en camino.
+
+Un viaje terminado desaparece de la lista (el Dashboard solo devuelve los
+`in_progress`).
+
+### Tests
+
+| Qué | Archivo |
+|---|---|
+| URLs, filtros y lectura JSON:API (trazo `[lng, lat]`, paradas ordenadas, snapshot, placa del bus, 409/422 con mensaje) | `test/features/operations/operations_service_test.dart` |
+| Inicio del conductor (AC1–AC9): lista, confirmación, permiso de ubicación, un solo viaje activo, 409/422/403/404/401, red y reintentar, spinner | `test/features/driver/driver_home_screen_test.dart` |
+| Recorrido: mapa con la ruta del viaje (o del Dashboard), bus y cámara, próxima parada, panel compacto en teléfono chico, GPS entre pestañas, 401 | `test/features/driver/trip_screen_test.dart` |
+| Finalizar recorrido (AC1–AC9, grupo *Trip completion*): botón también con GPS pausado, confirmación (cancelar / tocar afuera), 200 con hora de llegada del backend, spinner sin doble envío y GPS hasta confirmar, 409 (cancelado / sigue en curso), 403/404, red / timeout / 429 / 5xx + reintentar | `test/features/driver/trip_screen_test.dart` |
+| Estado del viaje (AC1–AC9, grupo *Trip status*): badge igual a Inicio, en curso enviando / detenido / rechazado, finalizado con hora de llegada, cancelado o finalizado desde el panel en 60 s (GPS se detiene), pausa en segundo plano, deslizar para actualizar con indicador, red / 429 / 5xx con último estado + reintentar, 401, 403/404, respuesta tardía tras "Finalizar", conserva el bus, 320 × 568 y semántica | `test/features/driver/trip_screen_test.dart` |
+| Tabla de estados (`TripStatusInfo`), `refreshedWith` y badge de Inicio con ícono y semántica | `test/features/driver/trip_status_badge_test.dart` |
+| Mis rutas: historial agrupado por día con estado y datos (horario, real y duración, bus), Continuar recorrido, filtros por estado, Cargar más (y su error), vacío, cargando, error + reintentar, deslizar, 401, 320 × 568 | `test/features/driver/driver_routes_screen_test.dart` |
+| Próxima parada: inicio, avance, retomar a mitad, saltar paradas, fin | `test/features/driver/next_stop_tracker_test.dart` |
+| Buses en curso: ruta → buses → en vivo, estado y próxima parada de cada bus, bus sin posición, viaje terminado oculto, sin buses, ver paradas, ver ruta en el mapa, reintentar | `test/features/passenger/buses_in_progress_screen_test.dart` |
+
+## 10. Rutas en el mapa del pasajero
+
+El panel inferior del inicio lista las **rutas cercanas** y, al elegir una,
+dibuja su recorrido y sus paradas sobre el mapa.
+
+### Piezas
+
+| Pieza | Archivo |
+|---|---|
+| Rutas + sentidos + paradas (una petición) | `OperationsService.routesWithPatterns()` |
+| Filtro de cercanía (Dart puro, haversine) | `features/operations/services/nearby_routes_filter.dart` |
+| Lista de rutas y panel de la ruta elegida | `features/passenger/map/route_sheet.dart` |
+| Dibujo en el mapa (`showRoute`, `clearRoute`, `fitBounds`, `onStopTap`) | `features/passenger/map/passenger_map.dart` |
+
+### Datos
+
+`GET ops/routes?include=patterns&page[size]=100` devuelve las rutas en `data`
+y sus sentidos (`route-patterns`) en `included`. Cada ruta los enlaza en
+`relationships.patterns.data`; si una ruta no trae esa relación, se usa el
+`route_id` del patrón. Se ignoran otros tipos de `included` (p. ej. `companies`).
+
+- `route_geometry` (GeoJSON `LineString`, `[lng, lat]`) **puede ser `null`**: hoy
+  en -dev solo DEMO-CITY tiene trazo. Sin trazo, la línea une las paradas en
+  orden (`RoutePattern.path`); se dibuja igual (línea continua) y el panel
+  avisa "Trazado aproximado".
+- Una ruta tiene **varios sentidos**. Si dos van al mismo `headsign` (SJ-PV va
+  tres veces a "San José"), la etiqueta agrega la variante del nombre:
+  "Hacia San José por Vara Blanca" (`TransitRoute.directionLabel`).
+
+### Qué ve el pasajero
+
+| Situación | Lista |
+|---|---|
+| Con ubicación | **Rutas cercanas**: rutas con al menos una parada a ≤ **1000 m** (`NearbyRoutesFilter.defaultRadiusMeters`), de la más cercana a la más lejana. Cada fila: código, nombre, "Hacia {destino}" y "{parada más cercana} · 230 m" |
+| Ninguna cerca | "No hay rutas cerca de ti" + **Ver todas las rutas** |
+| Sin permiso / GPS apagado | **Todas las rutas**, sin distancia; se pueden elegir igual |
+| Cargando / error | "Buscando rutas…" / mensaje + **Reintentar** |
+
+Al elegir una ruta:
+1. Se dibuja el sentido con la parada más cercana al pasajero (sin ubicación:
+   el primero). Línea continua con **degradado** de turquesa (salida,
+   `verdeTurquesa`) a azul (llegada, `azulPrincipal`), con halo, borde blanco
+   y **flechas** en el sentido del recorrido. Salida y llegada son círculos
+   rellenos grandes; las paradas intermedias, blancas y numeradas. La parada
+   elegida lleva un halo.
+2. La cámara encuadra todo el sentido (y al pasajero, si está a ≤ 1000 m de
+   alguna parada), dejando libre la barra de búsqueda y el panel.
+3. El panel baja (32 % de la pantalla) y muestra: nombre, **un chip por
+   sentido**, "N paradas · distancia · ~min" y, sin trazo, "Trazado
+   aproximado".
+4. **Paradas (N)**: todas las paradas del sentido como línea de tiempo
+   (Salida → … → Llegada, con "+12 min"). Tocar una en la lista o en el mapa la
+   resalta y muestra "Parada 2 de 5" y los minutos desde el inicio; desde la
+   lista, además, el mapa se centra en ella.
+5. Cambiar de sentido, cerrar (✕) o el botón atrás de Android borran el dibujo
+   anterior.
+
+### Buses en vivo sobre la ruta
+
+Con una ruta elegida, el mapa muestra también los **buses que van en ese
+sentido ahora** (el conductor tocó "Iniciar recorrido"), moviéndose en tiempo
+real, y el panel los lista en "Buses en vivo".
+
+- `RouteLiveBuses` (`features/trip_tracking/services/route_live_buses.dart`):
+  pide `GET ops/route-patterns/{id}/trips` (solo `in_progress`) y crea un
+  `LiveTripTracker` por viaje, el mismo de "Rastreando tu bus" (GET +
+  `BusLocationUpdated`). Cada **30 s** vuelve a preguntar al Dashboard: aparecen
+  los viajes nuevos y se quitan los que ya no corren. Un viaje que el GPS da por
+  terminado desaparece en el momento.
+- Mapa: un pin por bus (`PassengerMapHandle.showBuses`), verde si la posición
+  es reciente (≤ 30 s) y gris si es vieja (señal débil). Tocar el pin o
+  **Ver en vivo** abre "Rastreando tu bus".
+- Panel: "Unidad 12 · ABC-123" + "En vivo · hace 5 s" / "Señal débil · hace
+  2 min" / "Esperando ubicación". Sin buses: "No hay buses en curso en este
+  sentido."
+- Cambiar de sentido sigue a los buses del nuevo sentido; cerrar la ruta los
+  quita y corta sus conexiones.
+- **Tiempo real:** igual que "Rastreando tu bus", usa `REVERB_APP_KEY` (por
+  defecto la de -dev en Render). Sin key funciona preguntando cada 15 s. Cada
+  bus abre su propia conexión (son pocos por sentido).
+
+**Desde "Buses en curso" → Ver ruta:** las dos pantallas se cierran con un
+`RouteSelection` y el inicio dibuja esa ruta con ese sentido.
+
+### Por qué el filtro corre en el teléfono
+
+Una sola petición trae todas las rutas, sentidos y paradas, y alcanza para un
+catálogo pequeño o mediano. Si crece, el Dashboard ya filtra por distancia
+(`GET ops/stops?filter[near]=lat,lng,radius_m`, máx. 2000 m): solo cambiarían
+`OperationsService` y la entrada de `NearbyRoutesFilter`; la lista y el mapa
+quedan igual.
+
+### Detalles del mapa
+
+- Las capas de la ruta se agregan **antes** que las del usuario y el bus, así
+  el punto del pasajero queda encima de la línea.
+- Los números de parada usan las fuentes de OpenFreeMap
+  (`MapConfig.glyphsUrl`, `Noto Sans Bold`); el estilo satélite también las
+  declara, porque sin `glyphs` MapLibre no dibuja texto.
+- Al cambiar calles ↔ satélite se vuelve a dibujar la ruta elegida.
+
+### Paradas cercanas
+
+El chip **"Paradas cercanas"** del inicio muestra las paradas a menos de
+`NearbyRoutesFilter.radiusMeters` (1 km) del pasajero, de la más cercana a la
+más lejana (máx. 20), **en el mapa** (puntos turquesa,
+`PassengerMapHandle.showNearbyStops`) y **en la hoja** (`NearbyStopsPanel`):
+nombre, distancia y las rutas que paran ahí ("PV-RF · Río Frío").
+
+- Se calculan en el teléfono (`nearbyStops`, `services/nearby_stops.dart`) con
+  el catálogo que el mapa ya cargó (`routesWithPatterns`): **sin otra
+  petición**. Una parada de varias rutas (o de los dos sentidos) aparece **una
+  vez**, con todas. Se recalculan si el pasajero se mueve.
+- Tocar una parada (lista o punto del mapa) la centra y la marca; tocar una de
+  sus rutas dibuja ese sentido con la parada resaltada.
+- "X" o el botón atrás de Android vuelven a la lista de rutas.
+- Sin ubicación: un aviso ofrece activarla (las paradas dependen de dónde
+  está el pasajero). Sin paradas cerca: lo dice.
+
+### Horario y tarifa de las rutas
+
+- **Lista** ("Rutas cercanas" / "Todas las rutas"): cada ruta muestra su
+  **tarifa de hoy** ("₡650", `RouteListTile`). Se piden todas en paralelo al
+  cargar el catálogo (`GET ops/routes/{id}/fares`, en caché); una ruta sin
+  tarifa o cuya petición falla solo no muestra precio.
+- **Ruta elegida** (`SelectedRoutePanel`): "Tarifa ₡650" junto al resumen y la
+  sección **"Horario"** (`ScheduleSection`) del sentido mostrado: próxima
+  salida, las salidas de hoy (las que ya pasaron tachadas) y "Ver horario de
+  la semana" con los próximos 6 días. Respeta vigencia y fechas suspendidas
+  (`departuresOn`).
+- El horario se pide **por sentido** al abrirlo
+  (`GET ops/route-patterns/{id}/schedules`), una sola vez. Sin horario
+  publicado: "Este sentido no tiene horario publicado."; si falla: "No se pudo
+  cargar el horario." (se reintenta al volver a abrir la ruta).
+
+### Próximas salidas de una parada
+
+En "Paradas cercanas", al tocar una parada aparece **"Próximas salidas"**
+(`StopDeparturesView`): las salidas de **todas las rutas** que pasan por ahí en
+las próximas 2 horas, con código, sentido, hora en esa parada, cuánto falta
+("10:30 · en 15 min") y tarifa.
+
+- `GET ops/stops/{id}/departures?window_minutes=120&departure_at=…`
+  (`OperationsService.stopDepartures`). La hora ya es la de **la parada**
+  (salida de la terminal + minutos hasta ella), calculada por el Dashboard.
+- **Sin caché** en el servicio (depende de la hora); la pantalla reutiliza la
+  respuesta de una parada durante 1 minuto.
+- Tocar una salida dibuja ese sentido con la parada resaltada. Se muestran 6
+  y "y N más". Sin salidas: "No hay salidas en las próximas 2 horas."; si
+  falla: el mensaje y "Reintentar".
+
+### ¿Cómo llego?
+
+Chip **"¿Cómo llego?"** o **mantener presionado el mapa** en el destino
+(`PassengerMapOptions.onLongPress`): un pin azul marca el destino
+(`showDestination`) y la hoja (`JourneyPlannerPanel`) lista los **buses
+directos** (sin transbordos) desde la ubicación del pasajero:
+
+> **PV-RF · Hacia Río Frío** — Sale 10:30 · en 15 min — ₡650
+> 🚶 Camina 200 m (~3 min) a Centro
+> 🚌 Bájate en Río Frío · llega 11:10 · 40 min · 1 parada
+> 🏁 Camina 150 m a tu destino
+> Después: 12:00
+
+- `GET ops/journeys?origin_lat&origin_lng&destination_lat&destination_lng&walking_radius_m=800&departure_at=…`
+  (`OperationsService.journeys`): el Dashboard busca paradas a ≤ 800 m del
+  origen y del destino, y salidas en las próximas 24 h.
+- La respuesta trae una fila por salida y par de paradas; `journeyOptions` las
+  agrupa: **por sentido, el par con menos caminata**, con sus siguientes
+  salidas; las opciones de la que sale antes a la que sale después (máx. 5).
+- Tocar una opción dibuja ese sentido con la parada donde subir resaltada (el
+  pin del destino sigue); cerrar la ruta vuelve a las opciones.
+- Necesita la ubicación (es el origen): sin ella, un aviso ofrece activarla.
+  Marcar otro destino ignora la respuesta del anterior. "X", atrás de Android
+  o abrir "Paradas cercanas" quitan el destino.
+- Sin bus directo: "No encontramos un bus directo que te lleve ahí…".
+
+### Rutas que pasan cerca (por la carretera, sin parada)
+
+El catálogo tiene pocas paradas (casi solo terminales) y en zonas rurales el
+bus para donde le hacen la seña. Por eso la app también busca rutas cuya
+**línea** (`route_geometry`, la que se dibuja) pasa cerca, aunque no haya
+parada (`services/route_proximity.dart`, en el teléfono, sin peticiones):
+
+- `closestOnPath`: punto de la línea más cercano a un lugar, su distancia y
+  cuántos metros lleva desde el inicio del recorrido.
+- **Paradas cercanas** → sección **"Rutas que pasan cerca de ti"**
+  (`routesPassingNear`, ≤ 1 km de la línea): "PV-GUA · Hacia Guápiles — Pasa
+  a 220 m de ti". Tocarla dibuja el sentido y lleva el mapa al punto de la
+  carretera más cercano. Si no hay paradas pero sí rutas: "No hay paradas
+  oficiales…, pero estas rutas pasan cerca: puedes esperar el bus en la
+  carretera."
+- **¿Cómo llego?** → sección **"El bus pasa cerca"** (`routesPassingBetween`):
+  la línea pasa a ≤ 1 km del pasajero **y**, más adelante en el sentido de
+  viaje, del destino. Muestra dónde esperar ("Camina 220 m hasta la
+  carretera"), cuándo pasaría ("Pasa ~11:10 · en 55 min": salida de la
+  terminal + minutos hasta ese punto, por distancia con
+  `driving_duration_seconds`), el viaje y la caminata final. **Horas
+  aproximadas**. No repite un sentido que el Dashboard ya ofrece por paradas.
+- Sin `route_geometry` un sentido no se usa (la línea recta entre terminales
+  no es la carretera).
+
+### Tests
+
+| Qué | Archivo |
+|---|---|
+| Paradas cercanas: radio, orden, una vez por parada con todas sus rutas, límite, sin coordenadas | `test/features/operations/nearby_stops_test.dart` |
+| Paradas cercanas en el inicio: mapa + hoja, parada compartida, tocar parada / punto, abrir una ruta, cerrar y atrás, nada cerca, sin ubicación | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Paradas cercanas*) |
+| Horario y tarifa: tarifa en la lista, tarifa + salidas de hoy + semana en la ruta elegida, otro sentido, sin más salidas / día sin salidas, errores | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Horario y tarifa*) |
+| Salidas por parada y "¿Cómo llego?": JSON → modelo (horas locales, tarifa), agrupación de opciones, textos ("en 1 h 20 min"), parámetros de las peticiones, sin caché | `test/features/operations/trip_planning_test.dart` |
+| Rutas que pasan cerca: punto más cercano de la línea, distancia y avance, radio, sentido de viaje, sin trazo, minutos y próxima pasada | `test/features/operations/route_proximity_test.dart` |
+| "Rutas que pasan cerca de ti" y "El bus pasa cerca" en el inicio: lista, abrir donde pasa, pasos y hora aprox., destino detrás, sin repetir lo del Dashboard | `test/features/passenger/passenger_home_screen_test.dart` (grupos *Paradas cercanas* y *El bus pasa cerca*) |
+| Próximas salidas en el inicio: lista, tocar una salida, vacío, reutilizar 1 min, error y reintentar | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Próximas salidas de una parada*) |
+| ¿Cómo llego?: instrucciones, pulsación larga, pasos y tarifa, abrir y cerrar una opción, vacío / error, destino nuevo, cerrar, sin ubicación | `test/features/passenger/passenger_home_screen_test.dart` (grupo *¿Cómo llego?*) |
+| Filtro: dentro, fuera, justo en el radio, orden, lista vacía, varios sentidos, paradas sin coordenadas | `test/features/operations/nearby_routes_filter_test.dart` |
+| `include=patterns`: enlace por relación y por `route_id`, con y sin trazo, `directionLabel` | `test/features/operations/operations_service_test.dart` |
+| GeoJSON dibujado: línea real / aproximada, ids, números y tipo de parada (salida, intermedia, llegada), parada resaltada | `test/features/passenger/route_features_test.dart` |
+| AC1–AC9 con mapa falso y `FakeOperations` | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Route visualization*) |
+| Buses en vivo: un tracker por viaje, altas / bajas al refrescar, viaje terminado, error, dispose | `test/features/trip_tracking/route_live_buses_test.dart` |
+| Buses en vivo en el inicio: pines, lista, cambio de sentido, cerrar, abrir seguimiento, señal débil | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Live buses on the route*) |
+
+## 11. Rutas favoritas (pasajero)
+
+El pasajero guarda rutas con una **estrella** y las ve en **"Mis favoritos"**
+(`features/passenger/favorite_routes_screen.dart`, ruta `/passenger/favorites`),
+la pestaña **Favoritos** de la barra inferior (Inicio · Favoritos · Cuenta; la
+pestaña "Mis viajes", que era un placeholder, se reemplazó por esta). Como
+pestaña no tiene "atrás": **"Ver ruta"** abre el inicio
+(`/passenger/home` con un `RouteSelection`), que dibuja esa ruta. Solo existe
+en el flujo del pasajero: el conductor no ve la pestaña ni la estrella.
+
+Los favoritos se guardan en el **Dashboard** (siguen a la cuenta en cualquier
+teléfono). Todas las llamadas llevan el token y **nunca** un id de usuario: el
+backend toma el usuario del token.
+
+### Endpoints (Gateway → Dashboard `api/v1/operations`)
+
+| Método | Ruta | Cuerpo | Respuesta |
+|---|---|---|---|
+| GET | `/ops/favorites` | — | 200 `favorite-routes` (más reciente primero) con `route` y su `company` en `included` |
+| POST | `/ops/favorites` | `{ "route_id": "<uuid>" }` | 201 favorito creado · **409** si ya era favorito |
+| PATCH | `/ops/favorites/{route_id}` | `{ "label": "Casa" }` (o `null`) | 200 favorito con el alias nuevo |
+| DELETE | `/ops/favorites/{route_id}` | — | 204 · 404 si no era favorito |
+
+- 409 al guardar y 404 al quitar **no son errores** para la app: la ruta ya
+  quedó como el pasajero quería (otro teléfono, doble toque).
+- 422: la ruta no existe o su empresa no está activa. 401: sesión vencida.
+
+### Nombre de la ruta (alias)
+
+El lápiz de cada favorito (o mantenerlo presionado) abre **"Nombre de la
+ruta"**: el pasajero le pone un nombre propio ("Casa", "Trabajo", "U"), de
+máximo 50 caracteres (`FavoritesController.maxLabelLength`, el límite del
+Dashboard).
+
+- Con alias, el **alias es el título** (en negrita) y el nombre de la ruta
+  pasa a la línea de abajo, con la empresa.
+- "Quitar nombre" lo borra (`label: null`); "Cancelar" o guardar el mismo
+  nombre no envían nada.
+- Optimista como la estrella (`FavoritesController.rename`): cambia al
+  instante y vuelve al nombre anterior si el servidor falla, con "No se pudo
+  guardar el nombre. …". Un 401 cierra la sesión.
+- En modo edición (seleccionar para eliminar) no aparece el lápiz.
+
+### Piezas
+
+| Pieza | Archivo |
+|---|---|
+| Modelo `FavoriteRoute` (lee `route` y `company` del `included`) | `features/passenger/models/favorite_route.dart` |
+| `FavoritesService` (list / add / remove) | `features/passenger/services/favorites_service.dart` |
+| `FavoritesController`: estado compartido por todas las estrellas y la lista | `features/passenger/services/favorites_controller.dart` |
+| Estrella `FavoriteStarButton` + mensajes / "Deshacer" / 401 | `features/passenger/favorite_star.dart` |
+
+### Dónde aparece la estrella
+
+- En la ruta elegida en el mapa del inicio (`SelectedRoutePanel`, junto a ✕).
+- En el detalle de una ruta (`RouteBusesScreen`: "Guardar en favoritos" /
+  "En tus favoritos").
+- En cada fila de "Mis favoritos" (rellena: tocarla la quita).
+
+### Comportamiento
+
+- **Optimista:** la estrella y la lista cambian al instante. Si el servidor
+  falla (sin red, timeout, 429, 5xx), vuelven a como estaban (en su mismo
+  lugar) y un SnackBar dice el error.
+- Mientras una ruta espera respuesta, más toques sobre ella **no envían nada**
+  (sin solicitudes duplicadas).
+- Al guardar: "Ruta agregada a favoritos.". Al quitar: "Ruta eliminada de
+  favoritos." con **Deshacer**, que la vuelve a guardar (`POST`).
+- "Mis favoritos" siempre pide la lista al abrirse (pudo cambiar en otro
+  teléfono) y se puede refrescar deslizando hacia abajo. Tocar un favorito abre
+  su detalle; "Ver ruta" ahí la dibuja en el mapa del inicio.
+- **Sesión:** la lista pertenece al token que la cargó. Si se inicia sesión con
+  otra cuenta, se descarta y se pide de nuevo (nunca se ven los favoritos de
+  otra persona). Un 401 borra la sesión y abre el login con "Tu sesión expiró.
+  Inicia sesión nuevamente.".
+
+| Estado | Qué se ve |
+|---|---|
+| Cargando | Indicador de carga |
+| Sin favoritos | "Aún no tienes rutas favoritas." + cómo agregar una |
+| Error (sin red, timeout, 5xx) | Mensaje + **Reintentar** |
+| Error al refrescar con lista | Se mantiene la lista + SnackBar con el error |
+
+Cada fila: código, alias o nombre (máximo 2 líneas), nombre y empresa. El backend no
+devuelve origen y destino del favorito (no incluye los recorridos), así que se
+usa el nombre de la ruta, que ya los suele traer ("Heredia – San José").
+
+### Eliminar varias o todas
+
+En "Mis favoritos", encima de la lista: "N rutas", **Editar** y el menú **⋮**.
+
+- **Editar** → cada ruta muestra una casilla en lugar de la estrella y no se
+  puede deslizar. Tocar la fila o la casilla la selecciona. **Seleccionar
+  todo** marca / desmarca todas. **Listo** (o el botón atrás de Android) sale
+  sin borrar nada.
+- **Eliminar (N)** (abajo; desactivado con 0) → diálogo "¿Eliminar N rutas de
+  tus favoritos?" con **Cancelar** (no borra y mantiene la selección) y
+  **Eliminar**.
+- **⋮ → Eliminar todos** → diálogo "¿Eliminar todas tus rutas favoritas?". Sin
+  favoritos no aparece.
+- Al confirmar, las rutas salen de la lista al instante, el modo edición se
+  cierra y un SnackBar dice "N rutas eliminadas de favoritos." con
+  **Deshacer**.
+- **No hay endpoint para borrar varias:** `FavoritesController.removeMany`
+  envía un `DELETE ops/favorites/{route_id}` por ruta, **máximo 4 a la vez**
+  (`maxParallelRequests`). Un 404 (ya se había borrado en otro teléfono) cuenta
+  como borrada.
+- **Fallo parcial:** las rutas que fallaron vuelven a su lugar y las demás
+  quedan borradas. SnackBar "No se pudieron eliminar N rutas." + **Reintentar**,
+  que reenvía solo las que fallaron.
+- **Deshacer** (`FavoritesController.restore`): un `POST` por ruta **con su
+  alias** (`label`), y vuelven al instante en el orden que tenían. Si alguna
+  falla, sale otra vez de la lista y se avisa. Un 409 (ya estaba) cuenta como
+  guardada. Al recargar, el servidor las ordena por la nueva fecha de guardado.
+- Mientras se borra, **Editar** y **⋮** están desactivados y cada ruta se envía
+  una sola vez.
+- Un 401 en cualquier solicitud borra la sesión y abre el login.
+- Accesibilidad: el lector de pantalla lee cada fila junto con su casilla, y el
+  botón como "Eliminar N rutas seleccionadas".
+
+Si el Dashboard agrega un borrado múltiple (p. ej. `DELETE ops/favorites` con
+`{ "route_ids": [...] }`), solo cambia `removeMany`.
+
+### Tests
+
+| Qué | Archivo |
+|---|---|
+| URLs, token sin id de usuario, lectura del `included`, orden, 409 / 404 como éxito, errores | `test/features/passenger/favorites_service_test.dart` |
+| Lista, vacío, carga, 5xx + reintentar, 401, quitar con estrella / deslizar + Deshacer, fallo que revierte, sin duplicados, 320 × 568, otra sesión | `test/features/passenger/favorite_routes_screen_test.dart` |
+| La pestaña "Favoritos" abre "Mis favoritos" | `test/features/passenger/passenger_home_screen_test.dart` |
+| Como pestaña: barra inferior con "Favoritos" seleccionado; "Ver ruta" abre el inicio con la ruta | `test/features/passenger/favorite_routes_screen_test.dart` (grupo *"Favoritos" tab*) |
+| Eliminar varias / todas (AC1–AC9): modo edición, selección, confirmación, máx. 4 a la vez, fallo parcial + reintentar, deshacer en orden y con alias, sin duplicados, 401, 320 × 568 | `test/features/passenger/delete_favorite_routes_test.dart` |
+| Alias: lápiz y pulsación larga, título / subtítulo, quitar, cancelar o mismo nombre sin petición, máx. 50, fallo que revierte, sin lápiz en modo edición; `PATCH` con `{label}` | `favorite_routes_screen_test.dart` (grupo *Nombre de la ruta*), `favorites_service_test.dart` |
+
+## 12. Búsqueda de rutas (pasajero)
+
+La barra **"¿A dónde vas?"** del inicio abre **"Buscar ruta"**
+(`features/passenger/route_search_screen.dart`, ruta `/passenger/search`) con
+el teclado listo. Usa el catálogo público del Dashboard: **no necesita token**.
+
+### Cómo busca
+
+- Espera **400 ms** sin escribir y al menos **2 caracteres**; con menos no se
+  envía nada.
+- Busca por **nombre, número o destino**, **con o sin tilde** y sin importar
+  mayúsculas: "san jose" encuentra "San José", "pena" encuentra "Peña Blanca"
+  y "perez zeledon" encuentra las rutas que van hacia "Pérez Zeledón".
+- **Por qué se busca en el teléfono:** los filtros del Dashboard
+  (`filter[name]`, `filter[code]`) comparan en PostgreSQL con `LIKE`, que
+  distingue las tildes ("jose" no encuentra "José"), y no hay filtro por
+  destino. Por eso `OperationsService.searchRoutes(texto)`:
+  1. descarga **una vez** el catálogo público (`searchCatalogue()`:
+     `GET ops/routes?include=company,patterns`, todas las páginas de 100). Las
+     búsquedas que llegan mientras se descarga comparten la misma petición. Si
+     falla, no se guarda y la siguiente búsqueda lo intenta otra vez;
+  2. compara el texto con `foldForSearch` (minúsculas y sin tildes: á→a, ñ→n,
+     ü→u…).
+- **Orden:** primero el número exacto, después las rutas cuyo número o nombre
+  contiene el texto, y al final las que solo coinciden por destino. Dentro de
+  cada grupo, por número.
+- Solo se muestra la **última** búsqueda: si una respuesta vieja llega tarde, se
+  ignora. Al borrar con la X también se ignora lo que estaba en camino.
+- **"Cargar más"** muestra los 20 resultados siguientes. Si falla, se
+  mantienen los resultados y se ofrece "Reintentar".
+
+### Qué muestra cada resultado
+
+Código (insignia verde), nombre (máximo 2 líneas) con el texto buscado en
+negrita (también sin tilde: "jose" resalta "José"), y debajo la **empresa** (nombre comercial, o la razón social si no
+tiene) y los **destinos** de sus recorridos ("Hacia Heredia, San José"). Estos
+datos salen del `included` del documento JSON:API (`JsonApiIncluded`).
+
+Al tocar un resultado se abre el **detalle de la ruta** (`/passenger/route`,
+argumento `TransitRoute`): la pantalla `RouteBusesScreen` de "Buses en curso",
+con sus recorridos, paradas y buses en vivo.
+
+### Estados
+
+| Estado | Qué se ve |
+|---|---|
+| Campo vacío o 1 carácter | Indicación: "Escribe al menos 2 letras…" |
+| Buscando | Indicador de carga (el texto escrito se mantiene) |
+| Sin resultados | `No encontramos rutas para "<texto>".` + sugerencia |
+| Sin red, timeout, 429, 5xx | Mensaje del error + **Reintentar** (repite la misma búsqueda) |
+
+### Mejora sugerida al backend
+
+Descargar el catálogo completo funciona bien con pocas rutas, pero con
+`include=patterns` cada recorrido trae sus paradas y su trazo, así que la
+descarga crece con el catálogo. Lo ideal es un filtro en `GET routes` del
+Dashboard que busque nombre, código y `headsign` **sin tildes** (PostgreSQL
+`unaccent` + `ILIKE`), por ejemplo `filter[search]`. Cuando exista, solo cambia
+`searchRoutes`: la pantalla no cambia.
+
+### Tests
+
+| Qué | Archivo |
+|---|---|
+| Catálogo (todas las páginas, una sola descarga, reintento si falla), con o sin tilde, por número / nombre / destino, orden, páginas de 20 | `test/features/operations/route_search_service_test.dart` |
+| AC1–AC9: teclado, espera de 400 ms, mínimo 2 caracteres, respuestas viejas, resultados, resaltado, cargar más, abrir ruta, sin resultados, borrar, errores + reintentar, pantalla 320 × 568 | `test/features/passenger/route_search_screen_test.dart` |
+| La barra del inicio abre "Buscar ruta" | `test/features/passenger/passenger_home_screen_test.dart` |
+
+## 13. Rendimiento
+
+Medido contra `-dev` (Render): **cada petición tarda ~2,5–4 s en el
+servidor**; la conexión y el TLS solo ~0,07 s. Lo lento es el backend, así
+que la app pide lo menos posible y nunca en fila:
+
+- **Una conexión HTTP para toda la app** (`ApiClient._sharedHttp`): las
+  pantallas reutilizan la conexión TLS en vez de abrir una nueva cada vez.
+- **Caché del catálogo** (`OperationsService`, 10 min, en memoria y
+  compartida): rutas, recorridos, tarifas y horarios. Volver a una ruta o al
+  mapa es instantáneo; dos pantallas que piden lo mismo comparten la petición;
+  un error no se guarda. **Nunca** se cachean datos en vivo: viajes del
+  conductor, buses en curso, estado de un viaje.
+  `OperationsService.clearCache()` la vacía.
+- **En paralelo**: tarifa + recorridos + horarios (inicio del conductor y
+  ficha de la ruta) se piden a la vez.
+- **Carga previa**: el splash descarga el catálogo mientras verifica la
+  sesión; el mapa del pasajero abre con las rutas listas.
+- **Sin redibujar el mapa de más**: el widget del mapa se construye una vez
+  (inicio, "Rastreando tu bus", Recorrido); los contadores de cada segundo y
+  la ubicación no lo tocan. Arrastrar el panel del inicio solo mueve los
+  botones (`ValueNotifier`), no reconstruye la pantalla en cada cuadro.
+
+**Probar la fluidez en `--release` (o `--profile`)**, nunca en debug: en debug
+Flutter es varias veces más lento a propósito (JIT, comprobaciones) y el mapa
+nativo se nota trabado.

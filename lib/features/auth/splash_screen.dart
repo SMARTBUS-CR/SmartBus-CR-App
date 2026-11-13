@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme.dart';
+import '../operations/services/operations_service.dart';
 import 'role_home.dart';
 import 'services/auth_service.dart';
 
@@ -29,6 +30,11 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<void> _bootstrap() async {
     final startedAt = DateTime.now();
+
+    // While the session is checked (a few seconds), the public route
+    // catalogue downloads into the shared cache: the passenger's map opens
+    // with its routes ready. Best effort, never blocks the splash.
+    OperationsService().routesWithPatterns().ignore();
 
     String nextRoute;
     try {

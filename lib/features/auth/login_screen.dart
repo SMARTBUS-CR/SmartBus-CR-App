@@ -1,10 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/network/api_exception.dart';
 import '../../core/theme.dart';
 import '../../widgets/login_form.dart';
+import 'forgot_password_screen.dart';
 import 'role_home.dart';
 import 'services/auth_service.dart';
+import 'verify_email_screen.dart';
 
 /// Single login screen for SmartBus Global.
 ///
@@ -13,14 +17,47 @@ import 'services/auth_service.dart';
 /// authentication response; navigation to the matching interface happens after
 /// login, not here.
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.authService});
+
+  /// Injectable for tests; defaults to a real [AuthService].
+  final AuthService? authService;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final AuthService _authService = AuthService();
+  late final AuthService _authService = widget.authService ?? AuthService();
+
+  /// Email to prefill after a password reset. Changing it rebuilds the form
+  /// (its key) so the new value is shown.
+  String? _prefillEmail;
+
+  // ============================================================
+  // FORGOT PASSWORD
+  // ============================================================
+
+  /// Opens "Recuperar contraseña" with the email typed so far. When the
+  /// password was changed, shows the backend message and prefills the email
+  /// (the password field stays empty).
+  Future<void> _forgotPassword(BuildContext context, String email) async {
+    final result = await Navigator.pushNamed(
+      context,
+      '/forgot-password',
+      arguments: email,
+    );
+    if (result is! PasswordResetDone || !context.mounted) return;
+    setState(() => _prefillEmail = result.email);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(result.message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: SmartBusColors.completado,
+        ),
+      );
+  }
 
   // ============================================================
   // LOGIN
@@ -54,11 +91,54 @@ class _LoginScreenState extends State<LoginScreen> {
       Navigator.pushReplacementNamed(context, route);
     } on ApiException catch (e) {
       if (!context.mounted) return;
+      if (e.type == ApiErrorType.emailNotVerified) {
+        // Not awaited: the login request is over, so the button must stop
+        // its spinner while the dialog is open.
+        unawaited(_offerEmailVerification(context, email, e.message));
+        return;
+      }
       _showError(context, e.message);
     } catch (_) {
       if (!context.mounted) return;
       _showError(context, 'Ocurrió un error inesperado. Inténtalo nuevamente.');
     }
+  }
+
+  /// Right password but unverified email: offer to send a new code (the one
+  /// from sign-up may have expired) and continue on the verification screen.
+  Future<void> _offerEmailVerification(
+    BuildContext context,
+    String email,
+    String message,
+  ) async {
+    final verify = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(
+          Icons.mark_email_unread_outlined,
+          color: SmartBusColors.azulPrincipal,
+        ),
+        title: const Text('Verifica tu correo'),
+        content: Text('$message\n\nTe enviaremos un código nuevo a $email.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Ahora no'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Enviar código'),
+          ),
+        ],
+      ),
+    );
+
+    if (verify != true || !context.mounted) return;
+    Navigator.pushNamed(
+      context,
+      '/verify-email',
+      arguments: VerifyEmailArgs(email: email, resendOnOpen: true),
+    );
   }
 
   void _showError(BuildContext context, String message) {
@@ -93,8 +173,14 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: SingleChildScrollView(
                   physics: const BouncingScrollPhysics(),
                   child: LoginForm(
+                    key: ValueKey(_prefillEmail),
+                    initialEmail: _prefillEmail,
                     onLogin: (email, password) =>
                         _handleLogin(context, email, password),
+                    onForgotPassword: (email) =>
+                        _forgotPassword(context, email),
+                    onRegisterPassenger: () =>
+                        Navigator.pushNamed(context, '/register'),
                   ),
                 ),
               ),

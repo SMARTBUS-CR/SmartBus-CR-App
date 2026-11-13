@@ -1,6 +1,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Required to reach the SmartBus API Gateway (all build types). -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Driver GPS transmission during a trip (issue-4). -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Keep sending with the screen locked / app in background: geolocator
+         runs a foreground service with a persistent notification. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- Android 13+: show that notification ("SmartBus · recorrido activo").
+         Requested when the trip starts (MainActivity, smartbus/notifications). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="SmartBus"
         android:name="${applicationName}"

@@ -22,19 +22,34 @@ import 'api_exception.dart';
 /// client unchanged.
 class ApiClient {
   ApiClient({SecureSessionStore? sessionStore, http.Client? httpClient})
-      : _session = sessionStore ?? SecureSessionStore(),
-        _http = httpClient ?? http.Client();
+    : _session = sessionStore ?? SecureSessionStore(),
+      _http = httpClient ?? _sharedHttp,
+      _ownsHttp = httpClient != null;
+
+  /// One HTTP client for the whole app: its connections (TLS to the Gateway)
+  /// are kept alive and reused by every screen, instead of a new handshake
+  /// each time a screen creates its service.
+  static final http.Client _sharedHttp = http.Client();
 
   final SecureSessionStore _session;
   final http.Client _http;
+  final bool _ownsHttp;
 
   Future<Map<String, dynamic>> get(Uri url) => _send('GET', url);
 
-  Future<Map<String, dynamic>> post(Uri url, {Object? body}) =>
-      _send('POST', url, body: body);
+  /// [timeout] overrides [ApiConfig.requestTimeout] for this request (e.g.
+  /// GPS readings: a newer one comes in 5 s, waiting 60 s makes no sense).
+  Future<Map<String, dynamic>> post(
+    Uri url, {
+    Object? body,
+    Duration? timeout,
+  }) => _send('POST', url, body: body, timeout: timeout);
 
   Future<Map<String, dynamic>> put(Uri url, {Object? body}) =>
       _send('PUT', url, body: body);
+
+  Future<Map<String, dynamic>> patch(Uri url, {Object? body}) =>
+      _send('PATCH', url, body: body);
 
   Future<Map<String, dynamic>> delete(Uri url, {Object? body}) =>
       _send('DELETE', url, body: body);
@@ -43,15 +58,16 @@ class ApiClient {
     String method,
     Uri url, {
     Object? body,
+    Duration? timeout,
   }) async {
     final request = http.Request(method, url)
       ..headers.addAll(await _buildHeaders());
     if (body != null) request.body = jsonEncode(body);
 
     try {
-      final streamed =
-          await _http.send(request).timeout(ApiConfig.requestTimeout);
-      final response = await http.Response.fromStream(streamed);
+      final limit = timeout ?? ApiConfig.requestTimeout;
+      final streamed = await _http.send(request).timeout(limit);
+      final response = await http.Response.fromStream(streamed).timeout(limit);
       return _handle(response);
     } on TimeoutException {
       throw ApiException.timeout;
@@ -80,7 +96,23 @@ class ApiClient {
 
     if (status >= 200 && status < 300) return body;
 
-    throw ApiException.fromStatus(status, serverMessage: _messageFrom(body));
+    throw ApiException.fromStatus(
+      status,
+      serverMessage: _messageFrom(body),
+      fieldErrors: _fieldErrorsFrom(body),
+      errorCode: _errorCodeFrom(body),
+    );
+  }
+
+  /// `code` of the first JSON:API error (e.g. `email_not_verified`), if any.
+  String? _errorCodeFrom(Map<String, dynamic> body) {
+    final errors = body['errors'];
+    if (errors is! List) return null;
+    for (final error in errors.whereType<Map>()) {
+      final code = error['code'];
+      if (code is String && code.isNotEmpty) return code;
+    }
+    return null;
   }
 
   Map<String, dynamic> _decode(String raw) {
@@ -94,12 +126,24 @@ class ApiClient {
     }
   }
 
-  /// Extracts a safe message from an error body (Laravel or JSON:API format).
+  /// Extracts a safe message from an error body.
+  ///
+  /// Supported formats:
+  /// - JSON:API (Auth and GPS services): `{"errors": [{"detail": "..."}]}`
+  /// - Laravel (Gateway): `{"message": "..."}` or `{"errors": {"field": ["..."]}}`
   String? _messageFrom(Map<String, dynamic> body) {
+    final errors = body['errors'];
+
+    if (errors is List) {
+      for (final error in errors.whereType<Map>()) {
+        final detail = error['detail'];
+        if (detail is String && detail.isNotEmpty) return detail;
+      }
+    }
+
     final message = body['message'];
     if (message is String && message.isNotEmpty) return message;
 
-    final errors = body['errors'];
     if (errors is Map && errors.isNotEmpty) {
       final first = errors.values.first;
       if (first is List && first.isNotEmpty) return first.first.toString();
@@ -108,5 +152,39 @@ class ApiClient {
     return null;
   }
 
-  void close() => _http.close();
+  /// Extracts the validation errors of each field (422).
+  ///
+  /// - JSON:API: each error points to its field with
+  ///   `source.pointer = "/data/attributes/<field>"`.
+  /// - Laravel: `{"errors": {"<field>": ["message", …]}}`.
+  Map<String, List<String>> _fieldErrorsFrom(Map<String, dynamic> body) {
+    final errors = body['errors'];
+    final result = <String, List<String>>{};
+
+    if (errors is List) {
+      for (final error in errors.whereType<Map>()) {
+        final source = error['source'];
+        final pointer = source is Map ? source['pointer'] : null;
+        final detail = error['detail'];
+        if (pointer is! String || pointer.isEmpty || detail is! String) {
+          continue;
+        }
+        final field = pointer.split('/').last;
+        (result[field] ??= []).add(detail);
+      }
+    } else if (errors is Map) {
+      errors.forEach((field, messages) {
+        if (messages is List) {
+          result[field.toString()] = messages.map((m) => m.toString()).toList();
+        }
+      });
+    }
+
+    return result;
+  }
+
+  /// Closes an injected client; the shared one stays open for the others.
+  void close() {
+    if (_ownsHttp) _http.close();
+  }
 }

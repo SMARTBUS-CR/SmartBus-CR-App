@@ -1,0 +1,542 @@
+import 'package:flutter/material.dart';
+
+import '../core/network/api_exception.dart';
+import '../core/storage/secure_session_store.dart';
+import '../core/theme.dart';
+import '../features/auth/models/auth_user.dart';
+import '../features/auth/services/auth_service.dart';
+import 'delete_account_dialog.dart';
+import 'smartbus_header.dart';
+
+/// Read-only "Mi Cuenta" view shared by the passenger and driver flows.
+///
+/// The user stored at login is shown right away (never an empty screen) and
+/// then refreshed with `GET {gateway}/auth/user?include=roles`:
+/// - 401 → the local session is cleared and the user goes back to login.
+/// - No connection / timeout / 5xx → the stored data stays visible with a
+///   "Reintentar" action.
+///
+/// With [onEditProfile] / [onChangePassword] (passengers), "Editar perfil" and
+/// "Cambiar contraseña" entries are shown; editing happens on their own
+/// screens, never inline.
+///
+/// No field is editable. Other requests: `POST /auth/logout` from
+/// "Cerrar sesión" and, with [canDeleteAccount], `DELETE /auth/user` from
+/// "Eliminar cuenta" (after confirming with the current password). A deleted
+/// account goes to login and the back stack is removed.
+class ProfileDetails extends StatefulWidget {
+  const ProfileDetails({
+    super.key,
+    required this.color,
+    required this.role,
+    required this.homeRoute,
+    required this.bottomNavigationBar,
+    this.readOnlyNotice,
+    this.onEditProfile,
+    this.onChangePassword,
+    this.canDeleteAccount = false,
+    this.authService,
+    this.sessionStore,
+    this.onSignOut,
+  });
+
+  /// Called before going to login (logout, expired session, deleted account),
+  /// e.g. to stop the driver's GPS.
+  final VoidCallback? onSignOut;
+
+  /// Accent color of the flow (header, avatar, icons).
+  final Color color;
+
+  /// Role whose label is shown first (`passenger`, `driver`).
+  final String role;
+
+  /// Route opened by the back arrow.
+  final String homeRoute;
+
+  final Widget bottomNavigationBar;
+
+  /// Optional notice shown under the profile (e.g. who can change the data).
+  final String? readOnlyNotice;
+
+  /// Opens "Editar perfil" with the current user and completes when the user
+  /// comes back. When null (drivers), the entry is not shown.
+  final Future<void> Function(AuthUser user)? onEditProfile;
+
+  /// Opens "Cambiar contraseña". When null (drivers), the entry is not shown.
+  final Future<void> Function()? onChangePassword;
+
+  /// Shows "Eliminar cuenta". Only passengers can delete their own account
+  /// (the backend rejects any other role), so drivers leave it `false`.
+  final bool canDeleteAccount;
+
+  /// Injectable for tests; defaults to a real [AuthService].
+  final AuthService? authService;
+
+  /// Injectable for tests; defaults to a real [SecureSessionStore].
+  final SecureSessionStore? sessionStore;
+
+  @override
+  State<ProfileDetails> createState() => _ProfileDetailsState();
+}
+
+class _ProfileDetailsState extends State<ProfileDetails> {
+  static const _sessionExpiredMessage =
+      'Tu sesión expiró. Inicia sesión nuevamente.';
+
+  late final SecureSessionStore _session =
+      widget.sessionStore ?? SecureSessionStore();
+  late final AuthService _authService =
+      widget.authService ?? AuthService(sessionStore: _session);
+
+  AuthUser? _user;
+  bool _isLoading = true;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  // ============================================================
+  // DATA
+  // ============================================================
+
+  /// Shows the stored user first, then asks the backend for fresh data.
+  Future<void> _load() async {
+    final stored = await _session.readUser();
+    if (!mounted) return;
+    if (stored != null) {
+      setState(() => _user = AuthUser.fromStorage(stored));
+    }
+    await _refresh();
+  }
+
+  Future<void> _refresh() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final user = await _authService.fetchCurrentUser();
+      if (!mounted) return;
+      setState(() {
+        _user = user;
+        _isLoading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.type == ApiErrorType.unauthorized) {
+        await _onSessionExpired();
+        return;
+      }
+      setState(() {
+        _isLoading = false;
+        _errorMessage = e.message;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'No se pudo cargar tu perfil. Inténtalo nuevamente.';
+      });
+    }
+  }
+
+  Future<void> _onSessionExpired() async {
+    widget.onSignOut?.call();
+    // The token is already invalid: no need to call POST /auth/logout.
+    await _session.clear();
+    if (!mounted) return;
+    _showMessage(_sessionExpiredMessage, color: SmartBusColors.error);
+    Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+  }
+
+  Future<void> _logout() async {
+    widget.onSignOut?.call();
+    await _authService.logout();
+    if (!mounted) return;
+    Navigator.pushReplacementNamed(context, '/login');
+  }
+
+  Future<void> _openEditProfile(AuthUser user) async {
+    await widget.onEditProfile!(user);
+    // The edit screen stores the updated user: show it right away, without
+    // another request.
+    await _reloadStoredUser();
+  }
+
+  Future<void> _reloadStoredUser() async {
+    final stored = await _session.readUser();
+    if (!mounted || stored == null) return;
+    setState(() => _user = AuthUser.fromStorage(stored));
+  }
+
+  Future<void> _confirmDeleteAccount() async {
+    final outcome = await DeleteAccountDialog.show(
+      context,
+      (password) => _authService.deleteAccount(currentPassword: password),
+    );
+
+    // Tapping outside, back or "Cancelar" returns null: nothing happens.
+    if (outcome == null || !mounted) return;
+
+    final error = outcome.error;
+    if (error == null) {
+      widget.onSignOut?.call();
+      // The session is already cleared by AuthService.deleteAccount.
+      _showMessage(outcome.message!, color: SmartBusColors.success);
+      Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+      return;
+    }
+    if (error.type == ApiErrorType.unauthorized) {
+      await _onSessionExpired();
+      return;
+    }
+    _showMessage(
+      'Acción no permitida: esta cuenta no se puede eliminar.',
+      color: SmartBusColors.error,
+    );
+  }
+
+  void _showMessage(String message, {Color? color}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: color,
+      ),
+    );
+  }
+
+  // ============================================================
+  // BUILD
+  // ============================================================
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: SmartBusColors.blanco,
+      bottomNavigationBar: widget.bottomNavigationBar,
+      body: Column(
+        children: [
+          SmartBusHeader(
+            title: 'Mi Cuenta',
+            type: widget.role == 'driver'
+                ? SmartBusUserType.driver
+                : SmartBusUserType.passenger,
+            onBack: () =>
+                Navigator.pushReplacementNamed(context, widget.homeRoute),
+          ),
+          // Refreshing over the stored data: thin bar instead of hiding the
+          // profile behind a spinner.
+          SizedBox(
+            height: 3,
+            child: _isLoading && _user != null
+                ? LinearProgressIndicator(
+                    key: const Key('profile_refreshing'),
+                    minHeight: 3,
+                    color: widget.color,
+                    backgroundColor: Colors.transparent,
+                  )
+                : null,
+          ),
+          Expanded(child: _buildContent()),
+          if (widget.canDeleteAccount) _buildDeleteAccountButton(),
+          _buildLogoutButton(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    final user = _user;
+
+    // Nothing stored (should not happen after login): spinner or error only.
+    if (user == null) {
+      if (_isLoading) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      return Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: _buildErrorNotice(
+            _errorMessage ?? 'No se pudo cargar tu perfil.',
+          ),
+        ),
+      );
+    }
+
+    final roleLabel = _roleLabelOf(user);
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+      children: [
+        Center(child: _buildAvatar(user)),
+        const SizedBox(height: 16),
+        Text(
+          user.name,
+          key: const Key('profile_name'),
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: SmartBusColors.grisOscuro,
+          ),
+        ),
+        if (roleLabel.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Center(child: _buildRoleChip(roleLabel)),
+        ],
+        if (_errorMessage != null) ...[
+          const SizedBox(height: 20),
+          _buildErrorNotice(_errorMessage!),
+        ],
+        const SizedBox(height: 24),
+        _buildInfoTile(
+          icon: Icons.email_outlined,
+          label: 'Correo electrónico',
+          child: Text(
+            user.email,
+            key: const Key('profile_email'),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 15),
+          ),
+        ),
+        if (widget.onEditProfile != null)
+          _buildActionTile(
+            key: const Key('profile_edit'),
+            icon: Icons.edit_outlined,
+            label: 'Editar perfil',
+            onTap: () => _openEditProfile(user),
+          ),
+        if (widget.onChangePassword != null)
+          _buildActionTile(
+            key: const Key('profile_change_password'),
+            icon: Icons.lock_outline,
+            label: 'Cambiar contraseña',
+            onTap: widget.onChangePassword!,
+          ),
+        if (widget.readOnlyNotice != null) ...[
+          const SizedBox(height: 4),
+          _buildReadOnlyNotice(widget.readOnlyNotice!),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildAvatar(AuthUser user) {
+    final initials = _initialsOf(user);
+    return CircleAvatar(
+      key: const Key('profile_avatar'),
+      radius: 40,
+      backgroundColor: widget.color,
+      foregroundColor: SmartBusColors.blanco,
+      child: initials.isEmpty
+          ? const Icon(Icons.person, size: 40)
+          : Text(
+              initials,
+              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+            ),
+    );
+  }
+
+  Widget _buildRoleChip(String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      decoration: BoxDecoration(
+        color: widget.color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        label,
+        key: const Key('profile_role'),
+        style: TextStyle(color: widget.color, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
+  Widget _buildInfoTile({
+    required IconData icon,
+    required String label,
+    required Widget child,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: SmartBusColors.grisClaro,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: widget.color),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+                const SizedBox(height: 2),
+                child,
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Tappable row with a chevron, same look as the info tiles.
+  Widget _buildActionTile({
+    required Key key,
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: SmartBusColors.grisClaro,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          key: key,
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            child: Row(
+              children: [
+                Icon(icon, color: widget.color),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: Colors.grey.shade500),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReadOnlyNotice(String message) {
+    return Row(
+      key: const Key('profile_read_only_notice'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.info_outline, size: 18, color: Colors.grey.shade600),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            message,
+            style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildErrorNotice(String message) {
+    return Container(
+      key: const Key('profile_error'),
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: SmartBusColors.advertencia.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.wifi_off, color: SmartBusColors.advertencia),
+          const SizedBox(width: 10),
+          Expanded(child: Text(message)),
+          TextButton(
+            key: const Key('profile_retry'),
+            onPressed: _isLoading ? null : _refresh,
+            child: const Text('Reintentar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Secondary, red-text action: clearly different from "Cerrar sesión".
+  Widget _buildDeleteAccountButton() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+      child: TextButton.icon(
+        key: const Key('profile_delete_account'),
+        style: TextButton.styleFrom(
+          foregroundColor: SmartBusColors.error,
+          minimumSize: const Size(double.infinity, 44),
+        ),
+        icon: const Icon(Icons.delete_outline),
+        label: const Text('Eliminar cuenta'),
+        onPressed: _confirmDeleteAccount,
+      ),
+    );
+  }
+
+  Widget _buildLogoutButton() {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: ElevatedButton.icon(
+        key: const Key('profile_logout'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.redAccent,
+          minimumSize: const Size(double.infinity, 48),
+        ),
+        icon: const Icon(Icons.logout),
+        label: const Text('Cerrar sesión'),
+        onPressed: _logout,
+      ),
+    );
+  }
+
+  // ============================================================
+  // HELPERS
+  // ============================================================
+
+  /// "Ana María Pérez" → "AP"; a single word → its first letter.
+  /// Falls back to the email's first letter, or empty (person icon).
+  static String _initialsOf(AuthUser user) {
+    final words = user.name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((word) => word.isNotEmpty)
+        .toList();
+
+    if (words.isEmpty) {
+      final email = user.email.trim();
+      return email.isEmpty ? '' : email.characters.first.toUpperCase();
+    }
+
+    final first = words.first.characters.first;
+    final last = words.length > 1 ? words.last.characters.first : '';
+    return '$first$last'.toUpperCase();
+  }
+
+  /// Label of [ProfileDetails.role] ("Pasajero", "Conductor"), or of the
+  /// first role.
+  String _roleLabelOf(AuthUser user) {
+    final role =
+        user.roles.where((r) => r.value == widget.role).firstOrNull ??
+        user.primaryRole;
+    if (role == null) return '';
+    return role.label.isNotEmpty ? role.label : role.value;
+  }
+}

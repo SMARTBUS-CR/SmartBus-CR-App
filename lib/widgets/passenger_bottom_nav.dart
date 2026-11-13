@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+
 import '../core/theme.dart';
 
 /// Global bottom navigation bar for the Passenger flow.
 ///
-/// 3 tabs: Home, My trips, Account. It does not handle navigation itself: the
+/// 3 tabs: Inicio, Favoritos (`/passenger/favorites`), Cuenta. It does not
+/// handle navigation itself: the
 /// screen using it decides what to do in [onTap] (switch tab, navigate to
 /// another route, etc.).
 class PassengerBottomNav extends StatelessWidget {
@@ -34,24 +36,25 @@ class PassengerBottomNav extends StatelessWidget {
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        indicatorColor: SmartBusColors.verdeMenta.withValues(alpha: 0.12),
+        indicatorColor: SmartBusColors.verdePasajero.withValues(alpha: 0.12),
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home, color: SmartBusColors.verdeMenta),
+            selectedIcon: Icon(Icons.home, color: SmartBusColors.verdePasajero),
             label: 'Inicio',
           ),
           NavigationDestination(
-            icon: Icon(Icons.confirmation_number_outlined),
-            selectedIcon: Icon(Icons.confirmation_number,
-                color: SmartBusColors.verdeMenta),
-            label: 'Mis viajes',
+            icon: Icon(Icons.star_border),
+            selectedIcon: Icon(Icons.star, color: SmartBusColors.verdePasajero),
+            label: 'Favoritos',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),
-            selectedIcon:
-                Icon(Icons.person, color: SmartBusColors.verdeMenta),
+            selectedIcon: Icon(
+              Icons.person,
+              color: SmartBusColors.verdePasajero,
+            ),
             label: 'Cuenta',
           ),
         ],

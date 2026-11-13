@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+
 import '../core/theme.dart';
+import 'slow_request_hint.dart';
 
 /// SmartBus Global login form.
 ///
@@ -19,7 +21,9 @@ class LoginForm extends StatefulWidget {
 
   /// Called with (email, password) already validated as non-empty.
   final Future<void> Function(String email, String password) onLogin;
-  final VoidCallback? onForgotPassword;
+
+  /// "¿Olvidaste tu contraseña?", with the email typed so far (trimmed).
+  final ValueChanged<String>? onForgotPassword;
   final VoidCallback? onRegisterPassenger;
 
   /// Pre-fill the fields (e.g. test credentials). Can be edited or cleared
@@ -32,10 +36,10 @@ class LoginForm extends StatefulWidget {
 }
 
 class _LoginFormState extends State<LoginForm> {
-  late final emailController =
-      TextEditingController(text: widget.initialEmail);
-  late final passwordController =
-      TextEditingController(text: widget.initialPassword);
+  late final emailController = TextEditingController(text: widget.initialEmail);
+  late final passwordController = TextEditingController(
+    text: widget.initialPassword,
+  );
 
   bool obscurePassword = true;
   bool rememberMe = false;
@@ -48,26 +52,37 @@ class _LoginFormState extends State<LoginForm> {
     super.dispose();
   }
 
+  final _formKey = GlobalKey<FormState>();
+
   // Basic email shape: something@something.domain (no spaces).
   static final _emailRegExp = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
+  String? _validateEmail(String? value) {
+    final email = (value ?? '').trim();
+    if (email.isEmpty) return 'Ingresa tu correo electrónico';
+    if (!_emailRegExp.hasMatch(email)) {
+      return 'Ingresa un correo electrónico válido';
+    }
+    return null;
+  }
+
+  /// Only "not empty": password strength is NOT checked at login, because
+  /// existing accounts may have older passwords that do not meet the
+  /// sign-up rules. Wrong passwords are reported by the backend.
+  String? _validatePassword(String? value) {
+    if ((value ?? '').isEmpty) return 'Ingresa tu contraseña';
+    return null;
+  }
 
   Future<void> _submit() async {
     // Prevent firing two requests at once.
     if (isLoading) return;
 
     FocusScope.of(context).unfocus();
+    if (!_formKey.currentState!.validate()) return;
 
     final email = emailController.text.trim();
     final password = passwordController.text;
-
-    if (email.isEmpty || password.isEmpty) {
-      _showMessage('Completa todos los campos');
-      return;
-    }
-    if (!_emailRegExp.hasMatch(email)) {
-      _showMessage('Ingresa un correo electrónico válido');
-      return;
-    }
 
     setState(() => isLoading = true);
     try {
@@ -75,6 +90,15 @@ class _LoginFormState extends State<LoginForm> {
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
+  }
+
+  void _forgotPassword() {
+    final onForgot = widget.onForgotPassword;
+    if (onForgot == null) {
+      _showMessage('Recuperación de contraseña');
+      return;
+    }
+    onForgot(emailController.text.trim());
   }
 
   void _showMessage(String message) {
@@ -92,126 +116,159 @@ class _LoginFormState extends State<LoginForm> {
 
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.fromLTRB(25 * scale, 25 * scale, 25 * scale, 27 * scale),
+      padding: EdgeInsets.fromLTRB(
+        25 * scale,
+        25 * scale,
+        25 * scale,
+        27 * scale,
+      ),
       decoration: const BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      child: Column(
-        children: [
-          // Email
-          TextField(
-            controller: emailController,
-            keyboardType: TextInputType.emailAddress,
-            decoration: _inputDecoration(
-              icon: Icons.person_outline,
-              hint: 'Correo electrónico',
-              scale: scale,
-            ),
-          ),
-
-          SizedBox(height: 20 * scale),
-
-          // Password
-          TextField(
-            controller: passwordController,
-            obscureText: obscurePassword,
-            decoration: _inputDecoration(
-              icon: Icons.lock_outline,
-              hint: 'Contraseña',
-              scale: scale,
-              suffixIcon: IconButton(
-                onPressed: () {
-                  setState(() => obscurePassword = !obscurePassword);
-                },
-                icon: Icon(
-                  obscurePassword
-                      ? Icons.visibility_outlined
-                      : Icons.visibility_off_outlined,
-                  color: Colors.grey.shade600,
-                  size: 20 * scale,
-                ),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          children: [
+            // Email
+            TextFormField(
+              // Real-time: validates this field as soon as the user types in it.
+              autovalidateMode: AutovalidateMode.onUserInteraction,
+              key: const Key('login_email'),
+              controller: emailController,
+              enabled: !isLoading,
+              keyboardType: TextInputType.emailAddress,
+              textInputAction: TextInputAction.next,
+              autocorrect: false,
+              autofillHints: const [AutofillHints.email],
+              validator: _validateEmail,
+              decoration: _inputDecoration(
+                icon: Icons.person_outline,
+                hint: 'Correo electrónico',
+                scale: scale,
               ),
             ),
-          ),
 
-          SizedBox(height: 15 * scale),
+            SizedBox(height: 20 * scale),
 
-          // Remember me
-          Row(
-            children: [
-              SizedBox(
-                width: 20 * scale,
-                height: 20 * scale,
-                child: Checkbox(
-                  value: rememberMe,
-                  activeColor: SmartBusColors.azulPrincipal,
-                  onChanged: (value) {
-                    setState(() => rememberMe = value ?? false);
+            // Password
+            TextFormField(
+              // Real-time: validates this field as soon as the user types in it.
+              autovalidateMode: AutovalidateMode.onUserInteraction,
+              key: const Key('login_password'),
+              controller: passwordController,
+              enabled: !isLoading,
+              obscureText: obscurePassword,
+              textInputAction: TextInputAction.done,
+              autofillHints: const [AutofillHints.password],
+              validator: _validatePassword,
+              onFieldSubmitted: (_) => _submit(),
+              decoration: _inputDecoration(
+                icon: Icons.lock_outline,
+                hint: 'Contraseña',
+                scale: scale,
+                suffixIcon: IconButton(
+                  onPressed: () {
+                    setState(() => obscurePassword = !obscurePassword);
                   },
-                ),
-              ),
-
-              SizedBox(width: 5 * scale),
-
-              Text(
-                'Recordarme',
-                style: TextStyle(
-                  color: SmartBusColors.azulCorporativo,
-                  fontSize: 12 * scale,
-                ),
-              ),
-
-              const Spacer(),
-
-              GestureDetector(
-                onTap: widget.onForgotPassword ??
-                    () => _showMessage('Recuperación de contraseña'),
-                child: Text(
-                  '¿Olvidaste tu contraseña?',
-                  style: TextStyle(
-                    color: SmartBusColors.azulPrincipal,
-                    fontSize: 12 * scale,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          SizedBox(height: 28 * scale),
-
-          // Button
-          _buildLoginButton(scale),
-
-          SizedBox(height: 18 * scale),
-
-          // Sign up
-          Center(
-            child: GestureDetector(
-              onTap: widget.onRegisterPassenger ??
-                  () => _showMessage('Registro de pasajero'),
-              child: RichText(
-                text: TextSpan(
-                  style: TextStyle(
-                    fontSize: 13 * scale,
+                  icon: Icon(
+                    obscurePassword
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
                     color: Colors.grey.shade600,
+                    size: 20 * scale,
                   ),
-                  children: [
-                    const TextSpan(text: '¿No tienes cuenta? '),
-                    TextSpan(
-                      text: 'Regístrate como pasajero',
-                      style: TextStyle(
-                        color: SmartBusColors.azulPrincipal,
-                        fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+
+            SizedBox(height: 15 * scale),
+
+            // Remember me
+            Row(
+              children: [
+                SizedBox(
+                  width: 20 * scale,
+                  height: 20 * scale,
+                  child: Checkbox(
+                    value: rememberMe,
+                    activeColor: SmartBusColors.azulPrincipal,
+                    onChanged: (value) {
+                      setState(() => rememberMe = value ?? false);
+                    },
+                  ),
+                ),
+
+                SizedBox(width: 5 * scale),
+
+                Text(
+                  'Recordarme',
+                  style: TextStyle(
+                    color: SmartBusColors.azulCorporativo,
+                    fontSize: 12 * scale,
+                  ),
+                ),
+
+                SizedBox(width: 12 * scale),
+
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: GestureDetector(
+                      key: const Key('login_forgot_password'),
+                      onTap: isLoading ? null : _forgotPassword,
+                      child: Text(
+                        '¿Olvidaste tu contraseña?',
+                        textAlign: TextAlign.end,
+                        style: TextStyle(
+                          color: SmartBusColors.azulPrincipal,
+                          fontSize: 12 * scale,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
-                  ],
+                  ),
+                ),
+              ],
+            ),
+
+            SizedBox(height: 28 * scale),
+
+            // Button
+            _buildLoginButton(scale),
+
+            if (isLoading) const SlowRequestHint(),
+
+            SizedBox(height: 18 * scale),
+
+            // Sign up
+            Center(
+              child: GestureDetector(
+                onTap:
+                    widget.onRegisterPassenger ??
+                    () => _showMessage('Registro de pasajero'),
+                child: RichText(
+                  text: TextSpan(
+                    style: TextStyle(
+                      fontSize: 13 * scale,
+                      color: Colors.grey.shade600,
+                    ),
+                    children: [
+                      const TextSpan(text: '¿No tienes cuenta? '),
+                      TextSpan(
+                        text: 'Regístrate como pasajero',
+                        style: TextStyle(
+                          color: SmartBusColors.azulPrincipal,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

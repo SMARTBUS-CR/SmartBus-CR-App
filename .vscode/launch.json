@@ -1,0 +1,59 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "SmartBus (dev - Render)",
+      "request": "launch",
+      "type": "dart"
+    },
+    {
+      "name": "SmartBus (all through local Gateway :8001 via adb reverse)",
+      "request": "launch",
+      "type": "dart",
+      "toolArgs": [
+        "--dart-define=API_GATEWAY_URL=http://localhost:8001/api",
+        "--dart-define=GPS_INTERVAL_SECONDS=20"
+      ]
+    },
+    {
+      "name": "SmartBus (auth Render + GPS local via adb reverse)",
+      "request": "launch",
+      "type": "dart",
+      "toolArgs": [
+        "--dart-define=GPS_GATEWAY_URL=http://localhost:8001/api"
+      ]
+    },
+    {
+      "name": "SmartBus (auth Render + GPS local via LAN IP)",
+      "request": "launch",
+      "type": "dart",
+      "toolArgs": [
+        "--dart-define=GPS_GATEWAY_URL=http://192.168.100.128:8001/api"
+      ]
+    },
+    {
+      "name": "SmartBus (local - Android emulator)",
+      "request": "launch",
+      "type": "dart",
+      "toolArgs": [
+        "--dart-define=API_GATEWAY_URL=http://10.0.2.2:8000/api"
+      ]
+    },
+    {
+      "name": "SmartBus (local - iOS simulator)",
+      "request": "launch",
+      "type": "dart",
+      "toolArgs": [
+        "--dart-define=API_GATEWAY_URL=http://localhost:8000/api"
+      ]
+    },
+    {
+      "name": "SmartBus (local - physical device)",
+      "request": "launch",
+      "type": "dart",
+      "toolArgs": [
+        "--dart-define=API_GATEWAY_URL=http://192.168.1.100:8000/api"
+      ]
+    }
+  ]
+}

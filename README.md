@@ -1,7 +1,9 @@
 # SmartBus – App  (Flutter)
 
-App móvil de SmartBus. Cubre login (contra el API Gateway) y el
-envío de la ubicación GPS del autobús durante un recorrido (issue-4).
+App móvil de SmartBus. Cubre login (contra el API Gateway), el
+envío de la ubicación GPS del autobús durante un recorrido (issue-4) y el
+seguimiento del bus en vivo para el pasajero (ver
+[`lib/README.md` §7](lib/README.md#7-seguimiento-del-bus-en-vivo-pasajero)).
 
 - **Paquete:** `smartbus_drivers` · applicationId `com.example.smartbus_drivers`
 - **Plataformas:** Android (principal) e iOS
@@ -20,12 +22,8 @@ envío de la ubicación GPS del autobús durante un recorrido (issue-4).
 | **Flutter SDK** | stable reciente (probado con **3.47**, Dart **3.13+**) | Incluye Dart. `pubspec.yaml` pide `sdk: ^3.13.1` |
 | **JDK** | **17** (Temurin/OpenJDK) | El build de Android usa Java 17 (`build.gradle.kts`) |
 | **Android SDK** | ver abajo | Se puede instalar con Android Studio o solo con `cmdline-tools` |
-descarga android-34,android-35,android-36,android-36.1
 | **VS Code** o **Android Studio** | — | Editor + debugger. VS Code: extensiones *Flutter* y *Dart* |
 
-instalar cmake;3.22.1 si no lo tiene
-
-Para actualizar: flutter pub get
 ### 1.1 Flutter
 
 1. Descarga Flutter stable de <https://docs.flutter.dev/get-started/install> y
@@ -137,6 +135,11 @@ Por defecto la app apunta a `https://smartbus-api-gateway-dev.onrender.com/api`
 | `GPS_GATEWAY_URL` | = `API_GATEWAY_URL` | Base **solo** para los endpoints de GPS/recorrido |
 | `GPS_INTERVAL_SECONDS` | `5` | Cada cuántos segundos se envía la posición |
 | `API_LANGUAGE` | `es` | Header `Accept-Language` (`en` \| `es`) |
+| `OPS_GATEWAY_URL` | = `API_GATEWAY_URL` | Base **solo** para los endpoints del Dashboard (`ops/*`: viajes del conductor, rutas, buses en curso) |
+| `REVERB_APP_KEY` | la de **-dev en Render** (`ApiConfig._devReverbAppKey`) | Key de Reverb del servicio GPS (**no es secreta**). Con Reverb local, pasa la del `.env` local. Vacío = sin tiempo real: el pasajero ve el bus consultando cada 15 s |
+| `REVERB_HOST` | host de `GPS_GATEWAY_URL` | Host del WebSocket. En Render no hace falta: el nginx del Gateway reenvía `/app/*` a Reverb |
+| `REVERB_PORT` | puerto de `GPS_GATEWAY_URL` (443 / 80) | Puerto del WebSocket (`8080` con Reverb local) |
+| `REVERB_SCHEME` | `wss` si la URL es https, si no `ws` | `ws` con Reverb local |
 
 Ejemplo:
 ```powershell
@@ -220,18 +223,6 @@ php artisan serve --port=8001
 
 > Se borra al desconectar el USB — vuelve a correrlo si reconectas.
 
-> **Síntoma de que falta este paso:** la app corre sin errores visibles, el
-> foreground service de ubicación arranca normal, pero el GPS nunca llega al
-> backend y `pendingCount` solo crece. Esto pasa porque sin `adb reverse`,
-> `localhost:8001` en el teléfono apunta al propio teléfono (no a tu PC) — la
-> petición falla por conexión rechazada, y como ese error se trata como
-> reintentable (`TripLocationSender._isRetryable`), se reintenta en silencio en
-> vez de mostrar un error. Verifica con:
-> ```powershell
-> & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" reverse --list
-> ```
-> Si no aparece `tcp:8001 tcp:8001`, vuelve a correr el comando de arriba.
-
 ### 5.4 Correr la app apuntando GPS al Gateway local
 
 ```powershell
@@ -248,6 +239,53 @@ El emulador ve la PC como `10.0.2.2`:
 flutter run -d emulator-5554 --dart-define=GPS_GATEWAY_URL=http://10.0.2.2:8001/api
 ```
 
+### 5.6 Requisitos del viaje de prueba
+
+Ya no hay `DEMO_TRIP_ID`: los viajes salen del **Dashboard** (`ops/*` por el
+Gateway). Mientras el proxy `ops` no esté desplegado en Render, levanta también
+el Dashboard y un Gateway local con la rama del proxy `ops`
+(`OPERATIONS_SERVICE_URL` en su `.env` apuntando al Dashboard, p. ej.
+`http://localhost:8003`) y pasa `--dart-define=OPS_GATEWAY_URL=http://localhost:8001/api`.
+
+- El conductor necesita un viaje **asignado a él para hoy** (`scheduled` o
+  `in_progress`). Aparece en **Inicio**; **Iniciar recorrido** lo pone
+  `in_progress` en el Dashboard y empieza a enviar el GPS.
+- El usuario logueado debe ser el **conductor asignado** (si no: 403).
+- El pasajero solo ve buses de viajes **`in_progress`**.
+
+### 5.7 Probar el seguimiento en vivo del pasajero (tiempo real)
+
+Hacen falta **dos dispositivos** (o teléfono + emulador): uno con la cuenta del
+conductor enviando GPS (**Inicio → Iniciar recorrido**) y otro con una cuenta
+de pasajero (**Inicio → chip "Buses en curso"** → ruta → **Ver en vivo**).
+
+1. En el `.env` del GPS: `BROADCAST_CONNECTION=reverb` y las `REVERB_*`.
+2. Levanta Reverb además de los dos `php artisan serve`:
+   ```powershell
+   # Terminal 3 — WebSocket (Reverb) del servicio GPS
+   cd "smartbus-gps-tracking"
+   php artisan reverb:start --host=0.0.0.0 --port=8080
+   ```
+3. Con el teléfono por USB, reenvía también el puerto de Reverb:
+   ```powershell
+   & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" reverse tcp:8080 tcp:8080
+   ```
+4. Corre la app del pasajero conectada directo a Reverb (en local no hay nginx
+   delante del Gateway):
+   ```powershell
+   flutter run -d <id> `
+     --dart-define=GPS_GATEWAY_URL=http://localhost:8001/api `
+     --dart-define=OPS_GATEWAY_URL=http://localhost:8001/api `
+     --dart-define=REVERB_APP_KEY=<REVERB_APP_KEY-del-.env-del-GPS> `
+     --dart-define=REVERB_HOST=localhost `
+     --dart-define=REVERB_PORT=8080 `
+     --dart-define=REVERB_SCHEME=ws
+   ```
+
+Sin `REVERB_APP_KEY` también funciona, pero sin tiempo real: el bus se
+actualiza cada 15 s. Contra Render no hace falta pasarla: la key de -dev ya es
+el valor por defecto en `ApiConfig`.
+
 ---
 
 ## 6. Solución de problemas
@@ -261,6 +299,12 @@ flutter run -d emulator-5554 --dart-define=GPS_GATEWAY_URL=http://10.0.2.2:8001/
 | Pantalla Recorrido: *"No se encontró el recurso solicitado"* (404) | El GPS va al Gateway equivocado (uno sin `/gps`). Pasa `--dart-define=GPS_GATEWAY_URL=` al Gateway local. |
 | Pantalla Recorrido: *"Sin conexión estable"* y "Pendientes" sube | El Gateway local no responde o tarda demasiado. Revisa `GPS_SERVICE_URL` en su `.env` (debe ser `:8000`), que ambos `php artisan serve` estén arriba, y `adb reverse`. |
 | HTTP local no conecta en release | Los builds release son HTTPS-only por diseño; usa `--debug`. |
+| Inicio del conductor: *"No tienes viajes asignados hoy"* | No hay viaje de hoy para ese conductor en el Dashboard, o `OPS_GATEWAY_URL` apunta a un Gateway sin el proxy `ops`. |
+| Recorrido: no se pudo iniciar el viaje (409) | El Dashboard no permite iniciarlo (por ejemplo, todavía no es la hora o ya terminó). |
+| Recorrido: *"El viaje no está en curso…"* y deja de enviar | El viaje dejó de estar `in_progress` (lo terminaron o cancelaron en el Dashboard). |
+| Recorrido: *"No eres el conductor asignado a este viaje"* | Iniciaste sesión con un conductor que no es el del viaje (403). |
+| Rastreando tu bus: sale *"Conectando en tiempo real…"* todo el tiempo | No llega al WebSocket: revisa `REVERB_APP_KEY`, que `reverb:start` esté corriendo, `REVERB_HOST/PORT/SCHEME` y el `adb reverse tcp:8080`. Mientras tanto el bus igual se actualiza cada 15 s. |
+| Buses en curso: *"No hay buses en curso en este recorrido"* con el conductor enviando | El conductor está en otro recorrido (sentido) de la ruta, o su viaje no está `in_progress`. |
 
 ---
 
@@ -271,16 +315,16 @@ lib/
 ├─ core/
 │  ├─ config/api_config.dart      # URLs del Gateway + dart-defines
 │  ├─ network/                    # ApiClient (token Bearer, ApiException)
+│  ├─ realtime/                   # PusherConnection: WebSocket con Reverb (protocolo Pusher)
 │  └─ storage/                    # token/usuario en flutter_secure_storage
 ├─ features/
 │  ├─ auth/                       # login, splash, sesión, roles
 │  ├─ driver/                     # Inicio, Mis rutas, Recorrido, Mi cuenta
-│  ├─ passenger/                  # flujo del pasajero (placeholders)
-│  └─ trip_tracking/              # issue-4: GpsFix, TripLocationSender, GpsLocationService
+│  ├─ passenger/                  # mapa del inicio, Rastreando tu bus, Mi cuenta
+│  └─ trip_tracking/              # GPS del conductor (TripLocationSender) y
+│                                 # seguimiento del pasajero (LiveTripTracker, ReverbTripFeed)
 └─ widgets/                       # nav bars, botones, placeholders
 ```
 
 Ver [`lib/README.md`](lib/README.md) para el detalle de qué pantalla cubre cada
 requerimiento (RF) y qué está conectado vs. placeholder.
-
-# smartbus-drivers
