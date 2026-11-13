@@ -28,7 +28,7 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 | `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register` → `/verify-email` (sin sesión hasta verificar el correo) |
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal), RF-09 (búsqueda) |
 | `passenger/route_search_screen.dart` | RF-09 |
-| `passenger/favorite_routes_screen.dart` | "Mis favoritos" (`/passenger/favorites`, chip "Favoritos" del inicio): rutas guardadas; quitar una (estrella o deslizar), varias ("Editar" → "Eliminar (N)") o todas, con confirmación y "Deshacer" (sección 11) |
+| `passenger/favorite_routes_screen.dart` | "Mis favoritos" (`/passenger/favorites`, pestaña **Favoritos** de la barra inferior): rutas guardadas; quitar una (estrella o deslizar), varias ("Editar" → "Eliminar (N)") o todas, con confirmación y "Deshacer" (sección 11) |
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal); la barra "¿A dónde vas?" abre la búsqueda |
 | `passenger/route_search_screen.dart` | RF-09: "Buscar ruta" por nombre, número o destino (sección 12) |
 | `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar". Entradas "Editar perfil" y "Cambiar contraseña". Botón "Eliminar cuenta" con confirmación (solo UI: aún no llama al backend) |
@@ -838,10 +838,30 @@ quedan igual.
   declara, porque sin `glyphs` MapLibre no dibuja texto.
 - Al cambiar calles ↔ satélite se vuelve a dibujar la ruta elegida.
 
+### Paradas cercanas
+
+El chip **"Paradas cercanas"** del inicio muestra las paradas a menos de
+`NearbyRoutesFilter.radiusMeters` (1 km) del pasajero, de la más cercana a la
+más lejana (máx. 20), **en el mapa** (puntos turquesa,
+`PassengerMapHandle.showNearbyStops`) y **en la hoja** (`NearbyStopsPanel`):
+nombre, distancia y las rutas que paran ahí ("PV-RF · Río Frío").
+
+- Se calculan en el teléfono (`nearbyStops`, `services/nearby_stops.dart`) con
+  el catálogo que el mapa ya cargó (`routesWithPatterns`): **sin otra
+  petición**. Una parada de varias rutas (o de los dos sentidos) aparece **una
+  vez**, con todas. Se recalculan si el pasajero se mueve.
+- Tocar una parada (lista o punto del mapa) la centra y la marca; tocar una de
+  sus rutas dibuja ese sentido con la parada resaltada.
+- "X" o el botón atrás de Android vuelven a la lista de rutas.
+- Sin ubicación: un aviso ofrece activarla (las paradas dependen de dónde
+  está el pasajero). Sin paradas cerca: lo dice.
+
 ### Tests
 
 | Qué | Archivo |
 |---|---|
+| Paradas cercanas: radio, orden, una vez por parada con todas sus rutas, límite, sin coordenadas | `test/features/operations/nearby_stops_test.dart` |
+| Paradas cercanas en el inicio: mapa + hoja, parada compartida, tocar parada / punto, abrir una ruta, cerrar y atrás, nada cerca, sin ubicación | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Paradas cercanas*) |
 | Filtro: dentro, fuera, justo en el radio, orden, lista vacía, varios sentidos, paradas sin coordenadas | `test/features/operations/nearby_routes_filter_test.dart` |
 | `include=patterns`: enlace por relación y por `route_id`, con y sin trazo, `directionLabel` | `test/features/operations/operations_service_test.dart` |
 | GeoJSON dibujado: línea real / aproximada, ids, números y tipo de parada (salida, intermedia, llegada), parada resaltada | `test/features/passenger/route_features_test.dart` |
@@ -853,8 +873,11 @@ quedan igual.
 
 El pasajero guarda rutas con una **estrella** y las ve en **"Mis favoritos"**
 (`features/passenger/favorite_routes_screen.dart`, ruta `/passenger/favorites`),
-que se abre desde el chip **"Favoritos"** del inicio. Solo existe en el flujo
-del pasajero: el conductor no ve el chip ni la estrella.
+la pestaña **Favoritos** de la barra inferior (Inicio · Favoritos · Cuenta; la
+pestaña "Mis viajes", que era un placeholder, se reemplazó por esta). Como
+pestaña no tiene "atrás": **"Ver ruta"** abre el inicio
+(`/passenger/home` con un `RouteSelection`), que dibuja esa ruta. Solo existe
+en el flujo del pasajero: el conductor no ve la pestaña ni la estrella.
 
 Los favoritos se guardan en el **Dashboard** (siguen a la cuenta en cualquier
 teléfono). Todas las llamadas llevan el token y **nunca** un id de usuario: el
@@ -961,7 +984,8 @@ Si el Dashboard agrega un borrado múltiple (p. ej. `DELETE ops/favorites` con
 |---|---|
 | URLs, token sin id de usuario, lectura del `included`, orden, 409 / 404 como éxito, errores | `test/features/passenger/favorites_service_test.dart` |
 | Lista, vacío, carga, 5xx + reintentar, 401, quitar con estrella / deslizar + Deshacer, fallo que revierte, sin duplicados, 320 × 568, otra sesión | `test/features/passenger/favorite_routes_screen_test.dart` |
-| El chip "Favoritos" abre "Mis favoritos" | `test/features/passenger/passenger_home_screen_test.dart` |
+| La pestaña "Favoritos" abre "Mis favoritos" | `test/features/passenger/passenger_home_screen_test.dart` |
+| Como pestaña: barra inferior con "Favoritos" seleccionado; "Ver ruta" abre el inicio con la ruta | `test/features/passenger/favorite_routes_screen_test.dart` (grupo *"Favoritos" tab*) |
 | Eliminar varias / todas (AC1–AC9): modo edición, selección, confirmación, máx. 4 a la vez, fallo parcial + reintentar, deshacer en orden y con alias, sin duplicados, 401, 320 × 568 | `test/features/passenger/delete_favorite_routes_test.dart` |
 
 ## 12. Búsqueda de rutas (pasajero)

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+
 import '../core/theme.dart';
 
 /// Global bottom navigation bar for the Passenger flow.
 ///
-/// 3 tabs: Home, My trips, Account. It does not handle navigation itself: the
+/// 3 tabs: Inicio, Favoritos (`/passenger/favorites`), Cuenta. It does not
+/// handle navigation itself: the
 /// screen using it decides what to do in [onTap] (switch tab, navigate to
 /// another route, etc.).
 class PassengerBottomNav extends StatelessWidget {
@@ -43,15 +45,16 @@ class PassengerBottomNav extends StatelessWidget {
             label: 'Inicio',
           ),
           NavigationDestination(
-            icon: Icon(Icons.confirmation_number_outlined),
-            selectedIcon: Icon(Icons.confirmation_number,
-                color: SmartBusColors.verdePasajero),
-            label: 'Mis viajes',
+            icon: Icon(Icons.star_border),
+            selectedIcon: Icon(Icons.star, color: SmartBusColors.verdePasajero),
+            label: 'Favoritos',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),
-            selectedIcon:
-                Icon(Icons.person, color: SmartBusColors.verdePasajero),
+            selectedIcon: Icon(
+              Icons.person,
+              color: SmartBusColors.verdePasajero,
+            ),
             label: 'Cuenta',
           ),
         ],
