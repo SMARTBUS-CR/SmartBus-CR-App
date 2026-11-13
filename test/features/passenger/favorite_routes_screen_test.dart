@@ -66,6 +66,63 @@ void main() {
     }),
   );
 
+  group('"Favoritos" tab', () {
+    testWidgets('shows the bottom bar with "Favoritos" selected and no back', (
+      tester,
+    ) async {
+      _setUp(saved: [_heredia]);
+      await _pumpScreen(tester);
+
+      final bar = tester.widget<NavigationBar>(find.byType(NavigationBar));
+      expect(bar.selectedIndex, 1);
+      expect(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('Favoritos'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('Volver'), findsNothing);
+    });
+
+    testWidgets('"Ver ruta" opens the home map with that route', (
+      tester,
+    ) async {
+      _setUp(saved: [_puerto]);
+      final operations = FakeOperations()
+        ..patterns = [
+          RoutePattern(id: 'p-ida', name: 'Ida', headsign: 'Río Frío'),
+        ];
+      Object? homeArgs;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: FavoriteRoutesScreen(
+            favorites: _favorites,
+            operations: operations,
+          ),
+          onGenerateRoute: (settings) {
+            if (settings.name != '/passenger/home') return null;
+            homeArgs = settings.arguments;
+            return MaterialPageRoute<void>(
+              builder: (_) => const Scaffold(body: Text('home-map')),
+            );
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Puerto Viejo'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('show-route-p-ida')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('home-map'), findsOneWidget);
+      final selection = homeArgs! as RouteSelection;
+      expect(selection.route.id, 'r-pv');
+      expect(selection.pattern.id, 'p-ida');
+    });
+  });
+
   group('Mis favoritos', () {
     testWidgets('AC2 · asks the server and lists code, name and company, '
         'most recently saved first', (tester) async {
