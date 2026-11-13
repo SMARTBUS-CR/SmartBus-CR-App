@@ -3,8 +3,10 @@ import '../../../core/network/api_client.dart';
 import '../../trip_tracking/models/trip_tracking.dart';
 import '../models/operations_models.dart';
 import '../models/route_timetable.dart';
+import '../models/trip_planning.dart';
 
 export '../models/route_timetable.dart';
+export '../models/trip_planning.dart';
 
 /// Talks to the **Dashboard (operations) through the API Gateway** (`/ops/*`).
 ///
@@ -309,6 +311,52 @@ class OperationsService {
       ApiConfig.opsPatternTrips(patternId, {'page[size]': '50'}),
     );
     return _resources(body).map(LiveBusTrip.fromJsonApi).toList();
+  }
+
+  // --- Trip planning -------------------------------------------------------------
+
+  /// `GET ops/stops/{id}/departures` — the next departures from a stop, of
+  /// every route, earliest first, within [window] from [from] (now). Not
+  /// cached: it depends on the time.
+  Future<List<StopDeparture>> stopDepartures(
+    String stopId, {
+    DateTime? from,
+    Duration window = const Duration(hours: 2),
+  }) async {
+    final body = await _client.get(
+      ApiConfig.opsStopDepartures(stopId, {
+        'window_minutes': '${window.inMinutes.clamp(1, 480)}',
+        'page[size]': '20',
+        if (from != null) 'departure_at': from.toUtc().toIso8601String(),
+      }),
+    );
+    return _resources(body).map(StopDeparture.fromJsonApi).toList();
+  }
+
+  /// `GET ops/journeys` — direct journeys (one bus) from the origin to the
+  /// destination, the earliest departure first. [walkingRadiusMeters] is how
+  /// far the passenger may walk to the boarding stop and from the last one.
+  Future<List<Journey>> journeys({
+    required double originLatitude,
+    required double originLongitude,
+    required double destinationLatitude,
+    required double destinationLongitude,
+    int walkingRadiusMeters = 800,
+    DateTime? departureAt,
+  }) async {
+    final body = await _client.get(
+      ApiConfig.opsJourneys({
+        'origin_lat': '$originLatitude',
+        'origin_lng': '$originLongitude',
+        'destination_lat': '$destinationLatitude',
+        'destination_lng': '$destinationLongitude',
+        'walking_radius_m': '${walkingRadiusMeters.clamp(50, 2000)}',
+        'page[size]': '30',
+        if (departureAt != null)
+          'departure_at': departureAt.toUtc().toIso8601String(),
+      }),
+    );
+    return _resources(body).map(Journey.fromJsonApi).toList();
   }
 
   // --- helpers -------------------------------------------------------------------
