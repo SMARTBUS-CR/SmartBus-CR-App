@@ -10,10 +10,12 @@ import '../operations/models/operations_models.dart';
 import '../operations/services/nearby_routes_filter.dart' show formatDistance;
 import '../operations/services/next_stop_tracker.dart';
 import '../operations/services/operations_service.dart';
+import '../trip_tracking/models/trip_arrival_estimate.dart';
 import '../trip_tracking/models/trip_tracking.dart';
 import '../trip_tracking/services/live_trip_tracker.dart';
 import 'map/map_overlay.dart';
 import 'map/passenger_map.dart';
+import 'map/route_sheet.dart' show StopsTimeline;
 
 export '../trip_tracking/services/live_trip_tracker.dart'
     show LiveTripTrackerFactory;
@@ -106,6 +108,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
     super.initState();
     _tracker = (widget.trackerFactory ?? LiveTripTracker.withDefaults)(_tripId);
     _tracker.state.addListener(_onState);
+    _tracker.arrivals.addListener(_onState);
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _onState());
     unawaited(_tracker.start());
     unawaited(_followUserLocation());
@@ -229,6 +232,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
     _ticker?.cancel();
     _userLocationSub?.cancel();
     _tracker.state.removeListener(_onState);
+    _tracker.arrivals.removeListener(_onState);
     _tracker.dispose();
     super.dispose();
   }
@@ -329,6 +333,79 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
     _follow = true;
     _followed = (position.latitude, position.longitude);
     map.moveTo(position.latitude, position.longitude, zoom: MapConfig.userZoom);
+  }
+
+  void _showStopsModal() {
+    final route = _route;
+    if (route == null || route.stops.isEmpty) return;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.3,
+        maxChildSize: 0.9,
+        builder: (context, scrollController) => Container(
+          key: const Key('stops-modal'),
+          decoration: const BoxDecoration(
+            color: SmartBusColors.blanco,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          child: ListView(
+            controller: scrollController,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              StopsTimeline(
+                colors: MapOverlayColors.sheet,
+                pattern: route,
+                arrivals: _tracker.arrivals.value,
+                selected: _busStops?.nextStop,
+                onSelect: (stop) {
+                  Navigator.pop(context);
+                  if (stop.location != null) {
+                    _map?.moveTo(
+                      stop.location!.latitude,
+                      stop.location!.longitude,
+                    );
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The "Próxima parada" card: only with a route to know which stop is next.
+  Widget? _nextStopCard(LiveTripState state) {
+    final tracker = _busStops;
+    if (tracker == null ||
+        tracker.stops.isEmpty ||
+        state.phase == LiveTripPhase.finished) {
+      return null;
+    }
+    final next = tracker.nextStop;
+    if (next == null) return null;
+    final arrivals = _tracker.arrivals.value;
+    final estimate = arrivals[next.id] ?? arrivals[next.stopId];
+    return _NextStopCard(
+      stop: next,
+      estimate: estimate,
+      onTap: _showStopsModal,
+    );
   }
 
   /// The "Tu parada" card: only with a route to choose a stop from.
@@ -440,6 +517,16 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
                     children: [
                       if (_route != null) ...[
                         FloatingActionButton.small(
+                          key: const Key('show-stops-button'),
+                          heroTag: null,
+                          tooltip: 'Ver paradas',
+                          backgroundColor: SmartBusColors.blanco,
+                          foregroundColor: SmartBusColors.verdePasajero,
+                          onPressed: _showStopsModal,
+                          child: const Icon(Icons.list_alt_outlined),
+                        ),
+                        const SizedBox(height: 8),
+                        FloatingActionButton.small(
                           key: const Key('show-route-button'),
                           heroTag: null,
                           tooltip: 'Ver ruta',
@@ -468,6 +555,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
             ),
           ),
           _StatusPanel(
+            nextStopCard: _nextStopCard(state),
             boarding: _boardingCard(state),
             status: status,
             reconnecting:
@@ -676,13 +764,120 @@ class _BoardingCard extends StatelessWidget {
   }
 }
 
+class _NextStopCard extends StatelessWidget {
+  const _NextStopCard({
+    required this.stop,
+    this.estimate,
+    this.onTap,
+  });
+
+  final PatternStop stop;
+  final TripArrivalEstimate? estimate;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final est = estimate;
+    final hasEta = est != null && est.etaMinutes != null;
+
+    return Container(
+      key: const Key('next-stop-card'),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: SmartBusColors.verdeTurquesa.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.directions_bus,
+                color: SmartBusColors.verdePasajero,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Próxima parada: ${stop.name}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: SmartBusColors.grisOscuro,
+                  ),
+                ),
+              ),
+              if (onTap != null)
+                TextButton(
+                  key: const Key('view-stops-action'),
+                  onPressed: onTap,
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                  child: const Text(
+                    'Ver paradas',
+                    style: TextStyle(
+                      color: SmartBusColors.verdePasajero,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          if (hasEta) ...[
+            const SizedBox(height: 6),
+            Container(
+              key: const Key('next-stop-eta-badge'),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: est.isLive
+                    ? SmartBusColors.completado.withValues(alpha: 0.15)
+                    : SmartBusColors.azulPrincipal.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: est.isLive
+                      ? SmartBusColors.completado
+                      : SmartBusColors.azulPrincipal,
+                  width: 1,
+                ),
+              ),
+              child: Text(
+                est.isLive
+                    ? 'Llegada en ${est.etaMinutes} min (En vivo)'
+                    : 'Llegada estimada en ${est.etaMinutes} min (Itinerario)',
+                style: TextStyle(
+                  color: est.isLive
+                      ? SmartBusColors.completado
+                      : SmartBusColors.azulPrincipal,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _StatusPanel extends StatelessWidget {
   const _StatusPanel({
     required this.status,
     required this.reconnecting,
+    this.nextStopCard,
     this.boarding,
     this.onRetry,
   });
+
+  /// "Próxima parada" card, shown above the bus status.
+  final Widget? nextStopCard;
 
   /// "Tu parada" card, shown above the bus status.
   final Widget? boarding;
@@ -702,6 +897,10 @@ class _StatusPanel extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (nextStopCard != null) ...[
+              nextStopCard!,
+              const SizedBox(height: 8),
+            ],
             if (boarding != null) ...[boarding!, const SizedBox(height: 8)],
             Container(
               padding: const EdgeInsets.all(14),
