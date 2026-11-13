@@ -856,12 +856,29 @@ nombre, distancia y las rutas que paran ahí ("PV-RF · Río Frío").
 - Sin ubicación: un aviso ofrece activarla (las paradas dependen de dónde
   está el pasajero). Sin paradas cerca: lo dice.
 
+### Horario y tarifa de las rutas
+
+- **Lista** ("Rutas cercanas" / "Todas las rutas"): cada ruta muestra su
+  **tarifa de hoy** ("₡650", `RouteListTile`). Se piden todas en paralelo al
+  cargar el catálogo (`GET ops/routes/{id}/fares`, en caché); una ruta sin
+  tarifa o cuya petición falla solo no muestra precio.
+- **Ruta elegida** (`SelectedRoutePanel`): "Tarifa ₡650" junto al resumen y la
+  sección **"Horario"** (`ScheduleSection`) del sentido mostrado: próxima
+  salida, las salidas de hoy (las que ya pasaron tachadas) y "Ver horario de
+  la semana" con los próximos 6 días. Respeta vigencia y fechas suspendidas
+  (`departuresOn`).
+- El horario se pide **por sentido** al abrirlo
+  (`GET ops/route-patterns/{id}/schedules`), una sola vez. Sin horario
+  publicado: "Este sentido no tiene horario publicado."; si falla: "No se pudo
+  cargar el horario." (se reintenta al volver a abrir la ruta).
+
 ### Tests
 
 | Qué | Archivo |
 |---|---|
 | Paradas cercanas: radio, orden, una vez por parada con todas sus rutas, límite, sin coordenadas | `test/features/operations/nearby_stops_test.dart` |
 | Paradas cercanas en el inicio: mapa + hoja, parada compartida, tocar parada / punto, abrir una ruta, cerrar y atrás, nada cerca, sin ubicación | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Paradas cercanas*) |
+| Horario y tarifa: tarifa en la lista, tarifa + salidas de hoy + semana en la ruta elegida, otro sentido, sin más salidas / día sin salidas, errores | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Horario y tarifa*) |
 | Filtro: dentro, fuera, justo en el radio, orden, lista vacía, varios sentidos, paradas sin coordenadas | `test/features/operations/nearby_routes_filter_test.dart` |
 | `include=patterns`: enlace por relación y por `route_id`, con y sin trazo, `directionLabel` | `test/features/operations/operations_service_test.dart` |
 | GeoJSON dibujado: línea real / aproximada, ids, números y tipo de parada (salida, intermedia, llegada), parada resaltada | `test/features/passenger/route_features_test.dart` |
