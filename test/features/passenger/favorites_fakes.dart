@@ -89,6 +89,14 @@ class FakeFavoritesService extends FavoritesService {
   }
 
   @override
+  Future<void> renameFavorite(String routeId, String? label) async {
+    calls.add('rename $routeId ${label ?? '-'}');
+    await _request(routeId);
+    final i = stored.indexWhere((f) => f.routeId == routeId);
+    if (i >= 0) stored[i] = stored[i].withLabel(label);
+  }
+
+  @override
   Future<void> removeFavorite(String routeId) async {
     calls.add('remove $routeId');
     await _request(routeId);
