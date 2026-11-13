@@ -1367,6 +1367,33 @@ final _shared = route(
   ],
 );
 
+/// The road of `_highway`: ~220 m east of the passenger, south → north.
+final _highwayLng = _user.longitude + 0.002;
+
+/// A rural route with stops only at its far terminals (5 km south and 9 km
+/// north) whose road passes ~220 m from the passenger: no stop near, but the
+/// bus passes by. 14 km in 28 min.
+final _highway = route(
+  'r-hw',
+  code: 'PV-GUA',
+  name: 'Puerto Viejo - Guápiles',
+  patterns: [
+    pattern(
+      'p-hw',
+      headsign: 'Guápiles',
+      drivingSeconds: 28 * 60,
+      stops: [
+        stopAt('Terminal Sur', _north(-5000), _highwayLng, seq: 1, minutes: 0),
+        stopAt('Terminal Norte', _north(9000), _highwayLng, seq: 2),
+      ],
+      geometry: [
+        GeoPoint(_north(-5000), _highwayLng),
+        GeoPoint(_north(9000), _highwayLng),
+      ],
+    ),
+  ],
+);
+
 Finder _nearbyStop(String name) =>
     find.byKey(Key('nearby-stop-${stopAt(name, 0, 0, seq: 0).stopId}'));
 
@@ -1508,9 +1535,36 @@ void _nearbyStopsTests() {
     await _openNearby(tester, catalogue: [_sjPv]);
 
     expect(
-      find.textContaining('No hay paradas a menos de 1 km'),
+      find.textContaining('No hay paradas ni rutas a menos de 1 km'),
       findsOneWidget,
     );
+    expect(find.byKey(const Key('passing-routes')), findsNothing);
+  });
+
+  testWidgets('no stop near, but a route passes by on the road: it is '
+      'listed and opens where it passes closest', (tester) async {
+    final map = await _openNearby(tester, catalogue: [_sjPv, _highway]);
+
+    expect(map.nearbyStops, isEmpty);
+    expect(
+      find.textContaining('estas rutas pasan cerca: puedes esperar el bus'),
+      findsOneWidget,
+    );
+    final tile = find.byKey(const Key('passing-route-p-hw'));
+    expect(
+      find.descendant(of: tile, matching: find.text('Hacia Guápiles')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: tile, matching: find.text('Pasa a 220 m de ti')),
+      findsOneWidget,
+    );
+
+    await _tapInSheet(tester, tile);
+
+    expect(map.route?.id, 'p-hw');
+    expect(map.moves.last.lat, closeTo(_user.latitude, 1e-6));
+    expect(map.moves.last.lng, closeTo(_highwayLng, 1e-6));
   });
 
   testWidgets('without location: asks to turn it on, nothing is shown', (
@@ -1974,8 +2028,9 @@ Future<(FakeOperations, _FakeMap)> _openPlanner(
   WidgetTester tester, {
   List<Journey> journeys = const [],
   _FakeLocationService? location,
+  List<TransitRoute>? catalogue,
 }) async {
-  final operations = FakeOperations(catalogue: [_demo, _pvRf]);
+  final operations = FakeOperations(catalogue: catalogue ?? [_demo, _pvRf]);
   operations.planning.journeys = journeys;
   final map = _FakeMap();
   await _pump(
@@ -2138,6 +2193,102 @@ void _journeyPlannerTests() {
     await tester.pumpAndSettle();
     expect(map.destination, isNull);
     expect(find.byKey(const Key('journey-planner-panel')), findsNothing);
+  });
+
+  group('El bus pasa cerca (by the road, no stop)', () {
+    // 6 km north, ~330 m west of the road: no stop near either point.
+    final upTheRoad = GeoPoint(_north(6000), _user.longitude - 0.001);
+
+    Future<(FakeOperations, _FakeMap)> openHighway(
+      WidgetTester tester, {
+      List<Journey> journeys = const [],
+    }) async {
+      final (operations, map) = await _openPlanner(
+        tester,
+        catalogue: [_highway],
+        journeys: journeys,
+      );
+      operations
+        ..fares = {
+          'r-hw': [fare(1570)],
+        }
+        // Fridays from the south terminal at 10:00 and 11:00.
+        ..schedules = {
+          'p-hw': [departure(5, 10), departure(5, 11)],
+        };
+      return (operations, map);
+    }
+
+    testWidgets('the road passes near both points: where to wait, when it '
+        'passes (approx.), the ride and the fare', (tester) async {
+      final (_, map) = await openHighway(tester);
+      await _longPress(tester, map, upTheRoad);
+
+      expect(find.byKey(const Key('journey-planner-empty')), findsNothing);
+      expect(find.byKey(const Key('journey-passing-title')), findsOneWidget);
+      final card = find.byKey(const Key('journey-passing-p-hw'));
+      // 5 of 14 km = 10 min from the terminal: 10:10 already passed, so the
+      // 11:00 departure, by here ~11:10.
+      for (final text in [
+        'PV-GUA',
+        'Hacia Guápiles',
+        'Pasa ~11:10 · en 55 min',
+        'Camina 220 m (~3 min) hasta la carretera',
+        'Viaja ~12 min y bájate cerca de tu destino',
+        'Camina 330 m a tu destino',
+      ]) {
+        expect(
+          find.descendant(of: card, matching: find.text(text)),
+          findsOneWidget,
+          reason: text,
+        );
+      }
+    });
+
+    testWidgets('tapping it draws the route and goes to the road', (
+      tester,
+    ) async {
+      final (_, map) = await openHighway(tester);
+      await _longPress(tester, map, upTheRoad);
+
+      await _tapInSheet(tester, find.byKey(const Key('journey-passing-p-hw')));
+
+      expect(map.route?.id, 'p-hw');
+      expect(map.moves.last.lng, closeTo(_highwayLng, 1e-6));
+      expect(map.moves.last.lat, closeTo(_user.latitude, 1e-6));
+      expect(map.destination, upTheRoad);
+    });
+
+    testWidgets('a destination behind (the bus goes the other way) is not '
+        'offered', (tester) async {
+      final (_, map) = await openHighway(tester);
+
+      await _longPress(tester, map, GeoPoint(_north(-3000), _highwayLng));
+
+      expect(find.byKey(const Key('journey-passing-p-hw')), findsNothing);
+      expect(find.byKey(const Key('journey-planner-empty')), findsOneWidget);
+    });
+
+    testWidgets('a direction the Dashboard already offers is not repeated', (
+      tester,
+    ) async {
+      final (_, map) = await openHighway(
+        tester,
+        journeys: [
+          _journeyTo(
+            pattern: 'p-hw',
+            routeId: 'r-hw',
+            code: 'PV-GUA',
+            at: DateTime(2026, 11, 13, 10, 30),
+          ),
+        ],
+      );
+
+      await _longPress(tester, map, upTheRoad);
+
+      expect(find.byKey(const Key('journey-p-hw')), findsOneWidget);
+      expect(find.byKey(const Key('journey-passing-p-hw')), findsNothing);
+    });
   });
 
   testWidgets('"Paradas cercanas" leaves it', (tester) async {
