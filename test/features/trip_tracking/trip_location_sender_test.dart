@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
@@ -73,14 +75,32 @@ class _FakeGeolocator extends GeolocatorPlatform
   @override
   Future<LocationPermission> requestPermission() async => permission;
 
+  /// Fresh fix (`getCurrentPosition`); `null` = same as [lastKnown].
+  Position? current;
+  int currentCalls = 0;
+
+  /// Positions pushed by the OS while tracking.
+  final StreamController<Position> stream = StreamController.broadcast();
+
   @override
   Future<Position?> getLastKnownPosition({
     bool forceLocationManager = false,
   }) async => lastKnown;
 
   @override
+  Future<Position> getCurrentPosition({
+    LocationSettings? locationSettings,
+  }) async {
+    currentCalls++;
+    final position = current ?? lastKnown;
+    // What the plugin does when no fix arrives within `timeLimit`.
+    if (position == null) throw TimeoutException('no fix');
+    return position;
+  }
+
+  @override
   Stream<Position> getPositionStream({LocationSettings? locationSettings}) =>
-      const Stream<Position>.empty();
+      stream.stream;
 }
 
 Position _position({
@@ -120,8 +140,54 @@ void main() {
     GeolocatorPlatform.instance = geo;
   });
 
-  TripLocationSender build() =>
-      TripLocationSender(service: service, interval: interval);
+  /// What the Authentication Service says about a `401` (true = expired).
+  var sessionExpired = true;
+  var sessionChecks = 0;
+
+  TripLocationSender build() => TripLocationSender(
+    service: service,
+    interval: interval,
+    sessionCheck: () async {
+      sessionChecks++;
+      return sessionExpired;
+    },
+  );
+
+  setUp(() {
+    sessionExpired = true;
+    sessionChecks = 0;
+  });
+
+  test('401 but the token works (the Gateway was slow): keeps sending, '
+      'does not sign out', () {
+    fakeAsync((async) {
+      sessionExpired = false;
+      service.failAlwaysWith = ApiException.fromStatus(401);
+      final sender = build();
+
+      sender.start(tripId: _tripId);
+      async.flushMicrotasks();
+
+      expect(sender.snapshot.value.state, TripTrackingState.tracking);
+      expect(sender.snapshot.value.sessionExpired, isFalse);
+      expect(sender.snapshot.value.lastError, 'Verificando la sesión…');
+      expect(sender.snapshot.value.pendingCount, 1);
+      expect(sessionChecks, 1);
+
+      // Still failing a few ticks later: not asked again within a minute.
+      async.elapse(interval * 3);
+      async.flushMicrotasks();
+      expect(sessionChecks, 1);
+
+      // The GPS service recovers: sending goes on.
+      service.failAlwaysWith = null;
+      async.elapse(interval);
+      async.flushMicrotasks();
+      expect(service.sent, isNotEmpty);
+      expect(sender.snapshot.value.lastError, isNull);
+      sender.dispose();
+    });
+  });
 
   test('does not send when the location permission is denied', () {
     fakeAsync((async) {
@@ -278,6 +344,79 @@ void main() {
       expect(service.maxInFlight, 1);
       expect(sender.snapshot.value.pendingCount, lessThanOrEqualTo(1));
 
+      sender.dispose();
+    });
+  });
+
+  group('first reading (stored as the start of the trip)', () {
+    test('a recent last known position is sent right away', () {
+      fakeAsync((async) {
+        geo.lastKnown = _position(lat: 9.95, at: DateTime.now());
+        final sender = build();
+        sender.start(tripId: _tripId);
+        async.flushMicrotasks();
+
+        expect(service.sent.first.latitude, 9.95);
+        expect(geo.currentCalls, 0);
+        sender.dispose();
+      });
+    });
+
+    test('an old last known position is NOT used: a fresh fix is', () {
+      fakeAsync((async) {
+        // From another place, hours ago.
+        geo.lastKnown = _position(lat: 10.5, at: DateTime.utc(2026, 9, 1));
+        geo.current = _position(lat: 9.95, at: DateTime.now());
+        final sender = build();
+        sender.start(tripId: _tripId);
+        async.flushMicrotasks();
+
+        expect(geo.currentCalls, 1);
+        expect(service.sent.first.latitude, 9.95);
+        expect(service.sent.any((f) => f.latitude == 10.5), isFalse);
+        sender.dispose();
+      });
+    });
+
+    test('no position at all yet: nothing sent, and it keeps trying', () {
+      fakeAsync((async) {
+        geo.lastKnown = null;
+        final sender = build();
+        sender.start(tripId: _tripId);
+        async.flushMicrotasks();
+        expect(service.sent, isEmpty);
+        expect(sender.snapshot.value.isTracking, isTrue);
+
+        // The OS delivers one: sent at once.
+        geo.stream.add(_position(lat: 9.96, at: DateTime.now()));
+        async.flushMicrotasks();
+        expect(service.sent.single.latitude, 9.96);
+        sender.dispose();
+      });
+    });
+  });
+
+  test('a new position from the OS is sent at once, not on the next tick', () {
+    fakeAsync((async) {
+      final sender = build();
+      sender.start(tripId: _tripId);
+      async.flushMicrotasks();
+      final before = service.sent.length;
+
+      async.elapse(const Duration(seconds: 1)); // mid-interval
+      geo.stream.add(
+        _position(lat: 9.97, at: DateTime.utc(2026, 9, 7, 12, 0, 1)),
+      );
+      async.flushMicrotasks();
+
+      expect(service.sent, hasLength(before + 1));
+      expect(service.sent.last.latitude, 9.97);
+      expect(sender.snapshot.value.latitude, 9.97); // the driver's map too
+
+      // The next tick does not send it again (the bus is moving).
+      async.elapse(interval);
+      async.flushMicrotasks();
+      expect(service.sent, hasLength(before + 1));
       sender.dispose();
     });
   });
