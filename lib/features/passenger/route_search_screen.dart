@@ -161,8 +161,26 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
       ? error.message
       : 'No se pudo completar la búsqueda. Inténtalo nuevamente.';
 
-  void _open(TransitRoute route) =>
-      Navigator.pushNamed(context, '/passenger/route', arguments: route);
+  /// Opens the route detail. Its "Ver ruta" answers with a [RouteSelection]:
+  /// the search closes and hands it to the map (or opens the map with it
+  /// when the search is the first screen).
+  Future<void> _open(TransitRoute route) async {
+    final result = await Navigator.pushNamed<Object?>(
+      context,
+      '/passenger/route',
+      arguments: route,
+    );
+    if (result is! RouteSelection || !mounted) return;
+    if (Navigator.canPop(context)) {
+      Navigator.pop(context, result);
+    } else {
+      Navigator.pushReplacementNamed(
+        context,
+        '/passenger/home',
+        arguments: result,
+      );
+    }
+  }
 
   void _back() {
     if (Navigator.canPop(context)) {
