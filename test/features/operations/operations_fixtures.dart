@@ -339,6 +339,38 @@ class FakeOperations extends OperationsService {
     ].where((trip) => trip.status == status).toList();
   }
 
+  /// Pages of [driverTripHistory] (1-based) for every status; filtered by
+  /// status here. [historyError] fails the next calls.
+  List<List<DriverTrip>> historyPages = const [];
+  Exception? historyError;
+
+  /// While not null, [driverTripHistory] waits for it.
+  Completer<void>? historyGate;
+
+  @override
+  Future<DriverTripPage> driverTripHistory({
+    int page = 1,
+    TripStatus? status,
+  }) async {
+    calls.add('history $page${status == null ? '' : ' ${status.name}'}');
+    await historyGate?.future;
+    if (historyError != null) throw historyError!;
+    if (status != null) {
+      // Filtered: everything that matches, in one page.
+      return DriverTripPage(
+        trips: [
+          for (final trips in historyPages)
+            ...trips.where((t) => t.status == status),
+        ],
+        hasMore: false,
+      );
+    }
+    return DriverTripPage(
+      trips: page <= historyPages.length ? historyPages[page - 1] : const [],
+      hasMore: page < historyPages.length,
+    );
+  }
+
   /// While not null, [startTrip] waits for it (to see the spinner).
   Completer<void>? startGate;
 
@@ -369,15 +401,37 @@ class FakeOperations extends OperationsService {
     );
   }
 
-  /// Status that [trip] answers (`GET ops/trips/{id}`).
-  String tripStatus = 'in_progress';
+  /// Status that [trip] answers (`GET ops/trips/{id}`). While `null` it
+  /// answers [knownTrip] (or the trip of [trips] with that id) unchanged, so
+  /// opening a screen does not change the trip it shows.
+  String? tripStatus;
+
+  /// The trip the screen was opened with (set by the test helpers).
+  DriverTrip? knownTrip;
   Exception? tripError;
+
+  /// While not null, [trip] waits for it (to see the refresh indicator).
+  Completer<void>? tripGate;
 
   @override
   Future<DriverTrip> trip(String tripId) async {
     calls.add('trip $tripId');
+    await tripGate?.future;
     if (tripError != null) throw tripError!;
-    return driverTrip(id: tripId, status: tripStatus);
+    final status = tripStatus;
+    if (status != null) {
+      return driverTrip(
+        id: tripId,
+        status: status,
+        actualArrivalAt: status == 'completed' ? completedArrivalAt : null,
+      );
+    }
+    final known = [
+      ?knownTrip,
+      ...trips,
+      ...otherDayTrips,
+    ].where((t) => t.id == tripId).firstOrNull;
+    return known ?? driverTrip(id: tripId, status: 'in_progress');
   }
 
   @override

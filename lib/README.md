@@ -513,9 +513,10 @@ mismo Gateway). Todo pasa por `OperationsService`
 | Método | Endpoint (Gateway) | Token | Quién |
 |---|---|---|---|
 | `driverTrips({serviceDate, status})` | `GET ops/driver/trips?include=pattern,bus&sort=scheduled_departure_at` | Sí | Conductor |
+| `driverTripHistory({page, status})` | `GET ops/driver/trips?include=pattern,bus&sort=-scheduled_departure_at&page[size]=20&page[number]=N` (todos los días, más reciente primero) | Sí | Conductor ("Mis rutas") |
 | `startTrip(id)` | `POST ops/trips/{id}/start` | Sí | Conductor asignado |
 | `completeTrip(id)` | `POST ops/trips/{id}/complete` (idempotente; devuelve `actual_arrival_at`) | Sí | Conductor asignado |
-| `trip(id)` | `GET ops/trips/{id}` (estado actual del viaje; se usa tras un `409` al finalizar) | Sí | Conductor asignado |
+| `trip(id)` | `GET ops/trips/{id}` (estado actual del viaje: al abrir Recorrido, al deslizar, cada 60 s y tras un `409` al finalizar) | Sí | Conductor asignado |
 | `routes()` | `GET ops/routes` | No | Pasajero |
 | `searchRoutes(query, {page})` | `GET ops/routes?include=company,patterns` (catálogo completo, se busca en el teléfono) | No | Pasajero (sección 12) |
 | `routesWithPatterns()` | `GET ops/routes?include=patterns` (rutas + sentidos + paradas en **una** petición; ver §10) | No | Pasajero |
@@ -595,6 +596,62 @@ Errores al finalizar:
 | `401` | Se borra la sesión → Login con "Tu sesión expiró. Inicia sesión nuevamente." | Se detiene |
 | Sin red, timeout, `429`, `5xx` | SnackBar con el mensaje + **Reintentar** (vuelve a llamar `complete`, sin diálogo); el viaje sigue en curso | Sigue enviando (las ubicaciones pendientes quedan en cola) |
 
+#### Estado del viaje en Recorrido
+
+Bajo el encabezado de **Recorrido** hay una franja con el **estado del viaje**
+(`TripStatusBadge`, el mismo texto y color que en la lista de Inicio, con
+ícono y etiqueta de accesibilidad "Estado del viaje: …"). Combina el estado
+del Dashboard con el envío de GPS de este teléfono (`TripStatusInfo`):
+
+| Dashboard | GPS (app) | Badge | Color | Mensaje |
+|---|---|---|---|---|
+| `scheduled` | — | Programado | Azul | "Listo para iniciar" |
+| `in_progress` | enviando | En curso | Verde | "Enviando ubicación · última hace Ns" |
+| `in_progress` | detenido (salió, reabrió la app, sin permiso…) | En curso · ubicación detenida | Naranja | "No se está enviando tu ubicación" (+ **Continuar recorrido** en el panel) |
+| `in_progress` | rechazado (`403` / `409` del servicio GPS) | En curso · ubicación rechazada | Rojo | El motivo (+ **Reintentar** en el panel) |
+| `completed` | — | Finalizado | Verde (`completado`, como en Inicio) | "Recorrido finalizado · llegada HH:MM" |
+| `cancelled` | — | Cancelado | Rojo | "Este viaje fue cancelado" |
+
+No existe un estado "pausado" en el Dashboard: "pausado" es *en curso con la
+ubicación detenida*.
+
+**Se actualiza** (`GET ops/trips/{id}`) al abrir la pantalla, al **deslizar
+hacia abajo** (sobre el panel o la vista de estado) o con el botón ⟳, y **cada
+60 s** mientras la app está en primer plano (en segundo plano se pausa y, al
+volver, se actualiza enseguida). Como ese `GET` no trae `include`, se toma del
+servidor solo el estado y las horas; el bus, el destino y la ruta que ya se
+mostraban se conservan (`DriverTrip.refreshedWith`). Una respuesta que llega
+después de "Finalizar" se descarta.
+
+Si el administrador **cancela o finaliza** el viaje desde el panel, en menos de
+60 s (o al deslizar) el badge cambia, **se detiene el GPS** y un SnackBar lo
+explica ("El viaje fue cancelado desde el panel de administración. Se dejó de
+enviar tu ubicación.").
+
+| Error al actualizar | Qué ve el conductor | GPS |
+|---|---|---|
+| Sin red, timeout, `429`, `5xx` | Sigue el último estado conocido + "No se pudo actualizar el estado." con **Reintentar** | Sigue |
+| `401` | Se borra la sesión → Login con "Tu sesión expiró…" | Se detiene |
+| `403` / `404` | "Este viaje ya no está disponible" + **Ir a Inicio** | Se detiene |
+
+#### Mis rutas (historial)
+
+La pestaña **Mis rutas** (`DriverRoutesScreen`) muestra **todos los viajes
+asignados al conductor**, de cualquier día, del más reciente al más antiguo y
+agrupados por día ("Hoy", "Ayer", "mié 11 nov", con el año si no es el
+actual). Cada viaje muestra:
+- ruta (código · nombre) y **estado** con el mismo badge de Inicio y Recorrido;
+- destino y bus (placa · unidad);
+- **Horario** programado (salida → llegada) y **Real** (salida → llegada del
+  backend + duración, o "Salió HH:MM" si sigue en curso);
+- "Pendiente de iniciar" / "Este viaje fue cancelado" según el estado;
+- **Continuar recorrido** si está en curso (abre Recorrido con ese viaje).
+
+Chips **Todos / Programados / En curso / Finalizados / Cancelados** filtran en
+el servidor (`filter[status]`). **Cargar más** pide la página siguiente (si
+falla, la lista se mantiene y un SnackBar ofrece Reintentar). Deslizar hacia
+abajo recarga. `401` → Login; otros errores → mensaje + Reintentar.
+
 Errores al iniciar (SnackBar en Inicio; el GPS no se enciende):
 
 | Respuesta | Qué ve el conductor |
@@ -637,6 +694,9 @@ Un viaje terminado desaparece de la lista (el Dashboard solo devuelve los
 | Inicio del conductor (AC1–AC9): lista, confirmación, permiso de ubicación, un solo viaje activo, 409/422/403/404/401, red y reintentar, spinner | `test/features/driver/driver_home_screen_test.dart` |
 | Recorrido: mapa con la ruta del viaje (o del Dashboard), bus y cámara, próxima parada, panel compacto en teléfono chico, GPS entre pestañas, 401 | `test/features/driver/trip_screen_test.dart` |
 | Finalizar recorrido (AC1–AC9, grupo *Trip completion*): botón también con GPS pausado, confirmación (cancelar / tocar afuera), 200 con hora de llegada del backend, spinner sin doble envío y GPS hasta confirmar, 409 (cancelado / sigue en curso), 403/404, red / timeout / 429 / 5xx + reintentar | `test/features/driver/trip_screen_test.dart` |
+| Estado del viaje (AC1–AC9, grupo *Trip status*): badge igual a Inicio, en curso enviando / detenido / rechazado, finalizado con hora de llegada, cancelado o finalizado desde el panel en 60 s (GPS se detiene), pausa en segundo plano, deslizar para actualizar con indicador, red / 429 / 5xx con último estado + reintentar, 401, 403/404, respuesta tardía tras "Finalizar", conserva el bus, 320 × 568 y semántica | `test/features/driver/trip_screen_test.dart` |
+| Tabla de estados (`TripStatusInfo`), `refreshedWith` y badge de Inicio con ícono y semántica | `test/features/driver/trip_status_badge_test.dart` |
+| Mis rutas: historial agrupado por día con estado y datos (horario, real y duración, bus), Continuar recorrido, filtros por estado, Cargar más (y su error), vacío, cargando, error + reintentar, deslizar, 401, 320 × 568 | `test/features/driver/driver_routes_screen_test.dart` |
 | Próxima parada: inicio, avance, retomar a mitad, saltar paradas, fin | `test/features/driver/next_stop_tracker_test.dart` |
 | Buses en curso: ruta → buses → en vivo, estado y próxima parada de cada bus, bus sin posición, viaje terminado oculto, sin buses, ver paradas, ver ruta en el mapa, reintentar | `test/features/passenger/buses_in_progress_screen_test.dart` |
 

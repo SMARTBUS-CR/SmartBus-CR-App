@@ -73,6 +73,52 @@ void main() {
       );
     });
 
+    test('driverTripHistory: every day, most recent first, paged', () async {
+      final h = _Harness({
+        'data': [
+          tripResource(id: 'new', status: 'completed', withRelationships: true),
+          tripResource(id: 'old', status: 'cancelled'),
+        ],
+        'included': driverTripsIncluded(),
+        'meta': {'current_page': 2, 'last_page': 3},
+      });
+
+      final page = await h.service.driverTripHistory(page: 2);
+
+      final query = h.requests.single.url.queryParameters;
+      expect(h.requests.single.url.path, endsWith('/ops/driver/trips'));
+      expect(query['sort'], '-scheduled_departure_at');
+      expect(query['page[number]'], '2');
+      expect(query['page[size]'], '${OperationsService.historyPageSize}');
+      expect(query['include'], 'pattern,bus');
+      expect(query.containsKey('filter[service_date]'), isFalse);
+      expect(query.containsKey('filter[status]'), isFalse);
+      expect(h.requests.single.headers['Authorization'], 'Bearer tok');
+
+      expect(page.trips.map((t) => t.id), ['new', 'old']);
+      expect(page.trips.first.busLabel, 'Bus SJB-1234 · Unidad 07');
+      expect(page.hasMore, isTrue);
+    });
+
+    test('driverTripHistory: filters by status; last page → no more', () async {
+      final h = _Harness({
+        'data': <Object>[],
+        'meta': {'current_page': 1, 'last_page': 1},
+      });
+
+      final page = await h.service.driverTripHistory(
+        status: TripStatus.cancelled,
+      );
+
+      expect(
+        h.requests.single.url.queryParameters['filter[status]'],
+        'cancelled',
+      );
+      expect(h.requests.single.url.queryParameters['page[number]'], '1');
+      expect(page.trips, isEmpty);
+      expect(page.hasMore, isFalse);
+    });
+
     test('driverTrips: bus plate and unit from the included bus', () async {
       final h = _Harness({
         'data': [tripResource(withRelationships: true)],
