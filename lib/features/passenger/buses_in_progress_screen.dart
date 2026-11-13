@@ -10,6 +10,7 @@ import '../operations/services/next_stop_tracker.dart';
 import '../operations/services/operations_service.dart';
 import '../trip_tracking/models/trip_tracking.dart';
 import '../trip_tracking/services/route_live_buses.dart';
+import '../../widgets/departures_today.dart';
 import 'favorite_star.dart';
 import 'map/route_sheet.dart' show liveBusStatus;
 import 'services/favorites_controller.dart';
@@ -239,10 +240,38 @@ class _RouteBusesScreenState extends State<RouteBusesScreen> {
           (id) => RouteLiveBuses(patternId: id, operations: _operations);
       final live = [for (final p in patterns) (p, factory(p.id))];
       setState(() => _patterns = live);
+      unawaited(_loadTimetable(patterns));
       await Future.wait([for (final (_, buses) in live) buses.start()]);
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     }
+  }
+
+  /// Today's fare of the route; `null` while loading or when it has none.
+  RouteFare? _fare;
+
+  /// Weekly departures of each direction (by pattern id).
+  final Map<String, List<RouteSchedule>> _schedules = {};
+
+  /// Fare and departures. Best effort: without them the screen just does
+  /// not show them.
+  Future<void> _loadTimetable(List<RoutePattern> patterns) async {
+    // All at the same time (each request takes seconds).
+    Future<void> fare() async {
+      try {
+        final fares = await _operations.routeFares(widget.route.id);
+        if (mounted) setState(() => _fare = fareOn(fares, widget.clock()));
+      } on ApiException catch (_) {}
+    }
+
+    Future<void> schedulesOf(RoutePattern pattern) async {
+      try {
+        final schedules = await _operations.patternSchedules(pattern.id);
+        if (mounted) setState(() => _schedules[pattern.id] = schedules);
+      } on ApiException catch (_) {}
+    }
+
+    await Future.wait([fare(), for (final p in patterns) schedulesOf(p)]);
   }
 
   Future<void> _refresh() async {
@@ -294,15 +323,38 @@ class _RouteBusesScreenState extends State<RouteBusesScreen> {
             compact: true,
             onBack: () => Navigator.pop(context),
           ),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: FavoriteStarButton(
-                route: route,
-                controller: widget.favorites,
-                showLabel: true,
-              ),
+          Padding(
+            padding: const EdgeInsets.only(left: 16, right: 8),
+            child: Row(
+              children: [
+                if (_fare case final fare?)
+                  Container(
+                    key: const Key('route-fare'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: SmartBusColors.verdePasajero.withValues(
+                        alpha: 0.12,
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      'Tarifa ${fare.label}',
+                      style: const TextStyle(
+                        color: SmartBusColors.verdePasajero,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                const Spacer(),
+                FavoriteStarButton(
+                  route: route,
+                  controller: widget.favorites,
+                  showLabel: true,
+                ),
+              ],
             ),
           ),
           Expanded(
@@ -336,6 +388,7 @@ class _RouteBusesScreenState extends State<RouteBusesScreen> {
                         pattern: pattern,
                         buses: state,
                         now: widget.clock(),
+                        schedules: _schedules[pattern.id],
                         nextStopOf: (bus) => _nextStopOf(pattern, bus),
                         onFollow: _follow,
                         onShowRoute: () => _showOnMap(pattern),
@@ -357,6 +410,7 @@ class _PatternCard extends StatelessWidget {
     required this.pattern,
     required this.buses,
     required this.now,
+    required this.schedules,
     required this.nextStopOf,
     required this.onFollow,
     required this.onShowRoute,
@@ -365,6 +419,9 @@ class _PatternCard extends StatelessWidget {
   final RoutePattern pattern;
   final RouteLiveBusesState buses;
   final DateTime now;
+
+  /// Weekly departures of this direction; `null` while loading.
+  final List<RouteSchedule>? schedules;
   final PatternStop? Function(LiveBus) nextStopOf;
   final void Function(LiveBusTrip) onFollow;
   final VoidCallback onShowRoute;
@@ -388,6 +445,15 @@ class _PatternCard extends StatelessWidget {
           children: [
             Text(pattern.label, style: Theme.of(context).textTheme.titleMedium),
             Text(info, style: TextStyle(color: Colors.grey.shade700)),
+            // Only when the direction has a published timetable at all.
+            if (schedules case final weekly? when weekly.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              DeparturesToday(
+                key: Key('departures-${pattern.id}'),
+                departures: departuresOn(weekly, now),
+                now: now,
+              ),
+            ],
             const SizedBox(height: 10),
             if (buses.loading)
               const Padding(
