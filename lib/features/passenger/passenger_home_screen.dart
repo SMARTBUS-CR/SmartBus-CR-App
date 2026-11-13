@@ -667,7 +667,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   }
 
   /// The search bar is a button: the user types on "Buscar ruta".
-  void _openSearch() => Navigator.pushNamed(context, '/passenger/search');
+  /// Search -> route detail -> "Ver ruta" comes back here with the route.
+  Future<void> _openSearch() async {
+    final result = await Navigator.pushNamed<Object?>(
+      context,
+      '/passenger/search',
+    );
+    if (result is RouteSelection && mounted) _showSelection(result);
+  }
 
   Future<void> _onChipTap(MapQuickChip chip) async {
     switch (chip.label) {
