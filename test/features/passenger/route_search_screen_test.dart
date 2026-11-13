@@ -236,6 +236,112 @@ void main() {
       expect(opened.single, isA<TransitRoute>());
       expect((opened.single! as TransitRoute).id, 'r-400');
     });
+
+    // The route detail: its "Ver ruta" answers with the direction to draw.
+    final selection = RouteSelection(
+      route: _heredia,
+      pattern: pattern('p-400', headsign: 'San José', stops: const []),
+    );
+    Route<Object?> detail(RouteSettings settings) => MaterialPageRoute<Object?>(
+      settings: settings,
+      builder: (context) => Scaffold(
+        body: TextButton(
+          onPressed: () => Navigator.pop(context, selection),
+          child: const Text('Ver ruta'),
+        ),
+      ),
+    );
+
+    testWidgets('"Ver ruta" in the detail closes the search and hands the '
+        'route to the map that opened it', (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 2.75;
+      addTearDown(tester.view.reset);
+      Object? backOnMap;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () async {
+                  backOnMap = await Navigator.push<Object?>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => RouteSearchScreen(
+                        operations: _answering(_page([_heredia])),
+                      ),
+                    ),
+                  );
+                },
+                child: const Text('map'),
+              ),
+            ),
+          ),
+          onGenerateRoute: detail,
+        ),
+      );
+      await tester.tap(find.text('map'));
+      await tester.pumpAndSettle();
+      await _type(tester, 'heredia');
+      await tester.tap(find.text('Heredia – San José'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Ver ruta'));
+      await tester.pumpAndSettle();
+
+      expect(backOnMap, same(selection));
+      expect(find.byType(RouteSearchScreen), findsNothing);
+      expect(find.text('map'), findsOneWidget);
+    });
+
+    testWidgets(
+      'as the first screen, "Ver ruta" opens the map with the route',
+      (tester) async {
+        tester.view.physicalSize = const Size(1080, 2400);
+        tester.view.devicePixelRatio = 2.75;
+        addTearDown(tester.view.reset);
+        final homeArgs = <Object?>[];
+        await tester.pumpWidget(
+          MaterialApp(
+            home: RouteSearchScreen(operations: _answering(_page([_heredia]))),
+            onGenerateRoute: (settings) {
+              if (settings.name != '/passenger/home') return detail(settings);
+              homeArgs.add(settings.arguments);
+              return MaterialPageRoute<void>(
+                builder: (_) => const Scaffold(body: Text('home-map')),
+              );
+            },
+          ),
+        );
+        await tester.pump();
+        await _type(tester, 'heredia');
+        await tester.tap(find.text('Heredia – San José'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Ver ruta'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('home-map'), findsOneWidget);
+        expect(homeArgs.single, same(selection));
+        expect(find.byType(RouteSearchScreen), findsNothing);
+      },
+    );
+
+    testWidgets('back from the detail (no "Ver ruta") stays on the search', (
+      tester,
+    ) async {
+      await _pump(tester, _answering(_page([_heredia])));
+      await _type(tester, 'heredia');
+      await tester.tap(find.text('Heredia – San José'));
+      await tester.pumpAndSettle();
+
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      navigator.pop();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(RouteSearchScreen), findsOneWidget);
+      expect(find.text('Heredia – San José'), findsOneWidget);
+    });
   });
 
   group('AC6 · no matches', () {
