@@ -59,6 +59,12 @@ class _FakeMap implements PassengerMapHandle {
     EdgeInsets padding = EdgeInsets.zero,
   }) async => fits.add(points);
 
+  @override
+  Future<void> showNearbyStops(
+    List<NearbyStop> stops, {
+    String? selectedId,
+  }) async {}
+
   PassengerMapBuilder get builder =>
       (context, options) =>
           _FakeMapWidget(onReady: () => options.onReady(this));

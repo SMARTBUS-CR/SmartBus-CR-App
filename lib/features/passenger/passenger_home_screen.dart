@@ -10,10 +10,12 @@ import '../../widgets/passenger_bottom_nav.dart';
 import '../auth/models/auth_user.dart';
 import '../operations/models/operations_models.dart';
 import '../operations/services/nearby_routes_filter.dart';
+import '../operations/services/nearby_stops.dart';
 import '../operations/services/operations_service.dart';
 import '../trip_tracking/models/trip_tracking.dart';
 import '../trip_tracking/services/route_live_buses.dart';
 import 'map/map_overlay.dart';
+import 'map/nearby_stops_panel.dart';
 import 'map/passenger_map.dart';
 import 'map/route_sheet.dart';
 
@@ -28,6 +30,12 @@ typedef RouteLiveBusesFactory = RouteLiveBuses Function(String patternId);
 /// Picking one draws its line and stops on the map ([PassengerMapHandle.showRoute])
 /// and the buses running on that direction, in real time
 /// ([PassengerMapHandle.showBuses], [RouteLiveBuses]).
+///
+/// **Paradas cercanas** (chip): the stops within
+/// [NearbyRoutesFilter.radiusMeters] of the passenger, on the map
+/// ([PassengerMapHandle.showNearbyStops]) and in the sheet, with the routes
+/// that stop at each one ([nearbyStops], from the catalogue already loaded).
+/// Tapping one of those routes draws it.
 class PassengerHomeScreen extends StatefulWidget {
   const PassengerHomeScreen({
     super.key,
@@ -38,7 +46,12 @@ class PassengerHomeScreen extends StatefulWidget {
     this.routesFilter = const NearbyRoutesFilter(),
     this.liveBusesFactory,
     this.clock = DateTime.now,
+    this.initialSelection,
   });
+
+  /// A route to draw as soon as the screen opens ("Ver ruta" from the
+  /// "Favoritos" tab).
+  final RouteSelection? initialSelection;
 
   /// Buses of the selected direction; by default [RouteLiveBuses] with the
   /// real GPS trackers.
@@ -68,7 +81,6 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   static const _chips = [
     MapQuickChip(Icons.signpost_outlined, 'Paradas cercanas'),
     MapQuickChip(Icons.directions_bus_outlined, 'Buses en curso'),
-    MapQuickChip(Icons.star_border, 'Favoritos'),
   ];
 
   static const _sheetMin = 0.12;
@@ -114,6 +126,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   RoutePattern? _selectedPattern;
   PatternStop? _tappedStop;
 
+  /// Today's fare of each route by id (`null` = it has none). Best effort:
+  /// a route whose fare failed to load just shows no price.
+  final Map<String, RouteFare?> _fares = {};
+
+  /// Weekly departures of each direction by pattern id; a failed request
+  /// leaves it out (the panel says the timetable is unavailable).
+  final Map<String, List<RouteSchedule>> _schedules = {};
+
+  /// Directions whose timetable is being requested.
+  final Set<String> _schedulesLoading = {};
+
   /// Buses running on [_selectedPattern] (`null` without a selection).
   RouteLiveBuses? _liveBuses;
 
@@ -126,6 +149,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   /// Center on the user only the first time a position arrives.
   bool _centeredOnUser = false;
 
+  /// "Paradas cercanas" is shown (in the sheet and on the map).
+  bool _nearbyMode = false;
+
+  /// The stops near the passenger; `null` until the routes are loaded.
+  List<NearbyStop>? _nearbyStops;
+
+  /// The nearby stop tapped (list or map).
+  String? _nearbySelectedId;
+
   bool get _hasLocation =>
       _access == LocationAccess.granted && _location != null;
 
@@ -136,6 +168,12 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     _loadUserName();
     _initLocation(request: true);
     _loadRoutes();
+    final selection = widget.initialSelection;
+    if (selection != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showSelection(selection);
+      });
+    }
   }
 
   @override
@@ -192,18 +230,23 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   void _onLocation(DeviceLocation location) {
     if (!mounted) return;
     setState(() => _location = location);
+    if (_nearbyMode) _updateNearbyStops();
     final map = _map;
     if (map == null) return;
     map.showUserLocation(location);
-    // With a route on screen the camera belongs to the route.
-    if (!_centeredOnUser && _selectedRoute == null) _centerOn(map, location);
+    // With a route (or the nearby stops) on screen the camera belongs to it.
+    if (!_centeredOnUser && _selectedRoute == null && !_nearbyMode) {
+      _centerOn(map, location);
+    }
   }
 
   void _onMapReady(PassengerMapHandle map) {
     _map = map;
     final location = _location;
     if (location != null) map.showUserLocation(location);
-    if (_selectedPattern != null) {
+    if (_nearbyMode) {
+      _drawNearbyStops(fit: true);
+    } else if (_selectedPattern != null) {
       _drawSelection();
     } else if (location != null) {
       _centerOn(map, location);
@@ -248,10 +291,46 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       final routes = await _operations.routesWithPatterns();
       if (!mounted) return;
       setState(() => _routes = routes);
+      unawaited(_loadFares(routes));
+      if (_nearbyMode) {
+        _updateNearbyStops();
+        _drawNearbyStops(fit: true);
+      }
     } on ApiException catch (e) {
       if (mounted) setState(() => _routesError = e.message);
     } finally {
       if (mounted) setState(() => _routesLoading = false);
+    }
+  }
+
+  /// The fare of every route of the list, all at the same time (each request
+  /// takes a moment; the service caches them).
+  Future<void> _loadFares(List<TransitRoute> routes) async {
+    Future<void> fareOf(TransitRoute route) async {
+      if (_fares.containsKey(route.id)) return;
+      try {
+        final fares = await _operations.routeFares(route.id);
+        if (mounted) {
+          setState(() => _fares[route.id] = fareOn(fares, widget.clock()));
+        }
+      } on ApiException catch (_) {}
+    }
+
+    await Future.wait([for (final route in routes) fareOf(route)]);
+  }
+
+  /// The weekly departures of [pattern], once.
+  Future<void> _loadSchedules(RoutePattern pattern) async {
+    final id = pattern.id;
+    if (_schedules.containsKey(id) || _schedulesLoading.contains(id)) return;
+    setState(() => _schedulesLoading.add(id));
+    try {
+      final schedules = await _operations.patternSchedules(id);
+      if (mounted) setState(() => _schedules[id] = schedules);
+    } on ApiException catch (_) {
+      // Shown as "No se pudo cargar el horario."; retried on the next visit.
+    } finally {
+      if (mounted) setState(() => _schedulesLoading.remove(id));
     }
   }
 
@@ -294,6 +373,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   /// Draws [route] on the map. The direction shown first is [pattern], or the
   /// one with the stop closest to the passenger, or the first one.
   void _selectRoute(TransitRoute route, {RoutePattern? pattern}) {
+    _closeNearbyStops(recenter: false);
     final location = _location;
     final nearest = _hasLocation && location != null
         ? NearbyRoutesFilter.closest(
@@ -310,6 +390,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           (route.patterns.isEmpty ? null : route.patterns.first);
       _tappedStop = null;
     });
+    // Usually loaded with the list; not for a route that came from elsewhere.
+    unawaited(_loadFares([route]));
     _drawSelection();
     _collapseSheet(_sheetRoute);
   }
@@ -347,6 +429,116 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     final location = stop.location;
     if (location == null) return;
     _map?.moveTo(location.latitude, location.longitude, zoom: _stopZoom);
+  }
+
+  // --- Nearby stops ("Paradas cercanas") -----------------------------------------
+
+  /// Shows the stops near the passenger. Without location, offers to turn it
+  /// on (the stops depend on where the passenger is).
+  void _openNearbyStops() {
+    if (!_hasLocation) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Activa tu ubicación para ver las paradas cercanas.',
+            ),
+            behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label:
+                  _access == LocationAccess.deniedForever ||
+                      _access == LocationAccess.serviceDisabled
+                  ? 'Ajustes'
+                  : 'Permitir',
+              onPressed: _fixLocationAccess,
+            ),
+          ),
+        );
+      return;
+    }
+    if (_selectedRoute != null) _clearSelection();
+    setState(() {
+      _nearbyMode = true;
+      _nearbySelectedId = null;
+    });
+    _updateNearbyStops();
+    _drawNearbyStops(fit: true);
+    _collapseSheet(_sheetInitial);
+  }
+
+  /// Leaves "Paradas cercanas": hides the stops and, when [recenter], goes
+  /// back to the passenger.
+  void _closeNearbyStops({bool recenter = true}) {
+    if (!_nearbyMode) return;
+    setState(() {
+      _nearbyMode = false;
+      _nearbyStops = null;
+      _nearbySelectedId = null;
+    });
+    _map?.showNearbyStops(const []);
+    final map = _map;
+    final location = _location;
+    if (recenter && map != null && location != null) _centerOn(map, location);
+  }
+
+  /// Recomputes the stops from the loaded routes and the current location.
+  void _updateNearbyStops() {
+    final routes = _routes;
+    final location = _location;
+    if (routes == null || location == null) return;
+    setState(
+      () => _nearbyStops = nearbyStops(
+        latitude: location.latitude,
+        longitude: location.longitude,
+        routes: routes,
+        radiusMeters: widget.routesFilter.radiusMeters,
+      ),
+    );
+    _drawNearbyStops();
+  }
+
+  void _drawNearbyStops({bool fit = false}) {
+    final map = _map;
+    final stops = _nearbyStops;
+    if (map == null || stops == null) return;
+    map.showNearbyStops(stops, selectedId: _nearbySelectedId);
+    if (!fit || stops.isEmpty) return;
+    final location = _location;
+    map.fitBounds([
+      for (final stop in stops) stop.location,
+      if (location != null) GeoPoint(location.latitude, location.longitude),
+    ], padding: _nearbyPadding());
+  }
+
+  /// Free space for the stops: below the search bar, above the sheet.
+  EdgeInsets _nearbyPadding() {
+    final top = MediaQuery.paddingOf(context).top + _topOverlayHeight;
+    final bottom = _bodyHeight * _sheetInitial + 24;
+    return EdgeInsets.fromLTRB(40, top, 72, bottom);
+  }
+
+  /// A nearby stop was tapped (list or map): bigger on the map, centered.
+  void _selectNearbyStop(String stopId) {
+    final stop = _nearbyStops?.where((s) => s.stopId == stopId).firstOrNull;
+    if (stop == null) return;
+    setState(() => _nearbySelectedId = stopId);
+    _drawNearbyStops();
+    _map?.moveTo(
+      stop.location.latitude,
+      stop.location.longitude,
+      zoom: _stopZoom,
+    );
+  }
+
+  /// One of the routes of a nearby stop: draws that direction with the stop
+  /// highlighted.
+  void _showStopRoute(NearbyStop stop, StopRoute stopRoute) {
+    _selectRoute(stopRoute.route, pattern: stopRoute.pattern);
+    final patternStop = stopRoute.pattern.stops
+        .where((s) => s.stopId == stop.stopId)
+        .firstOrNull;
+    if (patternStop != null) _onStopTap(patternStop);
   }
 
   // --- Live buses of the selected direction --------------------------------------
@@ -417,6 +609,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       return;
     }
     _startLiveBuses(pattern);
+    unawaited(_loadSchedules(pattern));
     if (map == null) return;
     map.showRoute(pattern);
     _drawBuses();
@@ -465,7 +658,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
       case 0:
         return; // already on Home
       case 1:
-        Navigator.pushReplacementNamed(context, '/passenger/trips');
+        Navigator.pushReplacementNamed(context, '/passenger/favorites');
         return;
       case 2:
         Navigator.pushReplacementNamed(context, '/passenger/account');
@@ -477,26 +670,17 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   void _openSearch() => Navigator.pushNamed(context, '/passenger/search');
 
   Future<void> _onChipTap(MapQuickChip chip) async {
-    // Route -> buses running now -> live tracking, or "Ver ruta" back here.
-    // Same for "Mis favoritos": favorite → route → "Ver ruta" back here.
-    final screen = switch (chip.label) {
-      'Buses en curso' => '/passenger/buses',
-      'Favoritos' => '/passenger/favorites',
-      _ => null,
-    };
-    if (screen != null) {
-      final result = await Navigator.pushNamed<Object?>(context, screen);
-      if (result is RouteSelection && mounted) _showSelection(result);
-      return;
+    switch (chip.label) {
+      case 'Paradas cercanas':
+        _openNearbyStops();
+      case 'Buses en curso':
+        // Route -> buses running now -> live tracking, or "Ver ruta" back here.
+        final result = await Navigator.pushNamed<Object?>(
+          context,
+          '/passenger/buses',
+        );
+        if (result is RouteSelection && mounted) _showSelection(result);
     }
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text('${chip.label}: próximamente.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
   }
 
   /// "Ver ruta" from "Buses en curso": prefer the loaded route (same data as
@@ -517,6 +701,22 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
   // --- UI ------------------------------------------------------------------------
 
   List<Widget> _sheetChildren(MapOverlayColors colors) {
+    if (_nearbyMode) {
+      return [
+        NearbyStopsPanel(
+          colors: colors,
+          stops: _nearbyStops,
+          loading: _routesLoading,
+          error: _routesError,
+          radiusMeters: widget.routesFilter.radiusMeters,
+          selectedId: _nearbySelectedId,
+          onStopSelected: (stop) => _selectNearbyStop(stop.stopId),
+          onRouteSelected: _showStopRoute,
+          onRetry: _loadRoutes,
+          onClose: _closeNearbyStops,
+        ),
+      ];
+    }
     final route = _selectedRoute;
     if (route != null) {
       return [
@@ -531,6 +731,9 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           now: widget.clock(),
           onOpenBus: _openLiveTracking,
           onStopSelected: _onStopSelected,
+          fare: _fares[route.id],
+          schedules: _schedules[_selectedPattern?.id],
+          timetableLoading: _schedulesLoading.contains(_selectedPattern?.id),
         ),
       ];
     }
@@ -541,6 +744,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         colors: colors,
         mode: _listMode,
         entries: _entries(),
+        fares: _fares,
         loading: _routesLoading,
         error: _routesError,
         canShowNearby: _hasLocation,
@@ -569,6 +773,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           onReady: _onMapReady,
           onStopTap: _onStopTap,
           onBusTap: _openLiveTracking,
+          onNearbyStopTap: _selectNearbyStop,
           // Below the search bar and the chips.
           compassTopMargin: topInset + 128,
         ),
@@ -585,11 +790,16 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     final routeShown = _selectedRoute != null;
     final showBanner = _access != null && _access != LocationAccess.granted;
 
-    // Android "back" closes the shown route first.
+    // Android "back" closes the shown route (or the nearby stops) first.
     return PopScope(
-      canPop: !routeShown,
+      canPop: !routeShown && !_nearbyMode,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && routeShown) _clearSelection();
+        if (didPop) return;
+        if (routeShown) {
+          _clearSelection();
+        } else if (_nearbyMode) {
+          _closeNearbyStops();
+        }
       },
       child: Scaffold(
         bottomNavigationBar: PassengerBottomNav(

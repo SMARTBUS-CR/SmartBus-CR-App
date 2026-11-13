@@ -9,6 +9,9 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 import '../../../core/config/map_config.dart';
 import '../../../core/location/location_service.dart';
 import '../../operations/models/operations_models.dart';
+import '../../operations/services/nearby_stops.dart';
+
+export '../../operations/services/nearby_stops.dart' show NearbyStop;
 
 /// What the passenger home screen can do with the map, without depending on
 /// MapLibre (so tests can plug in a fake map).
@@ -46,7 +49,38 @@ abstract interface class PassengerMapHandle {
     List<GeoPoint> points, {
     EdgeInsets padding = EdgeInsets.zero,
   });
+
+  /// Draws the stops near the passenger ("Paradas cercanas"), replacing the
+  /// ones drawn before; empty hides them. [selectedId] is drawn bigger. A tap
+  /// on one reports its [NearbyStop.stopId]
+  /// ([PassengerMapOptions.onNearbyStopTap]).
+  Future<void> showNearbyStops(List<NearbyStop> stops, {String? selectedId});
 }
+
+/// The stops of "Paradas cercanas" as one GeoJSON FeatureCollection: `id` =
+/// `nearby-<stopId>`, `properties.selected` = it is [selectedId]. Kept apart
+/// from MapLibre so it can be unit-tested.
+Map<String, dynamic> nearbyStopsFeatureCollection(
+  List<NearbyStop> stops, {
+  String? selectedId,
+}) => {
+  'type': 'FeatureCollection',
+  'features': [
+    for (final stop in stops)
+      {
+        'type': 'Feature',
+        'id': '$nearbyStopIdPrefix${stop.stopId}',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [stop.location.longitude, stop.location.latitude],
+        },
+        'properties': {'selected': stop.stopId == selectedId},
+      },
+  ],
+};
+
+/// Prefix of the GeoJSON id of each nearby stop marker.
+const nearbyStopIdPrefix = 'nearby-';
 
 /// Line + numbered stops to draw for a pattern, as one GeoJSON
 /// FeatureCollection. Kept apart from MapLibre so it can be unit-tested.
@@ -152,11 +186,16 @@ class PassengerMapOptions {
     this.compassTopMargin = 16,
     this.onStopTap,
     this.onBusTap,
+    this.onNearbyStopTap,
   });
 
   /// The passenger tapped a bus pin drawn with [PassengerMapHandle.showBuses];
   /// receives its [BusMarker.id].
   final ValueChanged<String>? onBusTap;
+
+  /// The passenger tapped a stop drawn with
+  /// [PassengerMapHandle.showNearbyStops]; receives its [NearbyStop.stopId].
+  final ValueChanged<String>? onNearbyStopTap;
 
   /// Streets or satellite base map.
   final MapMode mode;
@@ -209,6 +248,9 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
   static const _routeStopsLayer = 'smartbus-route-stops';
   static const _routeStopLabelsLayer = 'smartbus-route-stop-labels';
   static const _routeArrowIcon = 'smartbus-route-arrow';
+  static const _nearbySource = 'smartbus-nearby-stops';
+  static const _nearbyHaloLayer = 'smartbus-nearby-stops-halo';
+  static const _nearbyLayer = 'smartbus-nearby-stops-dots';
 
   /// `SmartBusColors.verdePasajero`.
   static const _brandColor = '#01856D';
@@ -229,6 +271,8 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
   List<BusMarker> _buses = const [];
   RoutePattern? _route;
   PatternStop? _selectedStop;
+  List<NearbyStop> _nearby = const [];
+  String? _nearbySelected;
 
   @override
   void dispose() {
@@ -276,6 +320,8 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
 
     // Route first: the user dot and the bus are drawn on top of it.
     await _addRouteLayers(controller, ratio);
+    if (!mounted) return;
+    await _addNearbyLayers(controller);
     if (!mounted) return;
 
     await controller.addGeoJsonSource(_userSource, _featureCollection(null));
@@ -349,6 +395,7 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
     if (location != null) await _drawUser(location);
     if (_buses.isNotEmpty) await _drawBuses();
     if (_route != null) await _drawRoute();
+    if (_nearby.isNotEmpty) await _drawNearby();
 
     if (!_readyNotified && mounted) {
       _readyNotified = true;
@@ -573,6 +620,61 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
     routeFeatureCollection(_route, selected: _selectedStop),
   );
 
+  // --- Nearby stops -------------------------------------------------------------
+
+  /// A soft halo under the selected stop and a turquoise dot per stop
+  /// (tappable), under the user dot and the buses.
+  Future<void> _addNearbyLayers(MapLibreMapController controller) async {
+    const selected = [
+      '==',
+      ['get', 'selected'],
+      true,
+    ];
+    await controller.addGeoJsonSource(
+      _nearbySource,
+      nearbyStopsFeatureCollection(const []),
+    );
+    await controller.addCircleLayer(
+      _nearbySource,
+      _nearbyHaloLayer,
+      const CircleLayerProperties(
+        circleRadius: 20,
+        circleColor: _routeStartColor,
+        circleOpacity: 0.25,
+      ),
+      filter: selected,
+      enableInteraction: false,
+    );
+    await controller.addCircleLayer(
+      _nearbySource,
+      _nearbyLayer,
+      const CircleLayerProperties(
+        circleRadius: ['case', selected, 10, 7],
+        circleColor: _routeStartColor,
+        circleStrokeColor: '#FFFFFF',
+        circleStrokeWidth: 3,
+      ),
+      // Tappable: selects the stop (onNearbyStopTap).
+      enableInteraction: true,
+    );
+  }
+
+  @override
+  Future<void> showNearbyStops(
+    List<NearbyStop> stops, {
+    String? selectedId,
+  }) async {
+    if (identical(stops, _nearby) && selectedId == _nearbySelected) return;
+    _nearby = List.unmodifiable(stops);
+    _nearbySelected = selectedId;
+    if (_styleReady) await _drawNearby();
+  }
+
+  Future<void> _drawNearby() => _controller!.setGeoJsonSource(
+    _nearbySource,
+    nearbyStopsFeatureCollection(_nearby, selectedId: _nearbySelected),
+  );
+
   /// PNG of the direction chevron drawn along the line (white with a soft
   /// shadow, pointing right: MapLibre rotates it with the line).
   static Future<Uint8List> _arrowPng(double ratio) async {
@@ -620,6 +722,12 @@ class _MapLibrePassengerMapState extends State<MapLibrePassengerMap>
   ) {
     if (id.startsWith(busIdPrefix)) {
       widget.options.onBusTap?.call(id.substring(busIdPrefix.length));
+      return;
+    }
+    if (id.startsWith(nearbyStopIdPrefix)) {
+      widget.options.onNearbyStopTap?.call(
+        id.substring(nearbyStopIdPrefix.length),
+      );
       return;
     }
     final route = _route;

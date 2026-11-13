@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/network/api_exception.dart';
 import '../../core/theme.dart';
+import '../../widgets/passenger_bottom_nav.dart';
 import '../../widgets/smartbus_header.dart';
 import '../operations/models/operations_models.dart';
 import '../operations/services/operations_service.dart';
@@ -10,9 +11,10 @@ import 'favorite_star.dart';
 import 'models/favorite_route.dart';
 import 'services/favorites_controller.dart';
 
-/// "Mis favoritos" (`/passenger/favorites`): the routes the passenger saved,
-/// most recent first. Tap a route to open it ("Ver ruta" there closes this
-/// screen with a [RouteSelection], so the home map draws it).
+/// "Mis favoritos" (`/passenger/favorites`, the **Favoritos** tab of the
+/// bottom bar): the routes the passenger saved, most recent first. Tap a route
+/// to open it; "Ver ruta" there goes to the home map with a [RouteSelection],
+/// which draws it.
 ///
 /// Removing:
 /// - one route: its star, or swipe it ("Deshacer" brings it back);
@@ -97,7 +99,29 @@ class _FavoriteRoutesScreenState extends State<FavoriteRoutesScreen> {
         ),
       ),
     );
-    if (selection != null && mounted) Navigator.pop(context, selection);
+    if (selection == null || !mounted) return;
+    // "Ver ruta": back to the map that opened this screen, or — as the
+    // "Favoritos" tab — to the home map, which draws the route.
+    if (Navigator.canPop(context)) {
+      Navigator.pop(context, selection);
+    } else {
+      Navigator.pushReplacementNamed(
+        context,
+        '/passenger/home',
+        arguments: selection,
+      );
+    }
+  }
+
+  void _onTabTap(int index) {
+    switch (index) {
+      case 0:
+        Navigator.pushReplacementNamed(context, '/passenger/home');
+      case 1:
+        return; // already on Favoritos
+      case 2:
+        Navigator.pushReplacementNamed(context, '/passenger/account');
+    }
   }
 
   // --- Edit mode ------------------------------------------------------------
@@ -255,6 +279,11 @@ class _FavoriteRoutesScreenState extends State<FavoriteRoutesScreen> {
       },
       child: Scaffold(
         backgroundColor: SmartBusColors.blanco,
+        // A tab of its own ("Favoritos"); pushed over another screen it is a
+        // plain page with "back".
+        bottomNavigationBar: Navigator.canPop(context)
+            ? null
+            : PassengerBottomNav(currentIndex: 1, onTap: _onTabTap),
         body: Column(
           children: [
             SmartBusHeader(

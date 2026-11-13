@@ -33,7 +33,7 @@ class PassengerAccountScreen extends StatelessWidget {
         Navigator.pushReplacementNamed(context, '/passenger/home');
         return;
       case 1:
-        Navigator.pushReplacementNamed(context, '/passenger/trips');
+        Navigator.pushReplacementNamed(context, '/passenger/favorites');
         return;
       case 2:
         return; // already on Account

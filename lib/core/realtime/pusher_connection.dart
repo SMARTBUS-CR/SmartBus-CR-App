@@ -72,6 +72,13 @@ class _IoRealtimeSocket implements RealtimeSocket {
 /// - Reconnects by itself when the socket drops, waiting a bit longer each
 ///   time ([reconnectDelays]). Events sent while disconnected are lost
 ///   (Reverb keeps no history): listen to [state] to refresh on reconnect.
+/// - **A channel only receives events once the server confirms it**
+///   (`pusher_internal:subscription_succeeded`, see [subscribed]). An open
+///   socket is not enough: if the signature request fails (the Gateway is
+///   slow, a 5xx…) or the server answers `pusher:subscription_error`, the
+///   subscription is tried again ([subscribeRetryDelays]) while the socket
+///   stays open. Without this, one failed signature left the channel silent
+///   for good and the passenger saw the bus only every 10–15 s (polling).
 class PusherConnection {
   PusherConnection({
     required this.uri,
@@ -84,9 +91,23 @@ class PusherConnection {
       Duration(seconds: 10),
       Duration(seconds: 30),
     ],
+    this.subscribeRetryDelays = const [
+      Duration(seconds: 2),
+      Duration(seconds: 5),
+      Duration(seconds: 10),
+      Duration(seconds: 30),
+    ],
     this.pongTimeout = const Duration(seconds: 30),
     this.connectTimeout = const Duration(seconds: 10),
   }) : _connector = connector ?? connectIoWebSocket;
+
+  /// Waits between attempts to subscribe a channel that failed (the last one
+  /// repeats). Reset when the channel is confirmed or the socket reconnects.
+  final List<Duration> subscribeRetryDelays;
+
+  /// Channels the server confirmed on the current socket: only these receive
+  /// events. Emptied when the socket drops.
+  final ValueNotifier<Set<String>> subscribed = ValueNotifier(const {});
 
   /// Max wait to open the socket. With a bad signal `WebSocket.connect` can
   /// hang for minutes; after this it counts as a failed attempt and the next
@@ -127,6 +148,11 @@ class PusherConnection {
   bool _wanted = false;
   bool _disposed = false;
 
+  /// Pending re-subscription of a channel that failed, and how many times it
+  /// failed in a row.
+  final Map<String, Timer> _retryTimers = {};
+  final Map<String, int> _retryAttempts = {};
+
   /// Opens the connection (no-op when already open or opening).
   void connect() {
     if (_disposed) return;
@@ -146,6 +172,8 @@ class PusherConnection {
 
   void unsubscribe(String channel) {
     if (!_channels.remove(channel)) return;
+    _cancelRetry(channel);
+    _setSubscribed(channel, false);
     if (_socketId != null) {
       _send('pusher:unsubscribe', {'channel': channel});
     }
@@ -161,6 +189,7 @@ class PusherConnection {
     await _events.close();
     await _errors.close();
     state.dispose();
+    subscribed.dispose();
   }
 
   // --- internals --------------------------------------------------------
@@ -214,7 +243,18 @@ class PusherConnection {
       case 'pusher:error':
         _onServerError(data);
       case 'pusher_internal:subscription_succeeded':
-        break;
+        final channel = message['channel'];
+        if (channel is String && _channels.contains(channel)) {
+          _cancelRetry(channel);
+          _retryAttempts.remove(channel);
+          _setSubscribed(channel, true);
+        }
+      case 'pusher:subscription_error':
+        // The server refused the subscription (e.g. a bad signature).
+        final channel = message['channel'];
+        if (channel is String && _channels.contains(channel)) {
+          _onSubscribeFailed(channel, data);
+        }
       case String name when !name.startsWith('pusher'):
         final channel = message['channel'];
         if (channel is String && _channels.contains(channel)) {
@@ -232,6 +272,7 @@ class PusherConnection {
       _activityTimeout = Duration(seconds: timeout.toInt());
     }
     _attempt = 0;
+    _retryAttempts.clear(); // a new socket: start the waits again
     _touch();
     _setState(RealtimeConnectionState.connected);
     for (final channel in _channels.toList()) {
@@ -259,10 +300,45 @@ class PusherConnection {
       if (_socketId != socketId || !_channels.contains(channel)) return;
       _send('pusher:subscribe', {'channel': channel, 'auth': ?auth});
     } catch (error) {
-      if (!_errors.isClosed) {
-        _errors.add(RealtimeSubscriptionError(channel, error));
-      }
+      if (_socketId != socketId || !_channels.contains(channel)) return;
+      _onSubscribeFailed(channel, error);
     }
+  }
+
+  /// [channel] could not be subscribed: reported, and tried again after a
+  /// growing wait while this socket stays open (a new socket subscribes every
+  /// channel anyway).
+  void _onSubscribeFailed(String channel, Object error) {
+    if (!_errors.isClosed) {
+      _errors.add(RealtimeSubscriptionError(channel, error));
+    }
+    if (_disposed || subscribeRetryDelays.isEmpty) return;
+    final attempt = _retryAttempts[channel] ?? 0;
+    _retryAttempts[channel] = attempt + 1;
+    final delay =
+        subscribeRetryDelays[attempt.clamp(0, subscribeRetryDelays.length - 1)];
+    final socketId = _socketId;
+    _cancelRetry(channel);
+    _retryTimers[channel] = Timer(delay, () {
+      _retryTimers.remove(channel);
+      if (_disposed ||
+          socketId == null ||
+          _socketId != socketId ||
+          !_channels.contains(channel) ||
+          subscribed.value.contains(channel)) {
+        return;
+      }
+      unawaited(_subscribe(channel, socketId));
+    });
+  }
+
+  void _cancelRetry(String channel) => _retryTimers.remove(channel)?.cancel();
+
+  void _setSubscribed(String channel, bool value) {
+    if (_disposed || subscribed.value.contains(channel) == value) return;
+    subscribed.value = value
+        ? {...subscribed.value, channel}
+        : ({...subscribed.value}..remove(channel));
   }
 
   void _send(String event, Map<String, dynamic> data) {
@@ -305,6 +381,12 @@ class PusherConnection {
     _activityTimer?.cancel();
     _activityTimer = null;
     _socketId = null;
+    for (final timer in _retryTimers.values) {
+      timer.cancel();
+    }
+    _retryTimers.clear();
+    // A new socket must be confirmed again.
+    if (!_disposed && subscribed.value.isNotEmpty) subscribed.value = const {};
     final sub = _socketSub;
     final socket = _socket;
     _socketSub = null;

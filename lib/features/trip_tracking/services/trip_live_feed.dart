@@ -30,6 +30,7 @@ abstract interface class TripLiveFeed {
 class ReverbTripFeed implements TripLiveFeed {
   ReverbTripFeed(this._connection) {
     _connection.state.addListener(_onState);
+    _connection.subscribed.addListener(_onState);
     _eventSub = _connection.events.listen(_onEvent);
     _errorSub = _connection.subscriptionErrors.listen(
       (e) => _rejections.add(e.error),
@@ -72,15 +73,29 @@ class ReverbTripFeed implements TripLiveFeed {
 
   static String channelFor(String tripId) => 'private-trip.$tripId';
 
+  /// The trip's channel, once [follow] was called.
+  String? _channel;
+
   @override
   void follow(String tripId) {
+    final channel = channelFor(tripId);
+    _channel = channel;
     _connection
-      ..subscribe(channelFor(tripId))
+      ..subscribe(channel)
       ..connect();
+    _onState();
   }
 
-  void _onState() => _connected.value =
-      _connection.state.value == RealtimeConnectionState.connected;
+  /// "Live" only when the server **confirmed** the trip's channel: an open
+  /// socket whose subscription failed receives nothing, and the tracker must
+  /// keep asking the position meanwhile.
+  void _onState() {
+    final channel = _channel;
+    _connected.value =
+        _connection.state.value == RealtimeConnectionState.connected &&
+        channel != null &&
+        _connection.subscribed.value.contains(channel);
+  }
 
   void _onEvent(RealtimeEvent event) {
     if (event.event != eventName) return;
@@ -94,6 +109,7 @@ class ReverbTripFeed implements TripLiveFeed {
   @override
   Future<void> dispose() async {
     _connection.state.removeListener(_onState);
+    _connection.subscribed.removeListener(_onState);
     await _eventSub.cancel();
     await _errorSub.cancel();
     await _connection.dispose();

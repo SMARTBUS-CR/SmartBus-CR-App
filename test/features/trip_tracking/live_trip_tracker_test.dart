@@ -219,7 +219,8 @@ void main() {
     });
   });
 
-  test('10 s without positions -> asks right away: finished in <= 15 s', () {
+  test('7 s without positions (a missed reading) -> asks right away: '
+      'finished in ~7 s', () {
     fakeAsync((async) {
       gps.next = _tracking(position: _at(0), age: 0);
       final tracker = build(async)..start();
@@ -227,10 +228,10 @@ void main() {
       feed.isConnected = true;
 
       gps.next = _tracking(status: TripStatus.completed, position: _at(0));
-      async.elapse(const Duration(seconds: 5));
-      expect(gps.calls, 1); // 5 s of silence is still normal
+      async.elapse(const Duration(seconds: 6));
+      expect(gps.calls, 1); // one reading every ~5 s: 6 s is still normal
 
-      async.elapse(const Duration(seconds: 5));
+      async.elapse(const Duration(seconds: 1));
       expect(gps.calls, 2);
       expect(tracker.state.value.phase, LiveTripPhase.finished);
       tracker.dispose();
@@ -247,7 +248,7 @@ void main() {
       // Connected, but no events arrive (the socket is up, the broadcast is
       // not): the bus must still move.
       async.elapse(const Duration(seconds: 60));
-      // Initial GET + every 5 s from the 10 s of silence: 10, 15, …, 60.
+      // Initial GET + every 5 s from the 7 s of silence: 7, 12, …, 57.
       expect(gps.calls, 12);
       tracker.dispose();
     });
@@ -263,6 +264,24 @@ void main() {
       async.elapse(const Duration(seconds: 60));
       // Initial GET + at 15, 30, 45 and 60 s.
       expect(gps.calls, 5);
+      tracker.dispose();
+    });
+  });
+
+  test('socket open but channel not confirmed: polls every 5 s (not after '
+      '10–15 s)', () {
+    fakeAsync((async) {
+      gps.next = _tracking(position: _at(0), age: 0);
+      final tracker = build(async)..start();
+      async.flushMicrotasks();
+      // ReverbTripFeed reports "connected" only once the trip's channel is
+      // confirmed; until then the tracker is not live.
+      feed.isConnected = false;
+
+      gps.next = _tracking(position: _at(5, lat: 9.99), age: 0);
+      async.elapse(const Duration(seconds: 5));
+      expect(gps.calls, 2);
+      expect(tracker.state.value.position!.latitude, 9.99);
       tracker.dispose();
     });
   });

@@ -28,7 +28,7 @@ ya inicializado (un solo repo para ambas apps, como lo tienen planteado).
 | `auth/register_screen.dart` | Registro de pasajero (issue #12): ruta `/register` → `/verify-email` (sin sesión hasta verificar el correo) |
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal), RF-09 (búsqueda) |
 | `passenger/route_search_screen.dart` | RF-09 |
-| `passenger/favorite_routes_screen.dart` | "Mis favoritos" (`/passenger/favorites`, chip "Favoritos" del inicio): rutas guardadas; quitar una (estrella o deslizar), varias ("Editar" → "Eliminar (N)") o todas, con confirmación y "Deshacer" (sección 11) |
+| `passenger/favorite_routes_screen.dart` | "Mis favoritos" (`/passenger/favorites`, pestaña **Favoritos** de la barra inferior): rutas guardadas; quitar una (estrella o deslizar), varias ("Editar" → "Eliminar (N)") o todas, con confirmación y "Deshacer" (sección 11) |
 | `passenger/passenger_home_screen.dart` | RF-08 (mapa principal); la barra "¿A dónde vas?" abre la búsqueda |
 | `passenger/route_search_screen.dart` | RF-09: "Buscar ruta" por nombre, número o destino (sección 12) |
 | `passenger/passenger_account_screen.dart` | Perfil del pasajero ("Mi Cuenta"): datos guardados al instante + refresco con `fetchCurrentUser()`; 401 → login; sin red → "Reintentar". Entradas "Editar perfil" y "Cambiar contraseña". Botón "Eliminar cuenta" con confirmación (solo UI: aún no llama al backend) |
@@ -268,10 +268,11 @@ abrir "Rastreando tu bus"
   → GET  /gps/trips/{id}/location             estado del viaje + posición actual
   → WebSocket a Reverb (wss://<gateway>/app/<KEY>)
   → POST /gps/broadcasting/auth               el Gateway valida el token y firma
-  → suscribe private-trip.{id}
+  → suscribe private-trip.{id}  (en vivo solo cuando Reverb lo confirma;
+                                  si la firma falla, reintenta a los 2, 5, 10, 30 s)
   → GET  ops/public/trips/{id} → GET ops/route-patterns/{id}   la ruta del viaje
   → cada BusLocationUpdated: mueve el bus (solo si es más nuevo que el actual)
-  → 10 s sin posiciones: repite el GET cada 5 s  →  completed / cancelled = fin
+  → 7 s sin posiciones: repite el GET cada 5 s  →  completed / cancelled = fin
   → se cae la conexión: reconecta sola y repite el GET
   → salir de la pantalla: cierra la conexión
 ```
@@ -281,17 +282,27 @@ abrir "Rastreando tu bus"
 2. **En vivo:** cada `BusLocationUpdated` mueve el marcador. Los eventos pueden
    llegar desordenados en redes móviles: se queda siempre la posición con el
    **mayor `recorded_at`** y se ignoran las viejas o repetidas.
-3. **Las posiciones no llegan solas (regla de los 10 s):** el conductor envía
-   cada ~5 s, así que **10 s sin posiciones** ya es raro (el WebSocket se cayó,
-   o está conectado pero los eventos no llegan). Entonces la app repite el
-   `GET` **cada 5 s**, al mismo ritmo del conductor: el bus **sigue
-   moviéndose** aunque el tiempo real falle (el GPS guarda siempre la última
-   posición aceptada, aunque no la persista). Si `status` es `completed` o
+3. **"En vivo" = canal confirmado, no solo socket abierto.** Un WebSocket
+   abierto no recibe nada si la suscripción falló: la firma
+   (`broadcasting/auth`, Gateway → GPS, 2–4 s en Render) puede fallar por un
+   timeout o un 5xx, o Reverb puede responder `pusher:subscription_error`.
+   `PusherConnection` cuenta un canal como suscrito solo con
+   `pusher_internal:subscription_succeeded` (`subscribed`) y, si falla,
+   **reintenta** a los 2, 5, 10 y 30 s con el mismo socket. Mientras tanto
+   `ReverbTripFeed.connected` es `false` y la app consulta por `GET`. Antes una
+   sola firma fallida dejaba el canal mudo y "en vivo" a la vez: el pasajero
+   veía el bus cada 10–15 s.
+4. **Las posiciones no llegan solas (regla de los 7 s):** el conductor envía
+   cada ~5 s, así que **7 s sin posiciones** (una lectura perdida) ya es raro.
+   Entonces la app repite el `GET` **cada 5 s**, al mismo ritmo del conductor
+   (las condiciones se revisan cada segundo): el bus **sigue moviéndose**
+   aunque el tiempo real falle (el GPS guarda siempre la última posición
+   aceptada, aunque no la persista). Si `status` es `completed` o
    `cancelled`, muestra "Viaje finalizado" / "Viaje cancelado" y sale del
-   canal: el fin del viaje se ve en **~10–15 s**, sin aviso del Dashboard.
+   canal: el fin del viaje se ve en **~7–10 s**, sin aviso del Dashboard.
    Mientras las posiciones llegan normalmente **no se hace ninguna consulta**.
    Un viaje que aún no sale se consulta cada 15 s.
-4. **Reconexión:** si se cae el WebSocket, reconecta solo (espera 1, 2, 5, 10 y
+5. **Reconexión:** si se cae el WebSocket, reconecta solo (espera 1, 2, 5, 10 y
    30 s entre intentos) y al volver repite el `GET`, porque **Reverb no guarda
    historial**: lo enviado mientras estaba desconectado se perdió.
 5. **Sin tiempo real** (sin `REVERB_APP_KEY` o sin conexión al WebSocket): la
@@ -400,8 +411,9 @@ de -dev ya es el valor por defecto (`ApiConfig._devReverbAppKey`).
 
 | Qué | Archivo |
 |---|---|
-| Protocolo Pusher: suscripción firmada, eventos, ping, reconexión, error 4001 | `test/core/realtime/pusher_connection_test.dart` |
-| Tracker: orden de eventos, frescura, regla de 15 s, reconexión, sin tiempo real, 404 | `test/features/trip_tracking/live_trip_tracker_test.dart` |
+| Protocolo Pusher: suscripción firmada, confirmada (`subscription_succeeded`) y reintentada (firma fallida, `subscription_error`), eventos, ping, reconexión, error 4001 | `test/core/realtime/pusher_connection_test.dart` |
+| `ReverbTripFeed`: en vivo solo con el canal confirmado; tras reintentar, llegan las posiciones | `test/features/trip_tracking/trip_live_feed_test.dart` |
+| Tracker: orden de eventos, frescura, regla de 7 s, canal sin confirmar = consulta cada 5 s, reconexión, sin tiempo real, 404 | `test/features/trip_tracking/live_trip_tracker_test.dart` |
 | Lectura de `trip-trackings` y de `BusLocationUpdated` | `test/features/trip_tracking/trip_tracking_test.dart` |
 | Pantalla: cada estado y el marcador | `test/features/passenger/bus_tracking_screen_test.dart` |
 
@@ -826,10 +838,47 @@ quedan igual.
   declara, porque sin `glyphs` MapLibre no dibuja texto.
 - Al cambiar calles ↔ satélite se vuelve a dibujar la ruta elegida.
 
+### Paradas cercanas
+
+El chip **"Paradas cercanas"** del inicio muestra las paradas a menos de
+`NearbyRoutesFilter.radiusMeters` (1 km) del pasajero, de la más cercana a la
+más lejana (máx. 20), **en el mapa** (puntos turquesa,
+`PassengerMapHandle.showNearbyStops`) y **en la hoja** (`NearbyStopsPanel`):
+nombre, distancia y las rutas que paran ahí ("PV-RF · Río Frío").
+
+- Se calculan en el teléfono (`nearbyStops`, `services/nearby_stops.dart`) con
+  el catálogo que el mapa ya cargó (`routesWithPatterns`): **sin otra
+  petición**. Una parada de varias rutas (o de los dos sentidos) aparece **una
+  vez**, con todas. Se recalculan si el pasajero se mueve.
+- Tocar una parada (lista o punto del mapa) la centra y la marca; tocar una de
+  sus rutas dibuja ese sentido con la parada resaltada.
+- "X" o el botón atrás de Android vuelven a la lista de rutas.
+- Sin ubicación: un aviso ofrece activarla (las paradas dependen de dónde
+  está el pasajero). Sin paradas cerca: lo dice.
+
+### Horario y tarifa de las rutas
+
+- **Lista** ("Rutas cercanas" / "Todas las rutas"): cada ruta muestra su
+  **tarifa de hoy** ("₡650", `RouteListTile`). Se piden todas en paralelo al
+  cargar el catálogo (`GET ops/routes/{id}/fares`, en caché); una ruta sin
+  tarifa o cuya petición falla solo no muestra precio.
+- **Ruta elegida** (`SelectedRoutePanel`): "Tarifa ₡650" junto al resumen y la
+  sección **"Horario"** (`ScheduleSection`) del sentido mostrado: próxima
+  salida, las salidas de hoy (las que ya pasaron tachadas) y "Ver horario de
+  la semana" con los próximos 6 días. Respeta vigencia y fechas suspendidas
+  (`departuresOn`).
+- El horario se pide **por sentido** al abrirlo
+  (`GET ops/route-patterns/{id}/schedules`), una sola vez. Sin horario
+  publicado: "Este sentido no tiene horario publicado."; si falla: "No se pudo
+  cargar el horario." (se reintenta al volver a abrir la ruta).
+
 ### Tests
 
 | Qué | Archivo |
 |---|---|
+| Paradas cercanas: radio, orden, una vez por parada con todas sus rutas, límite, sin coordenadas | `test/features/operations/nearby_stops_test.dart` |
+| Paradas cercanas en el inicio: mapa + hoja, parada compartida, tocar parada / punto, abrir una ruta, cerrar y atrás, nada cerca, sin ubicación | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Paradas cercanas*) |
+| Horario y tarifa: tarifa en la lista, tarifa + salidas de hoy + semana en la ruta elegida, otro sentido, sin más salidas / día sin salidas, errores | `test/features/passenger/passenger_home_screen_test.dart` (grupo *Horario y tarifa*) |
 | Filtro: dentro, fuera, justo en el radio, orden, lista vacía, varios sentidos, paradas sin coordenadas | `test/features/operations/nearby_routes_filter_test.dart` |
 | `include=patterns`: enlace por relación y por `route_id`, con y sin trazo, `directionLabel` | `test/features/operations/operations_service_test.dart` |
 | GeoJSON dibujado: línea real / aproximada, ids, números y tipo de parada (salida, intermedia, llegada), parada resaltada | `test/features/passenger/route_features_test.dart` |
@@ -841,8 +890,11 @@ quedan igual.
 
 El pasajero guarda rutas con una **estrella** y las ve en **"Mis favoritos"**
 (`features/passenger/favorite_routes_screen.dart`, ruta `/passenger/favorites`),
-que se abre desde el chip **"Favoritos"** del inicio. Solo existe en el flujo
-del pasajero: el conductor no ve el chip ni la estrella.
+la pestaña **Favoritos** de la barra inferior (Inicio · Favoritos · Cuenta; la
+pestaña "Mis viajes", que era un placeholder, se reemplazó por esta). Como
+pestaña no tiene "atrás": **"Ver ruta"** abre el inicio
+(`/passenger/home` con un `RouteSelection`), que dibuja esa ruta. Solo existe
+en el flujo del pasajero: el conductor no ve la pestaña ni la estrella.
 
 Los favoritos se guardan en el **Dashboard** (siguen a la cuenta en cualquier
 teléfono). Todas las llamadas llevan el token y **nunca** un id de usuario: el
@@ -949,7 +1001,8 @@ Si el Dashboard agrega un borrado múltiple (p. ej. `DELETE ops/favorites` con
 |---|---|
 | URLs, token sin id de usuario, lectura del `included`, orden, 409 / 404 como éxito, errores | `test/features/passenger/favorites_service_test.dart` |
 | Lista, vacío, carga, 5xx + reintentar, 401, quitar con estrella / deslizar + Deshacer, fallo que revierte, sin duplicados, 320 × 568, otra sesión | `test/features/passenger/favorite_routes_screen_test.dart` |
-| El chip "Favoritos" abre "Mis favoritos" | `test/features/passenger/passenger_home_screen_test.dart` |
+| La pestaña "Favoritos" abre "Mis favoritos" | `test/features/passenger/passenger_home_screen_test.dart` |
+| Como pestaña: barra inferior con "Favoritos" seleccionado; "Ver ruta" abre el inicio con la ruta | `test/features/passenger/favorite_routes_screen_test.dart` (grupo *"Favoritos" tab*) |
 | Eliminar varias / todas (AC1–AC9): modo edición, selección, confirmación, máx. 4 a la vez, fallo parcial + reintentar, deshacer en orden y con alias, sin duplicados, 401, 320 × 568 | `test/features/passenger/delete_favorite_routes_test.dart` |
 
 ## 12. Búsqueda de rutas (pasajero)

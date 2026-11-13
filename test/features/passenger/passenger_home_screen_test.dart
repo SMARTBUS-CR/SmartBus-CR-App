@@ -88,10 +88,25 @@ class _FakeMap implements PassengerMapHandle {
   Map<String, dynamic> get drawn =>
       routeFeatureCollection(route, selected: highlighted);
 
+  /// "Paradas cercanas" drawn right now, and the selected one.
+  List<NearbyStop> nearbyStops = const [];
+  String? nearbySelected;
+  ValueChanged<String>? onNearbyStopTap;
+
+  @override
+  Future<void> showNearbyStops(
+    List<NearbyStop> stops, {
+    String? selectedId,
+  }) async {
+    nearbyStops = stops;
+    nearbySelected = selectedId;
+  }
+
   PassengerMapBuilder get builder => (context, options) {
     mode = options.mode;
     onStopTap = options.onStopTap;
     onBusTap = options.onBusTap;
+    onNearbyStopTap = options.onNearbyStopTap;
     return _FakeMapWidget(onReady: () => options.onReady(this));
   };
 }
@@ -154,6 +169,7 @@ Future<void> _pump(
   required _FakeMap map,
   FakeOperations? operations,
   Map<String, WidgetBuilder>? routes,
+  DateTime Function()? clock,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -161,6 +177,7 @@ Future<void> _pump(
         locationService: location,
         mapBuilder: map.builder,
         operations: operations ?? FakeOperations(),
+        clock: clock ?? DateTime.now,
       ),
       routes:
           routes ??
@@ -211,8 +228,17 @@ void main() {
     expect(find.text('¿A dónde vas?'), findsOneWidget);
     expect(find.text('Paradas cercanas'), findsOneWidget);
     expect(find.text('Buses en curso'), findsOneWidget);
-    expect(find.text('Mis viajes'), findsOneWidget); // bottom nav tab
+    // "Favoritos" is a tab of the bottom bar now, not a chip; "Mis viajes"
+    // is gone.
+    expect(
+      find.descendant(
+        of: find.byType(NavigationBar),
+        matching: find.text('Favoritos'),
+      ),
+      findsOneWidget,
+    );
     expect(find.text('Favoritos'), findsOneWidget);
+    expect(find.text('Mis viajes'), findsNothing);
     expect(find.text('Hola, Keyna'), findsOneWidget);
     expect(find.byKey(const Key('my-location-button')), findsOneWidget);
     expect(find.text(MapConfig.streetsAttribution), findsOneWidget);
@@ -357,23 +383,7 @@ void main() {
     expect(find.text(MapConfig.streetsAttribution), findsOneWidget);
   });
 
-  testWidgets('AC5 · a quick-access chip shows "próximamente"', (tester) async {
-    await _pump(
-      tester,
-      location: _FakeLocationService(
-        access: LocationAccess.granted,
-        location: _user,
-      ),
-      map: _FakeMap(),
-    );
-
-    await tester.tap(find.text('Paradas cercanas'));
-    await tester.pump();
-
-    expect(find.text('Paradas cercanas: próximamente.'), findsOneWidget);
-  });
-
-  testWidgets('Favorites AC1 · "Favoritos" chip opens "Mis favoritos"', (
+  testWidgets('Favorites AC1 · the "Favoritos" tab opens "Mis favoritos"', (
     tester,
   ) async {
     await _pump(
@@ -385,7 +395,12 @@ void main() {
       map: _FakeMap(),
     );
 
-    await tester.tap(find.text('Favoritos'));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(NavigationBar),
+        matching: find.text('Favoritos'),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('favorites-screen'), findsOneWidget);
@@ -546,6 +561,21 @@ void main() {
   }
 
   group('Route visualization', _routeVisualizationTests);
+  group('Paradas cercanas', _nearbyStopsTests);
+  group('Horario y tarifa', () {
+    setUp(() {
+      final view =
+          TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+      view.physicalSize = const Size(1236, 2745);
+      view.devicePixelRatio = 3;
+    });
+    tearDown(() {
+      TestWidgetsFlutterBinding.instance.platformDispatcher.views.first
+        ..resetPhysicalSize()
+        ..resetDevicePixelRatio();
+    });
+    _timetableTests();
+  });
   group('Live buses on the route', () {
     setUp(() {
       final view =
@@ -1250,4 +1280,398 @@ class _SlowOperations extends FakeOperations {
     await gate.future;
     return super.routesWithPatterns();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Paradas cercanas
+// ---------------------------------------------------------------------------
+
+/// Another route that also stops at "Centro" (same stop id as PV-RF's).
+final _shared = route(
+  'r-shared',
+  code: 'AB-CD',
+  name: 'Ruta compartida',
+  patterns: [
+    pattern(
+      'p-shared',
+      headsign: 'Alajuela',
+      stops: [stopAt('Centro', _north(200), _user.longitude, seq: 1)],
+    ),
+  ],
+);
+
+Finder _nearbyStop(String name) =>
+    find.byKey(Key('nearby-stop-${stopAt(name, 0, 0, seq: 0).stopId}'));
+
+Future<_FakeMap> _openNearby(
+  WidgetTester tester, {
+  List<TransitRoute>? catalogue,
+}) async {
+  final map = _FakeMap();
+  await _pump(
+    tester,
+    location: _granted(),
+    map: map,
+    operations: FakeOperations(catalogue: catalogue ?? [_sjPv, _demo, _pvRf]),
+  );
+  await tester.tap(find.text('Paradas cercanas'));
+  await tester.pumpAndSettle();
+  return map;
+}
+
+void _nearbyStopsTests() {
+  setUp(() {
+    final view =
+        TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+    view.physicalSize = const Size(1236, 2745);
+    view.devicePixelRatio = 3;
+  });
+  tearDown(() {
+    TestWidgetsFlutterBinding.instance.platformDispatcher.views.first
+      ..resetPhysicalSize()
+      ..resetDevicePixelRatio();
+  });
+
+  testWidgets('the chip shows the stops within 1 km, closest first, on the '
+      'map and in the sheet', (tester) async {
+    final map = await _openNearby(tester);
+
+    expect(find.byKey(const Key('nearby-stops-panel')), findsOneWidget);
+    expect(find.text('A menos de 1 km de ti'), findsOneWidget);
+    expect(find.textContaining('próximamente'), findsNothing);
+    // 200 m, 450 m, 600 m, 800 m, ~960 m; "Lejana" (5 km) and Río Frío
+    // (9 km) are left out.
+    expect(map.nearbyStops.map((s) => s.name), [
+      'Centro',
+      'Demo Terminal',
+      'Terminal',
+      'Escuela',
+      'Demo Plaza',
+    ]);
+    expect(find.text('200 m'), findsOneWidget);
+    // The camera shows every stop and the passenger.
+    expect(map.fits.last.points, hasLength(6));
+    // Each stop lists the routes that stop there.
+    expect(
+      find.descendant(
+        of: _nearbyStop('Centro'),
+        matching: find.text('PV-RF · Río Frío'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a stop of several routes appears once, with all of them', (
+    tester,
+  ) async {
+    final map = await _openNearby(tester, catalogue: [_pvRf, _shared]);
+
+    expect(map.nearbyStops.where((s) => s.name == 'Centro'), hasLength(1));
+    for (final label in ['AB-CD · Alajuela', 'PV-RF · Río Frío']) {
+      expect(
+        find.descendant(of: _nearbyStop('Centro'), matching: find.text(label)),
+        findsOneWidget,
+      );
+    }
+  });
+
+  testWidgets('tapping a stop (list or map) centers it and marks it', (
+    tester,
+  ) async {
+    final map = await _openNearby(tester);
+
+    // On its name (the middle of the card has the route buttons).
+    await _tapInSheet(
+      tester,
+      find.descendant(
+        of: _nearbyStop('Terminal'),
+        matching: find.text('Terminal'),
+      ),
+    );
+    expect(map.moves.last, (
+      lat: _north(600),
+      lng: _user.longitude,
+      zoom: 16.5,
+    ));
+    expect(map.nearbySelected, stopAt('Terminal', 0, 0, seq: 0).stopId);
+
+    map.onNearbyStopTap!(stopAt('Escuela', 0, 0, seq: 0).stopId);
+    await tester.pumpAndSettle();
+    expect(map.moves.last.lat, _north(800));
+    expect(map.nearbySelected, stopAt('Escuela', 0, 0, seq: 0).stopId);
+  });
+
+  testWidgets('a route of a stop draws that direction with the stop '
+      'highlighted, and leaves "Paradas cercanas"', (tester) async {
+    final map = await _openNearby(tester);
+
+    await _tapInSheet(
+      tester,
+      find.byKey(
+        Key('nearby-stop-route-${stopAt('Centro', 0, 0, seq: 0).stopId}-p-rf'),
+      ),
+    );
+
+    expect(map.route?.id, 'p-rf');
+    expect(map.highlighted?.name, 'Centro');
+    expect(map.nearbyStops, isEmpty);
+    expect(find.byKey(const Key('nearby-stops-panel')), findsNothing);
+  });
+
+  testWidgets('"X" and Android back leave it and go back to the passenger', (
+    tester,
+  ) async {
+    final map = await _openNearby(tester);
+
+    await _tapInSheet(tester, find.byKey(const Key('nearby-stops-close')));
+    expect(map.nearbyStops, isEmpty);
+    expect(find.text('Rutas cercanas'), findsOneWidget);
+    expect(map.moves.last.lat, _user.latitude);
+
+    await tester.tap(find.text('Paradas cercanas'));
+    await tester.pumpAndSettle();
+    expect(map.nearbyStops, isNotEmpty);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(map.nearbyStops, isEmpty);
+    expect(find.byKey(const Key('nearby-stops-panel')), findsNothing);
+  });
+
+  testWidgets('nothing within 1 km: says so', (tester) async {
+    await _openNearby(tester, catalogue: [_sjPv]);
+
+    expect(
+      find.textContaining('No hay paradas a menos de 1 km'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('without location: asks to turn it on, nothing is shown', (
+    tester,
+  ) async {
+    final map = _FakeMap();
+    await _pump(
+      tester,
+      location: _FakeLocationService(access: LocationAccess.denied),
+      map: map,
+      operations: FakeOperations(catalogue: [_pvRf]),
+    );
+
+    await tester.tap(find.text('Paradas cercanas'));
+    await tester.pump();
+
+    expect(
+      find.text('Activa tu ubicación para ver las paradas cercanas.'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('nearby-stops-panel')), findsNothing);
+    expect(map.nearbyStops, isEmpty);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Horario y tarifa
+// ---------------------------------------------------------------------------
+
+/// Friday 13 Nov 2026, 10:15.
+DateTime _friday() => DateTime(2026, 11, 13, 10, 15);
+
+/// PV-RF ₡650 and DEMO-CITY ₡1.200 (SJ-PV has no fare). "Hacia Río Frío"
+/// leaves Fridays at 06:00, 10:30 and 14:00, and Saturdays at 08:00.
+FakeOperations _timetableOperations() =>
+    FakeOperations(catalogue: [_sjPv, _demo, _pvRf])
+      ..fares = {
+        'r-pvrf': [fare(650)],
+        'r-demo': [fare(1200)],
+      }
+      ..schedules = {
+        'p-rf': [
+          departure(5, 14),
+          departure(5, 6),
+          departure(5, 10, 30),
+          departure(6, 8),
+        ],
+      };
+
+void _timetableTests() {
+  testWidgets('every route of the list shows its fare', (tester) async {
+    final operations = _timetableOperations();
+    await _pump(
+      tester,
+      location: _FakeLocationService(access: LocationAccess.denied),
+      map: _FakeMap(),
+      operations: operations,
+      clock: _friday,
+    );
+
+    expect(find.text('Todas las rutas'), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(
+            find.descendant(
+              of: find.byKey(const Key('route-fare-r-pvrf')),
+              matching: find.byType(Text),
+            ),
+          )
+          .data,
+      '₡650',
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('route-fare-r-demo')),
+        matching: find.text('₡1.200'),
+      ),
+      findsOneWidget,
+    );
+    // No fare published: no price, the route is still listed.
+    expect(find.byKey(const Key('route-fare-r-sjpv')), findsNothing);
+    expect(_inList('San José - Puerto Viejo'), findsOneWidget);
+    // One request per route, the catalogue still in a single one.
+    expect(operations.calls, ['routesWithPatterns']);
+    expect(
+      operations.timetableCalls,
+      containsAll(['fares r-sjpv', 'fares r-demo', 'fares r-pvrf']),
+    );
+  });
+
+  testWidgets('the selected route shows its fare and today\'s departures, '
+      'and the week on demand', (tester) async {
+    final operations = _timetableOperations();
+    await _pump(
+      tester,
+      location: _granted(),
+      map: _FakeMap(),
+      operations: operations,
+      clock: _friday,
+    );
+    await _tapRoute(tester, _pvRf); // opens "Hacia Río Frío" (closest stop)
+
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('selected-route-fare')),
+        matching: find.text('Tarifa ₡650'),
+      ),
+      findsOneWidget,
+    );
+    final schedule = find.byKey(const Key('schedule-section'));
+    await tester.ensureVisible(schedule);
+    await tester.pumpAndSettle();
+    expect(find.text('Próxima salida: 10:30'), findsOneWidget);
+    // Today's departures in order; 06:00 already gone.
+    final chips = tester
+        .widgetList<Text>(
+          find.descendant(
+            of: schedule,
+            matching: find.textContaining(RegExp(r'^\d\d:\d\d$')),
+          ),
+        )
+        .map((t) => t.data);
+    expect(chips, ['06:00', '10:30', '14:00']);
+    final gone = tester.widget<Text>(
+      find.descendant(of: schedule, matching: find.text('06:00')),
+    );
+    expect(gone.style?.decoration, TextDecoration.lineThrough);
+
+    // The next six days.
+    expect(find.byKey(const Key('schedule-day-1')), findsNothing);
+    await _tapInSheet(tester, find.byKey(const Key('schedule-week-toggle')));
+    final tomorrow = find.byKey(const Key('schedule-day-1'));
+    expect(
+      find.descendant(of: tomorrow, matching: find.text('Mañana')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: tomorrow, matching: find.text('08:00')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('schedule-day-2')),
+        matching: find.text('Domingo 15'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('schedule-day-6')),
+        matching: find.text('Sin salidas'),
+      ),
+      findsOneWidget,
+    );
+    // The fare came with the list: not requested again.
+    expect(
+      operations.timetableCalls.where((c) => c == 'fares r-pvrf'),
+      hasLength(1),
+    );
+  });
+
+  testWidgets('another direction loads its own timetable', (tester) async {
+    final operations = _timetableOperations();
+    await _pump(
+      tester,
+      location: _granted(),
+      map: _FakeMap(),
+      operations: operations,
+      clock: _friday,
+    );
+    await _tapRoute(tester, _pvRf);
+    await _tapInSheet(tester, find.byKey(const Key('direction-p-pv')));
+
+    expect(operations.timetableCalls, contains('schedules p-pv'));
+    expect(
+      find.text('Este sentido no tiene horario publicado.'),
+      findsOneWidget,
+    );
+
+    // Back: already loaded, not requested again.
+    await _tapInSheet(tester, find.byKey(const Key('direction-p-rf')));
+    expect(find.text('Próxima salida: 10:30'), findsOneWidget);
+    expect(
+      operations.timetableCalls.where((c) => c == 'schedules p-rf'),
+      hasLength(1),
+    );
+  });
+
+  testWidgets('after the last departure, and on a day without any', (
+    tester,
+  ) async {
+    var now = DateTime(2026, 11, 13, 15); // Friday, after 14:00
+    await _pump(
+      tester,
+      location: _granted(),
+      map: _FakeMap(),
+      operations: _timetableOperations(),
+      clock: () => now,
+    );
+    await _tapRoute(tester, _pvRf);
+    expect(find.text('Ya no hay más salidas hoy'), findsOneWidget);
+
+    now = DateTime(2026, 11, 15, 9); // Sunday
+    await _tapInSheet(tester, find.byKey(const Key('direction-p-pv')));
+    await _tapInSheet(tester, find.byKey(const Key('direction-p-rf')));
+    expect(find.text('Hoy no hay salidas en este sentido.'), findsOneWidget);
+  });
+
+  testWidgets('without fares or timetable the route still works', (
+    tester,
+  ) async {
+    final operations = _timetableOperations()
+      ..timetableError = const ApiException(
+        ApiErrorType.noConnection,
+        'Sin conexión',
+      );
+    await _pump(
+      tester,
+      location: _granted(),
+      map: _FakeMap(),
+      operations: operations,
+      clock: _friday,
+    );
+
+    expect(find.byKey(const Key('route-fare-r-pvrf')), findsNothing);
+    await _tapRoute(tester, _pvRf);
+    expect(find.byKey(const Key('selected-route-fare')), findsNothing);
+    expect(find.text('No se pudo cargar el horario.'), findsOneWidget);
+    expect(find.byKey(const Key('stops-timeline')), findsOneWidget);
+  });
 }
