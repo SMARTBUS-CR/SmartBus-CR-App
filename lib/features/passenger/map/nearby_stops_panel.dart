@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../operations/models/trip_planning.dart';
 import '../../operations/services/nearby_routes_filter.dart';
 import '../../operations/services/nearby_stops.dart';
+import '../../operations/services/route_proximity.dart';
 import 'map_overlay.dart';
 import 'route_sheet.dart' show FareLabel, RouteCodeBadge;
 
@@ -37,11 +38,18 @@ class NearbyStopsPanel extends StatelessWidget {
     required this.onRouteSelected,
     required this.onRetry,
     required this.onClose,
+    this.passingRoutes = const [],
+    this.onPassingRouteSelected,
     this.departures = const StopDeparturesState(),
     this.onDepartureSelected,
     this.onRetryDepartures,
     this.now,
   });
+
+  /// Directions whose line (the road) passes within the radius, closest
+  /// first: the bus can be stopped there even without an official stop.
+  final List<PassingRoute> passingRoutes;
+  final ValueChanged<PassingRoute>? onPassingRouteSelected;
 
   /// Next departures of the stop [selectedId].
   final StopDeparturesState departures;
@@ -121,9 +129,13 @@ class NearbyStopsPanel extends StatelessWidget {
         else if (stops.isEmpty)
           _Message(
             colors: colors,
-            text:
-                'No hay paradas a menos de ${formatDistance(radiusMeters)}. '
-                'Busca una ruta para ver todas sus paradas.',
+            text: passingRoutes.isEmpty
+                ? 'No hay paradas ni rutas a menos de '
+                      '${formatDistance(radiusMeters)}. Busca una ruta para '
+                      'ver todas sus paradas.'
+                : 'No hay paradas oficiales a menos de '
+                      '${formatDistance(radiusMeters)}, pero estas rutas '
+                      'pasan cerca: puedes esperar el bus en la carretera.',
           )
         else
           for (final stop in stops)
@@ -145,7 +157,89 @@ class NearbyStopsPanel extends StatelessWidget {
                     )
                   : null,
             ),
+        if (stops != null && passingRoutes.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Row(
+            key: const Key('passing-routes'),
+            children: [
+              Icon(Icons.add_road, size: 18, color: colors.accent),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Rutas que pasan cerca de ti',
+                  style: TextStyle(
+                    color: colors.onSurface,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          for (final passing in passingRoutes)
+            _PassingRouteTile(
+              colors: colors,
+              passing: passing,
+              onTap: onPassingRouteSelected == null
+                  ? null
+                  : () => onPassingRouteSelected!(passing),
+            ),
+        ],
       ],
+    );
+  }
+}
+
+/// A direction whose road passes near: "PV-GUA · Hacia Guápiles — pasa a
+/// 250 m". Tapping it draws the route where it passes closest.
+class _PassingRouteTile extends StatelessWidget {
+  const _PassingRouteTile({
+    required this.colors,
+    required this.passing,
+    required this.onTap,
+  });
+
+  final MapOverlayColors colors;
+  final PassingRoute passing;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      key: Key('passing-route-${passing.pattern.id}'),
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            RouteCodeBadge(code: passing.route.code),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    passing.route.directionLabel(passing.pattern),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.onSurface,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  Text(
+                    'Pasa a ${formatDistance(passing.origin.distanceMeters)} '
+                    'de ti',
+                    style: TextStyle(color: colors.muted, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: colors.muted),
+          ],
+        ),
+      ),
     );
   }
 }
