@@ -23,10 +23,17 @@ import 'api_exception.dart';
 class ApiClient {
   ApiClient({SecureSessionStore? sessionStore, http.Client? httpClient})
     : _session = sessionStore ?? SecureSessionStore(),
-      _http = httpClient ?? http.Client();
+      _http = httpClient ?? _sharedHttp,
+      _ownsHttp = httpClient != null;
+
+  /// One HTTP client for the whole app: its connections (TLS to the Gateway)
+  /// are kept alive and reused by every screen, instead of a new handshake
+  /// each time a screen creates its service.
+  static final http.Client _sharedHttp = http.Client();
 
   final SecureSessionStore _session;
   final http.Client _http;
+  final bool _ownsHttp;
 
   Future<Map<String, dynamic>> get(Uri url) => _send('GET', url);
 
@@ -176,5 +183,8 @@ class ApiClient {
     return result;
   }
 
-  void close() => _http.close();
+  /// Closes an injected client; the shared one stays open for the others.
+  void close() {
+    if (_ownsHttp) _http.close();
+  }
 }
