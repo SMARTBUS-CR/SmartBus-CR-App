@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:smartbus_drivers/core/location/location_service.dart';
 import 'package:smartbus_drivers/core/network/api_exception.dart';
 import 'package:smartbus_drivers/core/storage/secure_session_store.dart';
+import 'package:smartbus_drivers/features/driver/driver_home_screen.dart'
+    show DriverHomeArgs;
 import 'package:smartbus_drivers/features/driver/trip_screen.dart';
 import 'package:smartbus_drivers/features/operations/models/operations_models.dart';
 import 'package:smartbus_drivers/features/passenger/map/passenger_map.dart';
@@ -132,10 +134,13 @@ Future<_FakeMap> _pumpTrip(
   String? status,
   DriverTrip? trip,
   bool autoStart = false,
+  NavigatorObserver? observer,
+  bool sessionReallyExpired = true,
 }) async {
   final map = _FakeMap();
   await tester.pumpWidget(
     MaterialApp(
+      navigatorObservers: [?observer],
       home: TripScreen(
         trip: trip ?? (status == null ? null : driverTrip(status: status)),
         autoStart: autoStart,
@@ -143,6 +148,7 @@ Future<_FakeMap> _pumpTrip(
         sender: sender,
         sessionStore: SecureSessionStore(),
         mapBuilder: map.builder,
+        sessionCheck: () async => sessionReallyExpired,
       ),
       routes: {
         '/driver/home': (_) => const Scaffold(body: Text('home')),
@@ -154,6 +160,19 @@ Future<_FakeMap> _pumpTrip(
   await tester.pump();
   await tester.pump();
   return map;
+}
+
+/// Records the last route pushed or replaced (to check its arguments).
+class _RouteRecorder extends NavigatorObserver {
+  Route<dynamic>? last;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      last = route;
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) =>
+      last = newRoute;
 }
 
 /// The "Enviando ubicación · hace …" status line (rich text).
@@ -529,6 +548,32 @@ void main() {
 
       expect(find.text('login'), findsOneWidget);
     });
+
+    testWidgets('401 but the Authentication Service says the token works '
+        '(the Gateway was slow): stays, the GPS goes on', (tester) async {
+      final sender = _FakeSender();
+      await _pumpTrip(
+        tester,
+        operations: FakeOperations(completeError: ApiException.fromStatus(401)),
+        sender: sender,
+        status: 'in_progress',
+        autoStart: true,
+        sessionReallyExpired: false,
+      );
+
+      await tester.tap(find.text('Finalizar recorrido'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Finalizar'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('login'), findsNothing);
+      expect(
+        find.textContaining('No se pudo verificar la conexión'),
+        findsOneWidget,
+      );
+      expect(sender.stops, 0);
+      expect(await SecureSessionStore().readToken(), 'tok');
+    });
   });
 
   group('TripScreen', () {
@@ -725,12 +770,81 @@ void main() {
 
       await finish(tester);
 
-      expect(operations.calls.last, 'complete $tripId');
+      // Then the trips left today (the way back), see below.
+      expect(operations.calls, contains('complete $tripId'));
       expect(sender.stops, 1);
       expect(find.text('Recorrido finalizado'), findsOneWidget);
       final arrival = DateTime.parse(completedArrivalAt);
       expect(find.text('Llegada: ${formatHour(arrival)}'), findsOneWidget);
       expect(find.byKey(const Key('trip-map')), findsNothing);
+    });
+
+    /// The way back: same route, other direction, later today.
+    DriverTrip wayBack({String departure = '2026-11-11T15:00:00.000000Z'}) {
+      final resource = tripResource(id: 't-back');
+      final attributes = resource['attributes'] as Map<String, dynamic>;
+      attributes['route_pattern_id'] = 'p-back';
+      attributes['scheduled_departure_at'] = departure;
+      attributes['planned_route_snapshot'] = {
+        'route_code': 'PV-RF',
+        'route_name': 'Puerto Viejo',
+        'headsign': 'Río Frío',
+      };
+      return DriverTrip.fromJsonApi(resource);
+    }
+
+    testWidgets('after finishing: offers to start the way back, which opens '
+        'Home with that trip', (tester) async {
+      final operations = FakeOperations(
+        trips: [
+          wayBack(departure: '2026-11-11T18:00:00.000000Z'),
+          wayBack(),
+        ],
+      );
+      final observer = _RouteRecorder();
+      await _pumpTrip(
+        tester,
+        operations: operations,
+        sender: _FakeSender(),
+        status: 'in_progress',
+        autoStart: true,
+        observer: observer,
+      );
+
+      await finish(tester);
+
+      expect(find.text('Recorrido finalizado'), findsOneWidget);
+      final card = find.byKey(const Key('next-trip'));
+      expect(card, findsOneWidget);
+      expect(
+        find.descendant(
+          of: card,
+          matching: find.text('Siguiente viaje · sentido contrario'),
+        ),
+        findsOneWidget,
+      );
+      // The earliest scheduled one (15:00 UTC, not 18:00).
+      final at = DateTime.utc(2026, 11, 11, 15).toLocal();
+      expect(find.text('Sale a las ${formatHour(at)}'), findsOneWidget);
+      expect(find.text('Iniciar viaje hacia Río Frío'), findsOneWidget);
+      expect(operations.lastStatusFilter, TripStatus.scheduled);
+
+      await tester.tap(find.byKey(const Key('start-next-trip')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('home'), findsOneWidget);
+      final args = observer.last?.settings.arguments;
+      expect(args, isA<DriverHomeArgs>());
+      expect((args! as DriverHomeArgs).startTripId, 't-back');
+    });
+
+    testWidgets('after finishing with no more trips today: only "Volver a '
+        'Inicio"', (tester) async {
+      final (_, _) = await pumpRunning(tester);
+      await finish(tester);
+
+      expect(find.byKey(const Key('next-trip')), findsNothing);
+      expect(find.text('Volver a Inicio'), findsOneWidget);
     });
 
     testWidgets('sends the end position (final) once, while the trip is still '
