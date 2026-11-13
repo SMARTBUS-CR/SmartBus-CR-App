@@ -504,15 +504,20 @@ class FakeOperations extends OperationsService {
   Map<String, List<RouteSchedule>> schedules = const {};
   final List<String> timetableCalls = [];
 
+  /// When set, [routeFares] and [patternSchedules] fail with it.
+  ApiException? timetableError;
+
   @override
   Future<List<RouteFare>> routeFares(String routeId) async {
     timetableCalls.add('fares $routeId');
+    if (timetableError != null) throw timetableError!;
     return fares[routeId] ?? const [];
   }
 
   @override
   Future<List<RouteSchedule>> patternSchedules(String patternId) async {
     timetableCalls.add('schedules $patternId');
+    if (timetableError != null) throw timetableError!;
     return schedules[patternId] ?? const [];
   }
 }
