@@ -12,8 +12,10 @@ import '../operations/models/operations_models.dart';
 import '../operations/services/nearby_routes_filter.dart';
 import '../operations/services/nearby_stops.dart';
 import '../operations/services/operations_service.dart';
+import '../operations/services/route_proximity.dart';
 import '../trip_tracking/models/trip_tracking.dart';
 import '../trip_tracking/services/route_live_buses.dart';
+import 'map/journey_planner_panel.dart';
 import 'map/map_overlay.dart';
 import 'map/nearby_stops_panel.dart';
 import 'map/passenger_map.dart';
@@ -79,6 +81,7 @@ class PassengerHomeScreen extends StatefulWidget {
 class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     with WidgetsBindingObserver {
   static const _chips = [
+    MapQuickChip(Icons.directions_outlined, '¿Cómo llego?'),
     MapQuickChip(Icons.signpost_outlined, 'Paradas cercanas'),
     MapQuickChip(Icons.directions_bus_outlined, 'Buses en curso'),
   ];
@@ -235,7 +238,10 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     if (map == null) return;
     map.showUserLocation(location);
     // With a route (or the nearby stops) on screen the camera belongs to it.
-    if (!_centeredOnUser && _selectedRoute == null && !_nearbyMode) {
+    if (!_centeredOnUser &&
+        _selectedRoute == null &&
+        !_nearbyMode &&
+        !_plannerMode) {
       _centerOn(map, location);
     }
   }
@@ -244,6 +250,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     _map = map;
     final location = _location;
     if (location != null) map.showUserLocation(location);
+    if (_destination case final destination?) map.showDestination(destination);
     if (_nearbyMode) {
       _drawNearbyStops(fit: true);
     } else if (_selectedPattern != null) {
@@ -296,6 +303,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         _updateNearbyStops();
         _drawNearbyStops(fit: true);
       }
+      if (_plannerMode) _updatePassing();
     } on ApiException catch (e) {
       if (mounted) setState(() => _routesError = e.message);
     } finally {
@@ -414,6 +422,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     _map?.clearRoute();
     _stopLiveBuses();
     _collapseSheet(_sheetInitial);
+    // Back to the "¿Cómo llego?" options, with the destination in view.
+    if (_plannerMode) _fitPlanner();
   }
 
   /// A stop marker was tapped on the map: details + halo on it.
@@ -431,32 +441,240 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     _map?.moveTo(location.latitude, location.longitude, zoom: _stopZoom);
   }
 
+  /// SnackBar with [message] and "Permitir" / "Ajustes" to turn location on.
+  void _askForLocation(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          action: SnackBarAction(
+            label:
+                _access == LocationAccess.deniedForever ||
+                    _access == LocationAccess.serviceDisabled
+                ? 'Ajustes'
+                : 'Permitir',
+            onPressed: _fixLocationAccess,
+          ),
+        ),
+      );
+  }
+
+  // --- "¿Cómo llego?" ------------------------------------------------------------
+
+  /// The planner is shown (in the sheet; the destination pin on the map).
+  bool _plannerMode = false;
+
+  /// The point the passenger kept a finger on.
+  GeoPoint? _destination;
+
+  /// Ways to get there; `null` until loaded (or when it failed).
+  List<JourneyOption>? _journeyOptions;
+  bool _journeysLoading = false;
+  String? _journeysError;
+
+  /// Only the answer to the latest destination is shown.
+  int _journeyRequest = 0;
+
+  /// "¿Cómo llego?" chip: explains how to mark the destination (or shows
+  /// the one already marked). Needs the location (it is the origin).
+  void _openPlanner() {
+    if (!_hasLocation) {
+      _askForLocation('Activa tu ubicación para saber cómo llegar.');
+      return;
+    }
+    _closeNearbyStops(recenter: false);
+    if (_selectedRoute != null) _clearSelection();
+    setState(() => _plannerMode = true);
+    _fitPlanner();
+    _collapseSheet(_sheetInitial);
+  }
+
+  /// A finger kept on the map: that point is the destination.
+  void _onMapLongPress(GeoPoint point) {
+    if (!_hasLocation) {
+      _askForLocation('Activa tu ubicación para saber cómo llegar ahí.');
+      return;
+    }
+    _closeNearbyStops(recenter: false);
+    if (_selectedRoute != null) _clearSelection();
+    setState(() {
+      _plannerMode = true;
+      _destination = point;
+    });
+    _updatePassing();
+    _map?.showDestination(point);
+    _fitPlanner();
+    _collapseSheet(_sheetInitial);
+    unawaited(_loadJourneys());
+  }
+
+  /// Directions whose line passes near the passenger and the destination
+  /// (no stop needed), computed on the phone from the loaded catalogue.
+  List<PassingRoute> _passing = const [];
+
+  /// How far from the line (the road) the passenger may be.
+  static const _passingRadiusMeters = 1000.0;
+
+  void _updatePassing() {
+    final routes = _routes;
+    final destination = _destination;
+    final location = _location;
+    if (routes == null || destination == null || location == null) {
+      setState(() => _passing = const []);
+      return;
+    }
+    final passing = routesPassingBetween(
+      origin: GeoPoint(location.latitude, location.longitude),
+      destination: destination,
+      routes: routes,
+      radiusMeters: _passingRadiusMeters,
+    );
+    setState(() => _passing = passing);
+    // Their timetables, for "Pasa ~10:47" (cached; also used by the panel).
+    for (final p in passing) {
+      unawaited(_loadSchedules(p.pattern));
+    }
+  }
+
+  /// [_passing] as the panel shows it, without the directions the Dashboard
+  /// already offers (by stops).
+  List<PassingOption> _passingOptions() {
+    final byStops = {
+      for (final o in _journeyOptions ?? const <JourneyOption>[])
+        o.journey.patternId,
+    };
+    final now = widget.clock();
+    return [
+      for (final p in _passing)
+        if (!byStops.contains(p.pattern.id))
+          PassingOption(
+            passing: p,
+            nextPassAt: switch (_schedules[p.pattern.id]) {
+              final weekly? => p.nextPassAt(weekly, now),
+              null => null,
+            },
+            timetableLoading: _schedulesLoading.contains(p.pattern.id),
+            fare: _fares[p.route.id],
+          ),
+    ];
+  }
+
+  /// "El bus pasa cerca": draws that direction and shows where to wait.
+  void _selectPassing(PassingOption option) {
+    final p = option.passing;
+    _selectRoute(p.route, pattern: p.pattern);
+    _map?.moveTo(
+      p.origin.point.latitude,
+      p.origin.point.longitude,
+      zoom: _stopZoom,
+    );
+  }
+
+  Future<void> _loadJourneys() async {
+    final destination = _destination;
+    final location = _location;
+    if (destination == null || location == null) return;
+    final request = ++_journeyRequest;
+    setState(() {
+      _journeysLoading = true;
+      _journeysError = null;
+      _journeyOptions = null;
+    });
+    try {
+      final journeys = await _operations.journeys(
+        originLatitude: location.latitude,
+        originLongitude: location.longitude,
+        destinationLatitude: destination.latitude,
+        destinationLongitude: destination.longitude,
+        walkingRadiusMeters: _walkingRadiusMeters,
+        departureAt: widget.clock(),
+      );
+      if (!mounted || request != _journeyRequest) return;
+      setState(() => _journeyOptions = journeyOptions(journeys));
+    } on ApiException catch (e) {
+      if (mounted && request == _journeyRequest) {
+        setState(() => _journeysError = e.message);
+      }
+    } finally {
+      if (mounted && request == _journeyRequest) {
+        setState(() => _journeysLoading = false);
+      }
+    }
+  }
+
+  /// How far the passenger may walk to a stop (and from the last one).
+  static const _walkingRadiusMeters = 800;
+
+  /// Leaves "¿Cómo llego?": removes the pin and, when [recenter], goes back
+  /// to the passenger.
+  void _closePlanner({bool recenter = true}) {
+    if (!_plannerMode) return;
+    _journeyRequest++; // an answer still on its way is ignored
+    setState(() {
+      _plannerMode = false;
+      _destination = null;
+      _passing = const [];
+      _journeyOptions = null;
+      _journeysLoading = false;
+      _journeysError = null;
+    });
+    _map?.showDestination(null);
+    final map = _map;
+    final location = _location;
+    if (recenter && map != null && location != null) _centerOn(map, location);
+  }
+
+  /// The passenger and the destination in view.
+  void _fitPlanner() {
+    final map = _map;
+    final destination = _destination;
+    final location = _location;
+    if (map == null || destination == null) return;
+    map.fitBounds([
+      destination,
+      if (location != null) GeoPoint(location.latitude, location.longitude),
+    ], padding: _nearbyPadding());
+  }
+
+  /// An option was tapped: draws its direction with the boarding stop
+  /// highlighted (the destination pin stays). Closing the route goes back
+  /// to the options.
+  void _selectJourney(JourneyOption option) {
+    final journey = option.journey;
+    final route = _routes?.where((r) => r.id == journey.routeId).firstOrNull;
+    final pattern = route?.patterns
+        .where((p) => p.id == journey.patternId)
+        .firstOrNull;
+    if (route == null || pattern == null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('No se pudo abrir esa ruta. Inténtalo de nuevo.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      return;
+    }
+    _selectRoute(route, pattern: pattern);
+    final boarding = pattern.stops
+        .where((s) => s.stopId == journey.boarding.stopId)
+        .firstOrNull;
+    if (boarding != null) _onStopTap(boarding);
+  }
+
   // --- Nearby stops ("Paradas cercanas") -----------------------------------------
 
   /// Shows the stops near the passenger. Without location, offers to turn it
   /// on (the stops depend on where the passenger is).
   void _openNearbyStops() {
     if (!_hasLocation) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: const Text(
-              'Activa tu ubicación para ver las paradas cercanas.',
-            ),
-            behavior: SnackBarBehavior.floating,
-            action: SnackBarAction(
-              label:
-                  _access == LocationAccess.deniedForever ||
-                      _access == LocationAccess.serviceDisabled
-                  ? 'Ajustes'
-                  : 'Permitir',
-              onPressed: _fixLocationAccess,
-            ),
-          ),
-        );
+      _askForLocation('Activa tu ubicación para ver las paradas cercanas.');
       return;
     }
+    _closePlanner(recenter: false);
     if (_selectedRoute != null) _clearSelection();
     setState(() {
       _nearbyMode = true;
@@ -487,15 +705,35 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     final routes = _routes;
     final location = _location;
     if (routes == null || location == null) return;
-    setState(
-      () => _nearbyStops = nearbyStops(
+    setState(() {
+      _nearbyStops = nearbyStops(
         latitude: location.latitude,
         longitude: location.longitude,
         routes: routes,
         radiusMeters: widget.routesFilter.radiusMeters,
-      ),
-    );
+      );
+      // Routes whose line (the road) passes near, with or without a stop.
+      _passingNear = routesPassingNear(
+        latitude: location.latitude,
+        longitude: location.longitude,
+        routes: routes,
+        radiusMeters: widget.routesFilter.radiusMeters,
+      );
+    });
     _drawNearbyStops();
+  }
+
+  /// "Rutas que pasan cerca de ti" (by their line, not their stops).
+  List<PassingRoute> _passingNear = const [];
+
+  /// One of them: draws that direction and goes to where it passes closest.
+  void _showPassingRoute(PassingRoute passing) {
+    _selectRoute(passing.route, pattern: passing.pattern);
+    _map?.moveTo(
+      passing.origin.point.latitude,
+      passing.origin.point.longitude,
+      zoom: _stopZoom,
+    );
   }
 
   void _drawNearbyStops({bool fit = false}) {
@@ -524,6 +762,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
     if (stop == null) return;
     setState(() => _nearbySelectedId = stopId);
     _drawNearbyStops();
+    unawaited(_loadStopDepartures(stopId));
     _map?.moveTo(
       stop.location.latitude,
       stop.location.longitude,
@@ -539,6 +778,55 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
         .where((s) => s.stopId == stop.stopId)
         .firstOrNull;
     if (patternStop != null) _onStopTap(patternStop);
+  }
+
+  // --- Next departures of a stop ("Próximas salidas") ----------------------------
+
+  /// Departures of the selected stop (by stop id) and when they were asked.
+  final Map<String, (DateTime, List<StopDeparture>)> _departures = {};
+  final Set<String> _departuresLoading = {};
+  final Map<String, String> _departuresError = {};
+
+  /// Answers older than this are asked again when the stop is selected.
+  static const _departuresMaxAge = Duration(minutes: 1);
+
+  Future<void> _loadStopDepartures(String stopId, {bool force = false}) async {
+    if (_departuresLoading.contains(stopId)) return;
+    final cached = _departures[stopId];
+    final now = widget.clock();
+    if (!force &&
+        cached != null &&
+        now.difference(cached.$1) < _departuresMaxAge) {
+      return;
+    }
+    setState(() {
+      _departuresLoading.add(stopId);
+      _departuresError.remove(stopId);
+    });
+    try {
+      final departures = await _operations.stopDepartures(stopId, from: now);
+      if (mounted) setState(() => _departures[stopId] = (now, departures));
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _departuresError[stopId] = e.message);
+    } finally {
+      if (mounted) setState(() => _departuresLoading.remove(stopId));
+    }
+  }
+
+  StopDeparturesState _departuresOf(String? stopId) => stopId == null
+      ? const StopDeparturesState()
+      : StopDeparturesState(
+          departures: _departures[stopId]?.$2,
+          loading: _departuresLoading.contains(stopId),
+          error: _departuresError[stopId],
+        );
+
+  /// A departure of "Próximas salidas": draws its direction with the stop.
+  void _showDeparture(NearbyStop stop, StopDeparture departure) {
+    final stopRoute = stop.routes
+        .where((r) => r.pattern.id == departure.patternId)
+        .firstOrNull;
+    if (stopRoute != null) _showStopRoute(stop, stopRoute);
   }
 
   // --- Live buses of the selected direction --------------------------------------
@@ -678,6 +966,8 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
 
   Future<void> _onChipTap(MapQuickChip chip) async {
     switch (chip.label) {
+      case '¿Cómo llego?':
+        _openPlanner();
       case 'Paradas cercanas':
         _openNearbyStops();
       case 'Buses en curso':
@@ -721,6 +1011,14 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           onRouteSelected: _showStopRoute,
           onRetry: _loadRoutes,
           onClose: _closeNearbyStops,
+          passingRoutes: _passingNear,
+          onPassingRouteSelected: _showPassingRoute,
+          departures: _departuresOf(_nearbySelectedId),
+          onDepartureSelected: _showDeparture,
+          onRetryDepartures: _nearbySelectedId == null
+              ? null
+              : () => _loadStopDepartures(_nearbySelectedId!, force: true),
+          now: widget.clock(),
         ),
       ];
     }
@@ -741,6 +1039,33 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           fare: _fares[route.id],
           schedules: _schedules[_selectedPattern?.id],
           timetableLoading: _schedulesLoading.contains(_selectedPattern?.id),
+        ),
+      ];
+    }
+    if (_plannerMode) {
+      final destination = _destination;
+      final location = _location;
+      return [
+        JourneyPlannerPanel(
+          colors: colors,
+          hasDestination: destination != null,
+          destinationMeters: destination == null || location == null
+              ? null
+              : haversineMeters(
+                  location.latitude,
+                  location.longitude,
+                  destination.latitude,
+                  destination.longitude,
+                ),
+          options: _journeyOptions,
+          loading: _journeysLoading,
+          error: _journeysError,
+          now: widget.clock(),
+          onSelected: _selectJourney,
+          onRetry: _loadJourneys,
+          onClose: _closePlanner,
+          passing: _passingOptions(),
+          onPassingSelected: _selectPassing,
         ),
       ];
     }
@@ -781,6 +1106,7 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
           onStopTap: _onStopTap,
           onBusTap: _openLiveTracking,
           onNearbyStopTap: _selectNearbyStop,
+          onLongPress: _onMapLongPress,
           // Below the search bar and the chips.
           compassTopMargin: topInset + 128,
         ),
@@ -799,13 +1125,15 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen>
 
     // Android "back" closes the shown route (or the nearby stops) first.
     return PopScope(
-      canPop: !routeShown && !_nearbyMode,
+      canPop: !routeShown && !_nearbyMode && !_plannerMode,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         if (routeShown) {
           _clearSelection();
         } else if (_nearbyMode) {
           _closeNearbyStops();
+        } else if (_plannerMode) {
+          _closePlanner();
         }
       },
       child: Scaffold(

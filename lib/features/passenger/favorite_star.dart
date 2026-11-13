@@ -49,12 +49,34 @@ class _FavoriteStarButtonState extends State<FavoriteStarButton> {
       builder: (context, _) {
         final route = widget.route;
         final saved = _favorites.isFavorite(route.id);
-        final icon = Icon(
-          saved ? Icons.star_rounded : Icons.star_border_rounded,
-          color: widget.color,
-        );
-        final label = saved ? 'Quitar de favoritos' : 'Agregar a favoritos';
-        void onPressed() => toggleFavorite(context, _favorites, route);
+        // Waiting for the server (a request can take seconds): a spinner in
+        // place of the star, and no taps until it answers.
+        final busy = _favorites.isBusy(route.id);
+        final Widget icon = busy
+            ? SizedBox(
+                key: Key('favorite-star-busy-${route.id}'),
+                width: widget.showLabel ? 18 : 22,
+                height: widget.showLabel ? 18 : 22,
+                child: Padding(
+                  padding: const EdgeInsets.all(2),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.4,
+                    color: widget.color,
+                  ),
+                ),
+              )
+            : Icon(
+                saved ? Icons.star_rounded : Icons.star_border_rounded,
+                color: widget.color,
+              );
+        // Optimistic: while saving the route already counts as saved.
+        final busyText = saved ? 'Guardando…' : 'Quitando…';
+        final label = busy
+            ? busyText
+            : (saved ? 'Quitar de favoritos' : 'Agregar a favoritos');
+        final VoidCallback? onPressed = busy
+            ? null
+            : () => toggleFavorite(context, _favorites, route);
 
         if (widget.showLabel) {
           return TextButton.icon(
@@ -62,7 +84,9 @@ class _FavoriteStarButtonState extends State<FavoriteStarButton> {
             onPressed: onPressed,
             icon: icon,
             label: Text(
-              saved ? 'En tus favoritos' : 'Guardar en favoritos',
+              busy
+                  ? busyText
+                  : (saved ? 'En tus favoritos' : 'Guardar en favoritos'),
               style: TextStyle(
                 color: widget.color,
                 fontWeight: FontWeight.w600,
@@ -70,11 +94,14 @@ class _FavoriteStarButtonState extends State<FavoriteStarButton> {
             ),
           );
         }
-        return IconButton(
-          key: Key('favorite-star-${route.id}'),
-          tooltip: label,
-          icon: icon,
-          onPressed: onPressed,
+        return Semantics(
+          liveRegion: busy,
+          child: IconButton(
+            key: Key('favorite-star-${route.id}'),
+            tooltip: label,
+            icon: icon,
+            onPressed: onPressed,
+          ),
         );
       },
     );

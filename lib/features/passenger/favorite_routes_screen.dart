@@ -288,9 +288,7 @@ class _FavoriteRoutesScreenState extends State<FavoriteRoutesScreen> {
           children: [
             SmartBusHeader(
               title: 'Mis favoritos',
-              subtitle: 'Tus rutas guardadas',
               type: SmartBusUserType.passenger,
-              compact: true,
               onBack: Navigator.canPop(context)
                   ? () => Navigator.maybePop(context)
                   : null,
@@ -377,10 +375,42 @@ class _FavoriteRoutesScreenState extends State<FavoriteRoutesScreen> {
     );
   }
 
+  // --- Alias ("Casa", "Trabajo") ---------------------------------------------
+
+  /// Asks for the alias of [favorite] and saves it (empty removes it).
+  Future<void> _rename(FavoriteRoute favorite) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final label = await showDialog<String>(
+      context: context,
+      builder: (_) => _RenameDialog(favorite: favorite),
+    );
+    if (label == null || !mounted) return; // cancelled
+    try {
+      final sent = await _favorites.rename(favorite.routeId, label);
+      if (!sent || !mounted) return;
+      showFavoritesMessage(
+        messenger,
+        label.trim().isEmpty ? 'Nombre quitado.' : 'Nombre guardado.',
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.type == ApiErrorType.unauthorized) {
+        _sessionExpired(e);
+        return;
+      }
+      showFavoritesMessage(
+        messenger,
+        'No se pudo guardar el nombre. ${e.message}',
+        color: SmartBusColors.error,
+      );
+    }
+  }
+
   Widget _item(FavoriteRoute favorite, bool editing) {
     final tile = FavoriteRouteTile(
       favorite: favorite,
       favorites: _favorites,
+      onRename: editing ? null : () => _rename(favorite),
       selected: editing ? _selected.contains(favorite.routeId) : null,
       onTap: editing
           ? () => _toggle(favorite.routeId)
@@ -538,20 +568,101 @@ class _Toolbar extends StatelessWidget {
   }
 }
 
-/// One favorite: code, name (2 lines max), alias / company, and its star —
-/// or, in edit mode ([selected] not `null`), a checkbox.
+/// "Nombre de la ruta": the alias of a favorite. Pops the text typed ("" to
+/// remove the alias) or `null` when cancelled.
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.favorite});
+
+  final FavoriteRoute favorite;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _text = TextEditingController(
+    text: widget.favorite.label ?? '',
+  );
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  void _save() => Navigator.pop(context, _text.text.trim());
+
+  @override
+  Widget build(BuildContext context) {
+    final route = widget.favorite.route;
+    return AlertDialog(
+      key: const Key('rename-favorite-dialog'),
+      title: const Text('Nombre de la ruta'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${route.code.isEmpty ? '' : '${route.code} · '}${route.name}',
+            style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('favorite-label-field'),
+            controller: _text,
+            autofocus: true,
+            maxLength: FavoritesController.maxLabelLength,
+            textCapitalization: TextCapitalization.sentences,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _save(),
+            decoration: const InputDecoration(
+              hintText: 'Ej.: Casa, Trabajo, U',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        if (widget.favorite.label != null)
+          TextButton(
+            key: const Key('favorite-label-clear'),
+            onPressed: () => Navigator.pop(context, ''),
+            child: const Text('Quitar nombre'),
+          ),
+        TextButton(
+          key: const Key('favorite-label-cancel'),
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          key: const Key('favorite-label-save'),
+          onPressed: _save,
+          child: const Text('Guardar'),
+        ),
+      ],
+    );
+  }
+}
+
+/// One favorite: code, alias or name (2 lines max), name / company, the
+/// "rename" pencil and its star — or, in edit mode ([selected] not `null`), a
+/// checkbox.
 class FavoriteRouteTile extends StatelessWidget {
   const FavoriteRouteTile({
     super.key,
     required this.favorite,
     required this.favorites,
     required this.onTap,
+    this.onRename,
     this.selected,
   });
 
   final FavoriteRoute favorite;
   final FavoritesController favorites;
   final VoidCallback onTap;
+
+  /// The pencil: give the route an alias. Hidden when `null`.
+  final VoidCallback? onRename;
 
   /// `null` outside edit mode.
   final bool? selected;
@@ -560,13 +671,17 @@ class FavoriteRouteTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final route = favorite.route;
     final selected = this.selected;
+    final hasLabel = favorite.label != null;
+    // With an alias the title is the alias, so the route name goes below.
     final details = [
-      if (favorite.label != null) favorite.label!,
+      if (hasLabel && route.name.isNotEmpty) route.name,
       if (favorite.companyName != null) favorite.companyName!,
     ].join(' · ');
+    final onRename = this.onRename;
 
     final tile = ListTile(
       onTap: onTap,
+      onLongPress: selected == null ? onRename : null,
       selected: selected ?? false,
       selectedTileColor: SmartBusColors.verdePasajero.withValues(alpha: 0.08),
       contentPadding: const EdgeInsets.fromLTRB(20, 4, 8, 4),
@@ -589,16 +704,35 @@ class FavoriteRouteTile extends StatelessWidget {
         ),
       ),
       title: Text(
-        route.name.isEmpty ? 'Ruta' : route.name,
+        favorite.title,
+        key: Key('favorite-title-${route.id}'),
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(color: SmartBusColors.grisOscuro),
+        style: TextStyle(
+          color: SmartBusColors.grisOscuro,
+          fontWeight: hasLabel ? FontWeight.w600 : FontWeight.normal,
+        ),
       ),
       subtitle: details.isEmpty
           ? null
           : Text(details, maxLines: 2, overflow: TextOverflow.ellipsis),
       trailing: selected == null
-          ? FavoriteStarButton(route: route, controller: favorites)
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (onRename != null)
+                  IconButton(
+                    key: Key('favorite-rename-${route.id}'),
+                    tooltip: hasLabel ? 'Cambiar nombre' : 'Ponerle nombre',
+                    icon: Icon(
+                      Icons.edit_outlined,
+                      color: Colors.grey.shade600,
+                    ),
+                    onPressed: favorites.isBusy(route.id) ? null : onRename,
+                  ),
+                FavoriteStarButton(route: route, controller: favorites),
+              ],
+            )
           : Checkbox(
               key: Key('favorite-check-${route.id}'),
               value: selected,

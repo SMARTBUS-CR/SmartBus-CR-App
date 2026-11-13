@@ -473,9 +473,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
         children: [
           SmartBusHeader(
             title: 'Rastreando tu bus',
-            subtitle: status.headerSubtitle,
             type: SmartBusUserType.passenger,
-            compact: true,
             onBack: Navigator.canPop(context)
                 ? () => Navigator.pop(context)
                 : null,
@@ -581,14 +579,12 @@ class _TripStatusView {
     required this.color,
     required this.title,
     required this.message,
-    this.headerSubtitle,
   });
 
   final IconData icon;
   final Color color;
   final String title;
   final String message;
-  final String? headerSubtitle;
 
   static const _gray = Color(0xFF6B7280);
 
@@ -624,7 +620,6 @@ class _TripStatusView {
           message: cancelled
               ? 'Este viaje fue cancelado.'
               : 'El bus terminó su recorrido.',
-          headerSubtitle: cancelled ? 'Cancelado' : 'Finalizado',
         );
       case LiveTripPhase.tracking:
         break;
@@ -636,7 +631,6 @@ class _TripStatusView {
         color: SmartBusColors.verdePasajero,
         title: 'El viaje aún no inicia',
         message: 'Verás el bus en el mapa en cuanto salga.',
-        headerSubtitle: 'Programado',
       );
     }
 
@@ -648,7 +642,6 @@ class _TripStatusView {
         color: _gray,
         title: 'Esperando la ubicación del bus',
         message: 'El bus todavía no ha enviado su primera ubicación.',
-        headerSubtitle: 'En curso',
       );
     }
 
@@ -663,7 +656,6 @@ class _TripStatusView {
           message: speed != null
               ? 'Actualizado $ago · ${speed.round()} km/h'
               : 'Actualizado $ago',
-          headerSubtitle: 'En curso',
         );
       case TrackingFreshness.stale:
         return _TripStatusView(
@@ -671,7 +663,6 @@ class _TripStatusView {
           color: SmartBusColors.advertencia,
           title: 'Señal débil',
           message: 'Última ubicación $ago.',
-          headerSubtitle: 'En curso',
         );
       case TrackingFreshness.noSignal:
       case TrackingFreshness.notTracking:
@@ -680,7 +671,6 @@ class _TripStatusView {
           color: _gray,
           title: 'Sin señal del bus',
           message: 'Última ubicación $ago.',
-          headerSubtitle: 'En curso',
         );
     }
   }

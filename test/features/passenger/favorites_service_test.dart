@@ -182,6 +182,22 @@ void main() {
     await gone.service.removeFavorite(_routeA);
   });
 
+  test(
+    'PATCH ops/favorites/{route_id} with {label}; null removes it',
+    () async {
+      final h = _Harness((_) => (200, {'data': <String, Object>{}}));
+
+      await h.service.renameFavorite(_routeA, 'Casa');
+      await h.service.renameFavorite(_routeA, null);
+
+      expect(h.requests.first.method, 'PATCH');
+      expect(h.requests.first.url.path, endsWith('/ops/favorites/$_routeA'));
+      expect(h.requests.first.headers['Authorization'], 'Bearer tok-123');
+      expect(jsonDecode(h.requests.first.body), {'label': 'Casa'});
+      expect(jsonDecode(h.requests.last.body), {'label': null});
+    },
+  );
+
   test('errors become ApiException (401, 422, 429, 5xx)', () async {
     for (final (status, type) in [
       (401, ApiErrorType.unauthorized),

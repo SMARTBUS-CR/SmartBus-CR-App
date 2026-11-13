@@ -9,6 +9,7 @@ import 'package:smartbus_drivers/core/location/location_service.dart';
 import 'package:smartbus_drivers/core/network/api_exception.dart';
 import 'package:smartbus_drivers/core/theme.dart';
 import 'package:smartbus_drivers/features/operations/models/operations_models.dart';
+import 'package:smartbus_drivers/features/operations/models/trip_planning.dart';
 import 'package:smartbus_drivers/features/passenger/map/map_overlay.dart';
 import 'package:smartbus_drivers/features/passenger/map/passenger_map.dart';
 import 'package:smartbus_drivers/features/passenger/passenger_home_screen.dart';
@@ -102,11 +103,19 @@ class _FakeMap implements PassengerMapHandle {
     nearbySelected = selectedId;
   }
 
+  /// Destination pin of "¿Cómo llego?" drawn right now.
+  GeoPoint? destination;
+  ValueChanged<GeoPoint>? onLongPress;
+
+  @override
+  Future<void> showDestination(GeoPoint? point) async => destination = point;
+
   PassengerMapBuilder get builder => (context, options) {
     mode = options.mode;
     onStopTap = options.onStopTap;
     onBusTap = options.onBusTap;
     onNearbyStopTap = options.onNearbyStopTap;
+    onLongPress = options.onLongPress;
     return _FakeMapWidget(onReady: () => options.onReady(this));
   };
 }
@@ -576,6 +585,16 @@ void main() {
     });
     _timetableTests();
   });
+  group('Próximas salidas de una parada', () {
+    setUp(_phoneSize);
+    tearDown(_resetSize);
+    _stopDeparturesTests();
+  });
+  group('¿Cómo llego?', () {
+    setUp(_phoneSize);
+    tearDown(_resetSize);
+    _journeyPlannerTests();
+  });
   group('Live buses on the route', () {
     setUp(() {
       final view =
@@ -700,6 +719,22 @@ Future<void> _tapInSheet(WidgetTester tester, Finder finder) async {
   await tester.ensureVisible(finder);
   await tester.pumpAndSettle();
   await tester.tap(finder);
+  await tester.pumpAndSettle();
+}
+
+/// Scrolls the chips row sideways until [label] is built, and taps it.
+Future<void> _tapChip(WidgetTester tester, String label) async {
+  final chip = find.descendant(
+    of: find.byType(MapQuickChips),
+    matching: find.text(label),
+  );
+  await tester.dragUntilVisible(
+    chip,
+    find.byType(MapQuickChips),
+    const Offset(-120, 0),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(chip);
   await tester.pumpAndSettle();
 }
 
@@ -1091,13 +1126,7 @@ void _routeVisualizationTests() {
     );
 
     // The chips row scrolls sideways on a narrow phone.
-    await _tapInSheet(
-      tester,
-      find.descendant(
-        of: find.byType(MapQuickChips),
-        matching: find.text('Buses en curso'),
-      ),
-    );
+    await _tapChip(tester, 'Buses en curso');
     await tester.tap(find.text('ver-ruta'));
     await tester.pumpAndSettle();
 
@@ -1338,6 +1367,33 @@ final _shared = route(
   ],
 );
 
+/// The road of `_highway`: ~220 m east of the passenger, south → north.
+final _highwayLng = _user.longitude + 0.002;
+
+/// A rural route with stops only at its far terminals (5 km south and 9 km
+/// north) whose road passes ~220 m from the passenger: no stop near, but the
+/// bus passes by. 14 km in 28 min.
+final _highway = route(
+  'r-hw',
+  code: 'PV-GUA',
+  name: 'Puerto Viejo - Guápiles',
+  patterns: [
+    pattern(
+      'p-hw',
+      headsign: 'Guápiles',
+      drivingSeconds: 28 * 60,
+      stops: [
+        stopAt('Terminal Sur', _north(-5000), _highwayLng, seq: 1, minutes: 0),
+        stopAt('Terminal Norte', _north(9000), _highwayLng, seq: 2),
+      ],
+      geometry: [
+        GeoPoint(_north(-5000), _highwayLng),
+        GeoPoint(_north(9000), _highwayLng),
+      ],
+    ),
+  ],
+);
+
 Finder _nearbyStop(String name) =>
     find.byKey(Key('nearby-stop-${stopAt(name, 0, 0, seq: 0).stopId}'));
 
@@ -1479,9 +1535,36 @@ void _nearbyStopsTests() {
     await _openNearby(tester, catalogue: [_sjPv]);
 
     expect(
-      find.textContaining('No hay paradas a menos de 1 km'),
+      find.textContaining('No hay paradas ni rutas a menos de 1 km'),
       findsOneWidget,
     );
+    expect(find.byKey(const Key('passing-routes')), findsNothing);
+  });
+
+  testWidgets('no stop near, but a route passes by on the road: it is '
+      'listed and opens where it passes closest', (tester) async {
+    final map = await _openNearby(tester, catalogue: [_sjPv, _highway]);
+
+    expect(map.nearbyStops, isEmpty);
+    expect(
+      find.textContaining('estas rutas pasan cerca: puedes esperar el bus'),
+      findsOneWidget,
+    );
+    final tile = find.byKey(const Key('passing-route-p-hw'));
+    expect(
+      find.descendant(of: tile, matching: find.text('Hacia Guápiles')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: tile, matching: find.text('Pasa a 220 m de ti')),
+      findsOneWidget,
+    );
+
+    await _tapInSheet(tester, tile);
+
+    expect(map.route?.id, 'p-hw');
+    expect(map.moves.last.lat, closeTo(_user.latitude, 1e-6));
+    expect(map.moves.last.lng, closeTo(_highwayLng, 1e-6));
   });
 
   testWidgets('without location: asks to turn it on, nothing is shown', (
@@ -1711,5 +1794,530 @@ void _timetableTests() {
     expect(find.byKey(const Key('selected-route-fare')), findsNothing);
     expect(find.text('No se pudo cargar el horario.'), findsOneWidget);
     expect(find.byKey(const Key('stops-timeline')), findsOneWidget);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Próximas salidas de una parada
+// ---------------------------------------------------------------------------
+
+void _phoneSize() {
+  final view =
+      TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+  view.physicalSize = const Size(1236, 2745);
+  view.devicePixelRatio = 3;
+}
+
+void _resetSize() =>
+    TestWidgetsFlutterBinding.instance.platformDispatcher.views.first
+      ..resetPhysicalSize()
+      ..resetDevicePixelRatio();
+
+String _stopId(String name) => stopAt(name, 0, 0, seq: 0).stopId;
+
+StopDeparture _departure(
+  String id, {
+  String code = 'PV-RF',
+  String pattern = 'p-rf',
+  String headsign = 'Río Frío',
+  required DateTime at,
+  double? fareAmount = 650,
+}) => StopDeparture(
+  id: id,
+  routeId: 'r-pvrf',
+  routeCode: code,
+  routeName: 'Puerto Viejo - Río Frío',
+  patternId: pattern,
+  headsign: headsign,
+  departureAt: at,
+  fare: fareAmount == null ? null : fare(fareAmount),
+);
+
+Future<(FakeOperations, _FakeMap)> _openNearbyAt(
+  WidgetTester tester, {
+  required Map<String, List<StopDeparture>> departures,
+  DateTime Function()? clock,
+}) async {
+  final operations = FakeOperations(catalogue: [_demo, _pvRf, _shared]);
+  operations.planning.departures = departures;
+  final map = _FakeMap();
+  await _pump(
+    tester,
+    location: _granted(),
+    map: map,
+    operations: operations,
+    clock: clock ?? _friday,
+  );
+  await _tapChip(tester, 'Paradas cercanas');
+  return (operations, map);
+}
+
+Future<void> _tapStopName(WidgetTester tester, String name) => _tapInSheet(
+  tester,
+  find.descendant(of: _nearbyStop(name), matching: find.text(name)),
+);
+
+void _stopDeparturesTests() {
+  testWidgets('tapping a stop shows its next departures: route, direction, '
+      'time, countdown and fare', (tester) async {
+    final (operations, _) = await _openNearbyAt(
+      tester,
+      departures: {
+        _stopId('Centro'): [
+          _departure('d1', at: DateTime(2026, 11, 13, 10, 30)),
+          _departure(
+            'd2',
+            code: 'AB-CD',
+            pattern: 'p-shared',
+            headsign: 'Alajuela',
+            at: DateTime(2026, 11, 13, 11, 40),
+            fareAmount: null,
+          ),
+        ],
+      },
+    );
+    expect(find.byKey(const Key('stop-departures')), findsNothing);
+
+    await _tapStopName(tester, 'Centro');
+
+    expect(operations.planning.calls, ['departures ${_stopId('Centro')}']);
+    final list = find.byKey(const Key('stop-departures'));
+    expect(
+      find.descendant(of: _nearbyStop('Centro'), matching: list),
+      findsOneWidget,
+    );
+    final first = find.byKey(const Key('stop-departure-d1'));
+    for (final text in [
+      'PV-RF',
+      'Hacia Río Frío',
+      '10:30 · en 15 min',
+      '₡650',
+    ]) {
+      expect(
+        find.descendant(of: first, matching: find.text(text)),
+        findsOneWidget,
+      );
+    }
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('stop-departure-d2')),
+        matching: find.text('11:40 · en 1 h 25 min'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('tapping a departure draws that direction with the stop', (
+    tester,
+  ) async {
+    final (_, map) = await _openNearbyAt(
+      tester,
+      departures: {
+        _stopId('Centro'): [
+          _departure(
+            'd2',
+            code: 'AB-CD',
+            pattern: 'p-shared',
+            headsign: 'Alajuela',
+            at: DateTime(2026, 11, 13, 10, 40),
+          ),
+        ],
+      },
+    );
+    await _tapStopName(tester, 'Centro');
+
+    await _tapInSheet(tester, find.byKey(const Key('stop-departure-d2')));
+
+    expect(map.route?.id, 'p-shared');
+    expect(map.highlighted?.name, 'Centro');
+    expect(find.byKey(const Key('selected-route-panel')), findsOneWidget);
+  });
+
+  testWidgets('no departures in 2 h: says so; asked again only after a '
+      'minute', (tester) async {
+    var now = _friday();
+    final (operations, _) = await _openNearbyAt(
+      tester,
+      departures: const {},
+      clock: () => now,
+    );
+
+    await _tapStopName(tester, 'Centro');
+    expect(
+      find.text('No hay salidas en las próximas 2 horas.'),
+      findsOneWidget,
+    );
+
+    await _tapStopName(tester, 'Terminal');
+    await _tapStopName(tester, 'Centro'); // same minute: reused
+    expect(operations.planning.calls, [
+      'departures ${_stopId('Centro')}',
+      'departures ${_stopId('Terminal')}',
+    ]);
+
+    now = now.add(const Duration(minutes: 2));
+    await _tapStopName(tester, 'Terminal');
+    expect(operations.planning.calls.last, 'departures ${_stopId('Terminal')}');
+    expect(operations.planning.calls, hasLength(3));
+  });
+
+  testWidgets('a failure says so and "Reintentar" asks again', (tester) async {
+    final (operations, _) = await _openNearbyAt(
+      tester,
+      departures: {
+        _stopId('Centro'): [
+          _departure('d1', at: DateTime(2026, 11, 13, 10, 30)),
+        ],
+      },
+    );
+    operations.planning.error = const ApiException(
+      ApiErrorType.serviceUnavailable,
+      'Servicio no disponible.',
+    );
+
+    await _tapStopName(tester, 'Centro');
+    expect(find.text('Servicio no disponible.'), findsOneWidget);
+
+    operations.planning.error = null;
+    await _tapInSheet(tester, find.byKey(const Key('stop-departures-retry')));
+    expect(find.byKey(const Key('stop-departure-d1')), findsOneWidget);
+    expect(operations.planning.calls, hasLength(2));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// ¿Cómo llego?
+// ---------------------------------------------------------------------------
+
+/// The destination: 9 km north (by Río Frío).
+final _riverPoint = GeoPoint(_north(9000), _user.longitude);
+
+Journey _journeyTo({
+  String pattern = 'p-rf',
+  String routeId = 'r-pvrf',
+  String code = 'PV-RF',
+  String boarding = 'Centro',
+  double boardingMeters = 200,
+  int boardingSeq = 2,
+  required DateTime at,
+}) => Journey(
+  id: '$pattern-$boarding-$at',
+  routeId: routeId,
+  routeCode: code,
+  routeName: 'Puerto Viejo - Río Frío',
+  patternId: pattern,
+  headsign: 'Río Frío',
+  boarding: JourneyStop(
+    stopId: _stopId(boarding),
+    name: boarding,
+    sequence: boardingSeq,
+    distanceMeters: boardingMeters,
+  ),
+  alighting: JourneyStop(
+    stopId: _stopId('Río Frío'),
+    name: 'Río Frío',
+    sequence: 3,
+    distanceMeters: 150,
+  ),
+  departureAt: at,
+  arrivalAt: at.add(const Duration(minutes: 40)),
+  fare: fare(650),
+);
+
+Future<(FakeOperations, _FakeMap)> _openPlanner(
+  WidgetTester tester, {
+  List<Journey> journeys = const [],
+  _FakeLocationService? location,
+  List<TransitRoute>? catalogue,
+}) async {
+  final operations = FakeOperations(catalogue: catalogue ?? [_demo, _pvRf]);
+  operations.planning.journeys = journeys;
+  final map = _FakeMap();
+  await _pump(
+    tester,
+    location: location ?? _granted(),
+    map: map,
+    operations: operations,
+    clock: _friday,
+  );
+  return (operations, map);
+}
+
+Future<void> _longPress(
+  WidgetTester tester,
+  _FakeMap map,
+  GeoPoint point,
+) async {
+  map.onLongPress!(point);
+  await tester.pumpAndSettle();
+}
+
+void _journeyPlannerTests() {
+  testWidgets('the chip explains how to choose the destination', (
+    tester,
+  ) async {
+    final (operations, map) = await _openPlanner(tester);
+
+    await _tapChip(tester, '¿Cómo llego?');
+
+    expect(find.byKey(const Key('journey-planner-panel')), findsOneWidget);
+    expect(find.byKey(const Key('journey-planner-hint')), findsOneWidget);
+    expect(find.textContaining('Mantén presionado el mapa'), findsOneWidget);
+    expect(map.destination, isNull);
+    expect(operations.planning.calls, isEmpty);
+  });
+
+  testWidgets('a long press marks the destination and lists the buses: walk, '
+      'bus, get off, walk, fare and later departures', (tester) async {
+    final (operations, map) = await _openPlanner(
+      tester,
+      journeys: [
+        _journeyTo(at: DateTime(2026, 11, 13, 10, 30)),
+        _journeyTo(at: DateTime(2026, 11, 13, 12)),
+        // From a farther stop: the closer one wins.
+        _journeyTo(
+          boarding: 'Terminal',
+          boardingMeters: 600,
+          boardingSeq: 1,
+          at: DateTime(2026, 11, 13, 10, 20),
+        ),
+      ],
+    );
+
+    await _longPress(tester, map, _riverPoint);
+
+    expect(map.destination, _riverPoint);
+    expect(operations.planning.calls, [
+      'journeys ${_riverPoint.latitude},${_riverPoint.longitude}',
+    ]);
+    // The passenger and the destination in view.
+    expect(map.fits.last.points, hasLength(2));
+    expect(
+      find.textContaining('Desde tu ubicación al punto marcado'),
+      findsOneWidget,
+    );
+
+    final card = find.byKey(const Key('journey-p-rf'));
+    for (final text in [
+      'PV-RF',
+      'Hacia Río Frío',
+      'Sale 10:30 · en 15 min',
+      'Camina 200 m (~3 min) a Centro',
+      'Bájate en Río Frío · llega 11:10 · 40 min · 1 parada',
+      'Camina 150 m a tu destino',
+      'Después: 12:00',
+      '₡650',
+    ]) {
+      expect(
+        find.descendant(of: card, matching: find.text(text)),
+        findsOneWidget,
+        reason: text,
+      );
+    }
+  });
+
+  testWidgets('tapping an option draws that bus with the boarding stop; '
+      'closing it goes back to the options', (tester) async {
+    final (_, map) = await _openPlanner(
+      tester,
+      journeys: [_journeyTo(at: DateTime(2026, 11, 13, 10, 30))],
+    );
+    await _longPress(tester, map, _riverPoint);
+
+    await _tapInSheet(tester, find.byKey(const Key('journey-p-rf')));
+
+    expect(map.route?.id, 'p-rf');
+    expect(map.highlighted?.name, 'Centro');
+    expect(map.destination, _riverPoint); // the pin stays
+    expect(find.byKey(const Key('selected-route-panel')), findsOneWidget);
+
+    await _tapInSheet(tester, find.byKey(const Key('close-route')));
+    expect(map.route, isNull);
+    expect(find.byKey(const Key('journey-p-rf')), findsOneWidget);
+  });
+
+  testWidgets('no direct bus: says so; a failure offers "Reintentar"', (
+    tester,
+  ) async {
+    final (operations, map) = await _openPlanner(tester);
+    await _longPress(tester, map, _riverPoint);
+    expect(find.byKey(const Key('journey-planner-empty')), findsOneWidget);
+
+    operations.planning.error = const ApiException(
+      ApiErrorType.noConnection,
+      'Sin conexión a Internet.',
+    );
+    await _longPress(tester, map, _riverPoint);
+    expect(find.text('Sin conexión a Internet.'), findsOneWidget);
+
+    operations.planning
+      ..error = null
+      ..journeys = [_journeyTo(at: DateTime(2026, 11, 13, 10, 30))];
+    await _tapInSheet(tester, find.text('Reintentar'));
+    expect(find.byKey(const Key('journey-p-rf')), findsOneWidget);
+  });
+
+  testWidgets('a new destination ignores the answer for the previous one', (
+    tester,
+  ) async {
+    final (operations, map) = await _openPlanner(tester);
+    final gate = Completer<void>();
+    operations.planning
+      ..journeysGate = gate
+      ..journeys = [_journeyTo(at: DateTime(2026, 11, 13, 10, 30))];
+    map.onLongPress!(GeoPoint(_north(500), _user.longitude));
+    await tester.pump();
+    expect(find.byKey(const Key('journey-planner-loading')), findsOneWidget);
+
+    operations.planning.journeys = const [];
+    map.onLongPress!(_riverPoint);
+    gate.complete();
+    await tester.pumpAndSettle();
+
+    expect(map.destination, _riverPoint);
+    expect(find.byKey(const Key('journey-planner-empty')), findsOneWidget);
+    expect(find.byKey(const Key('journey-p-rf')), findsNothing);
+  });
+
+  testWidgets('"X" and Android back remove the destination', (tester) async {
+    final (_, map) = await _openPlanner(tester);
+
+    await _longPress(tester, map, _riverPoint);
+    await _tapInSheet(tester, find.byKey(const Key('journey-planner-close')));
+    expect(map.destination, isNull);
+    expect(find.byKey(const Key('journey-planner-panel')), findsNothing);
+    expect(find.byKey(const Key('routes-section')), findsOneWidget);
+
+    await _longPress(tester, map, _riverPoint);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(map.destination, isNull);
+    expect(find.byKey(const Key('journey-planner-panel')), findsNothing);
+  });
+
+  group('El bus pasa cerca (by the road, no stop)', () {
+    // 6 km north, ~330 m west of the road: no stop near either point.
+    final upTheRoad = GeoPoint(_north(6000), _user.longitude - 0.001);
+
+    Future<(FakeOperations, _FakeMap)> openHighway(
+      WidgetTester tester, {
+      List<Journey> journeys = const [],
+    }) async {
+      final (operations, map) = await _openPlanner(
+        tester,
+        catalogue: [_highway],
+        journeys: journeys,
+      );
+      operations
+        ..fares = {
+          'r-hw': [fare(1570)],
+        }
+        // Fridays from the south terminal at 10:00 and 11:00.
+        ..schedules = {
+          'p-hw': [departure(5, 10), departure(5, 11)],
+        };
+      return (operations, map);
+    }
+
+    testWidgets('the road passes near both points: where to wait, when it '
+        'passes (approx.), the ride and the fare', (tester) async {
+      final (_, map) = await openHighway(tester);
+      await _longPress(tester, map, upTheRoad);
+
+      expect(find.byKey(const Key('journey-planner-empty')), findsNothing);
+      expect(find.byKey(const Key('journey-passing-title')), findsOneWidget);
+      final card = find.byKey(const Key('journey-passing-p-hw'));
+      // 5 of 14 km = 10 min from the terminal: 10:10 already passed, so the
+      // 11:00 departure, by here ~11:10.
+      for (final text in [
+        'PV-GUA',
+        'Hacia Guápiles',
+        'Pasa ~11:10 · en 55 min',
+        'Camina 220 m (~3 min) hasta la carretera',
+        'Viaja ~12 min y bájate cerca de tu destino',
+        'Camina 330 m a tu destino',
+      ]) {
+        expect(
+          find.descendant(of: card, matching: find.text(text)),
+          findsOneWidget,
+          reason: text,
+        );
+      }
+    });
+
+    testWidgets('tapping it draws the route and goes to the road', (
+      tester,
+    ) async {
+      final (_, map) = await openHighway(tester);
+      await _longPress(tester, map, upTheRoad);
+
+      await _tapInSheet(tester, find.byKey(const Key('journey-passing-p-hw')));
+
+      expect(map.route?.id, 'p-hw');
+      expect(map.moves.last.lng, closeTo(_highwayLng, 1e-6));
+      expect(map.moves.last.lat, closeTo(_user.latitude, 1e-6));
+      expect(map.destination, upTheRoad);
+    });
+
+    testWidgets('a destination behind (the bus goes the other way) is not '
+        'offered', (tester) async {
+      final (_, map) = await openHighway(tester);
+
+      await _longPress(tester, map, GeoPoint(_north(-3000), _highwayLng));
+
+      expect(find.byKey(const Key('journey-passing-p-hw')), findsNothing);
+      expect(find.byKey(const Key('journey-planner-empty')), findsOneWidget);
+    });
+
+    testWidgets('a direction the Dashboard already offers is not repeated', (
+      tester,
+    ) async {
+      final (_, map) = await openHighway(
+        tester,
+        journeys: [
+          _journeyTo(
+            pattern: 'p-hw',
+            routeId: 'r-hw',
+            code: 'PV-GUA',
+            at: DateTime(2026, 11, 13, 10, 30),
+          ),
+        ],
+      );
+
+      await _longPress(tester, map, upTheRoad);
+
+      expect(find.byKey(const Key('journey-p-hw')), findsOneWidget);
+      expect(find.byKey(const Key('journey-passing-p-hw')), findsNothing);
+    });
+  });
+
+  testWidgets('"Paradas cercanas" leaves it', (tester) async {
+    final (_, map) = await _openPlanner(tester);
+    await _longPress(tester, map, _riverPoint);
+
+    await _tapChip(tester, 'Paradas cercanas');
+
+    expect(map.destination, isNull);
+    expect(find.byKey(const Key('journey-planner-panel')), findsNothing);
+    expect(find.byKey(const Key('nearby-stops-panel')), findsOneWidget);
+  });
+
+  testWidgets('without location: asks to turn it on, nothing is marked', (
+    tester,
+  ) async {
+    final (operations, map) = await _openPlanner(
+      tester,
+      location: _FakeLocationService(access: LocationAccess.denied),
+    );
+
+    await _longPress(tester, map, _riverPoint);
+
+    expect(
+      find.text('Activa tu ubicación para saber cómo llegar ahí.'),
+      findsOneWidget,
+    );
+    expect(map.destination, isNull);
+    expect(operations.planning.calls, isEmpty);
+    expect(find.byKey(const Key('journey-planner-panel')), findsNothing);
   });
 }

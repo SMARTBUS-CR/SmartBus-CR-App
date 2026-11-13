@@ -62,6 +62,13 @@ class SmartBusHeader extends StatelessWidget {
   static const passengerSubtitleArtHeight = 56.0;
   static const passengerSubtitleCompactArtHeight = 46.0;
 
+  /// Passenger: the drawing is always the "Mi Cuenta" one (title row + art,
+  /// same size and proportions on every screen). A subtitle adds this much
+  /// room on top, so the text fits above the drawing instead of squeezing
+  /// it into a thin strip.
+  static const passengerDrawingHeight = titleBarHeight + passengerArtHeight;
+  static const passengerSubtitleExtra = 28.0;
+
   /// Depth of the bottom wave (see [_PassengerWaveClipper]).
   static const _passengerWaveDepth = 24.0;
   static const _passengerCompactWaveDepth = 22.0;
@@ -80,20 +87,62 @@ class SmartBusHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final topInset = MediaQuery.paddingOf(context).top;
-    // Driver and passenger share the same composition: only the palette and
-    // the bus change. A subtitle gets a separate art area so the route never
-    // crosses the text.
-    final drawBehindTitle = subtitle == null;
+    final hasSubtitle = subtitle != null;
+
+    // Passenger: one look everywhere, the "Mi Cuenta" header. The drawing
+    // keeps its size; a subtitle only adds room above it.
+    if (!_isDriver) {
+      final extra = hasSubtitle ? passengerSubtitleExtra : 0.0;
+      return _frame(
+        height: topInset + extra + passengerDrawingHeight,
+        wave: const _PassengerWaveClipper(depth: _passengerWaveDepth),
+        drawing: Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: passengerDrawingHeight,
+          child: ExcludeSemantics(child: _PassengerIllustration(style: _style)),
+        ),
+        titleTop: topInset,
+      );
+    }
+
+    // Driver: a subtitle gets a separate art area so the route never crosses
+    // the text; compact is shorter (maps).
+    final drawBehindTitle = !hasSubtitle;
     final double art = switch ((drawBehindTitle, compact)) {
       (true, false) => passengerArtHeight,
       (true, true) => passengerCompactArtHeight,
       (false, false) => passengerSubtitleArtHeight,
       (false, true) => passengerSubtitleCompactArtHeight,
     };
-    final wave = _PassengerWaveClipper(
-      depth: compact ? _passengerCompactWaveDepth : _passengerWaveDepth,
+    return _frame(
+      height: topInset + titleBarHeight + art,
+      wave: _PassengerWaveClipper(
+        depth: compact ? _passengerCompactWaveDepth : _passengerWaveDepth,
+      ),
+      // Decoration (route, grid, pin, bus): ignored by screen readers.
+      drawing: Positioned(
+        left: 0,
+        right: 0,
+        bottom: 0,
+        top: drawBehindTitle ? topInset : null,
+        height: drawBehindTitle ? null : art,
+        child: ExcludeSemantics(
+          child: _PassengerIllustration(style: _style, showBus: true),
+        ),
+      ),
+      titleTop: topInset,
     );
+  }
 
+  /// Gradient + wavy bottom edge + drawing + title row.
+  Widget _frame({
+    required double height,
+    required CustomClipper<Path> wave,
+    required Widget drawing,
+    required double titleTop,
+  }) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
       // Light status bar icons over the gradient.
       value: SystemUiOverlayStyle.light,
@@ -106,27 +155,12 @@ class SmartBusHeader extends StatelessWidget {
             child: SizedBox(
               key: const Key('smartbus_header'),
               width: double.infinity,
-              height: topInset + titleBarHeight + art,
+              height: height,
               child: Stack(
                 children: [
-                  // Decoration (route, grid, pin, bus): ignored by screen
-                  // readers. The regular driver and passenger compositions
-                  // both sit behind the title row.
+                  drawing,
                   Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    top: drawBehindTitle ? topInset : null,
-                    height: drawBehindTitle ? null : art,
-                    child: ExcludeSemantics(
-                      child: _PassengerIllustration(
-                        style: _style,
-                        showBus: _isDriver,
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    top: topInset,
+                    top: titleTop,
                     left: 0,
                     right: 0,
                     height: titleBarHeight,
