@@ -1109,6 +1109,44 @@ void _routeVisualizationTests() {
     );
     expect(chip.selected, isTrue);
   });
+
+  testWidgets('search → detail → "Ver ruta" draws that route and direction', (
+    tester,
+  ) async {
+    final map = _FakeMap();
+    await _pump(
+      tester,
+      location: _granted(),
+      map: map,
+      operations: FakeOperations(catalogue: [_demo, _pvRf]),
+      routes: {
+        // The search closes with what the route detail answered.
+        '/passenger/search': (context) => Scaffold(
+          body: TextButton(
+            onPressed: () => Navigator.pop(
+              context,
+              RouteSelection(route: _pvRf, pattern: _pvRf.patterns.first),
+            ),
+            child: const Text('ver-ruta'),
+          ),
+        ),
+      },
+    );
+
+    await tester.tap(find.byKey(const Key('map-search-field')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ver-ruta'));
+    await tester.pumpAndSettle();
+
+    expect(map.routeCalls, ['p-pv']);
+    expect(find.byKey(const Key('selected-route-panel')), findsOneWidget);
+    expect(
+      tester
+          .widget<ChoiceChip>(find.byKey(const Key('direction-p-pv')))
+          .selected,
+      isTrue,
+    );
+  });
 }
 
 // ---------------------------------------------------------------------------
