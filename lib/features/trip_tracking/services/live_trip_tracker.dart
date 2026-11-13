@@ -87,13 +87,16 @@ class LiveTripState {
 /// 2. Subscribes to `private-trip.{id}`: each `BusLocationUpdated` moves the
 ///    bus (only if it is newer than the one shown: events can arrive out of
 ///    order on mobile networks).
-/// 3. Asks the position again while it is not live: no real-time connection,
-///    or the updates stopped. The driver sends every ~5 s, so it asks at that
-///    same pace ([pollInterval]) — the bus keeps moving on the map even when
-///    the WebSocket is down — and [silenceThreshold] (10 s) without a
-///    position is enough to ask: that is also how "trip finished" is detected
-///    (`status = completed`) in ~10–15 s, without any event from the
-///    Dashboard. A trip that has not started is asked less often
+/// 3. Asks the position again while it is not live: no real-time
+///    subscription (the socket is closed, or the trip's channel is not
+///    confirmed yet), or the updates stopped. The driver sends every ~5 s, so
+///    it asks at that same pace ([pollInterval]) — the bus keeps moving on the
+///    map even when the WebSocket does not deliver — and [silenceThreshold]
+///    (7 s, a missed reading) without a position is enough to ask: that is
+///    also how "trip finished" is detected (`status = completed`) in
+///    ~7–10 s, without any event from the Dashboard. The conditions are
+///    checked every second ([checkEvery]), so a request is never late by a
+///    whole extra interval. A trip that has not started is asked less often
 ///    ([idlePollInterval]).
 /// 4. Asks again when the connection comes back (events sent while it was
 ///    down are lost) and when the channel is refused.
@@ -104,8 +107,8 @@ class LiveTripTracker {
     this.feed,
     this.pollInterval = const Duration(seconds: 5),
     this.idlePollInterval = const Duration(seconds: 15),
-    this.silenceThreshold = const Duration(seconds: 10),
-    this.checkEvery = const Duration(seconds: 5),
+    this.silenceThreshold = const Duration(seconds: 7),
+    this.checkEvery = const Duration(seconds: 1),
     DateTime Function()? clock,
   }) : _service = service ?? GpsLocationService(),
        _clock = clock ?? DateTime.now;
