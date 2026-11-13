@@ -558,15 +558,16 @@ class _TripScreenState extends State<TripScreen> with WidgetsBindingObserver {
     if (confirmed == true) await _complete();
   }
 
-  /// `POST ops/trips/{id}/complete`. The GPS keeps sending until the
-  /// Dashboard answers: it only stops once the trip is no longer running
-  /// (completed, or it turns out it was cancelled / is not the driver's).
   /// The map widget, built once (see `_routeView`).
   Widget? _mapWidget;
 
   /// Trip whose end position was already sent ([TripLocationSender.sendFinal]).
   String? _finalSentFor;
 
+  /// `POST ops/trips/{id}/complete`. The GPS keeps sending until the
+  /// Dashboard answers: it only stops once the trip is no longer running
+  /// (completed, or it turns out it was cancelled / is not the driver's).
+  /// When completed, today's next trip is offered ([_loadNextTrip]).
   Future<void> _complete() async {
     final trip = _trip;
     if (trip == null || _busy || !mounted) return;
@@ -592,6 +593,8 @@ class _TripScreenState extends State<TripScreen> with WidgetsBindingObserver {
         _trip = trip.refreshedWith(done);
         _refreshFailed = false;
       });
+      // "Iniciar viaje hacia…": today's next trip, if any.
+      if (done.status == TripStatus.completed) unawaited(_loadNextTrip());
     } on ApiException catch (e) {
       if (!mounted) return;
       switch (e.type) {
